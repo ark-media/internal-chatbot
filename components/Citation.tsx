@@ -15,12 +15,16 @@ export function Citation({ kind, id, source, onOpen }: Props) {
 
   if (!source) {
     return (
-      <sup
-        className="mx-0.5 text-[0.65em] text-ink-300/60"
+      <span
+        className={cn(
+          'mx-0.5 inline-flex items-center rounded-md border border-white/5 bg-white/[0.04]',
+          'px-1.5 py-[0.1em] font-mono text-[0.72em] font-medium leading-tight',
+          'text-white/35',
+        )}
         title={`missing source ${kind}:${id}`}
       >
-        [{label}]
-      </sup>
+        {label}
+      </span>
     );
   }
 
@@ -29,23 +33,37 @@ export function Citation({ kind, id, source, onOpen }: Props) {
       ? `${source.speaker ?? 'Speaker'} · ${source.show} · ${source.title}${source.date ? ' · ' + source.date : ''}`
       : `${source.show} · ${source.title}${source.date ? ' · ' + source.date : ''}`;
 
+  const turnStyles = cn(
+    'border-emerald-300/40 bg-emerald-400/[0.12] text-emerald-200',
+    'hover:border-emerald-300/70 hover:bg-emerald-400/25 hover:text-white',
+    'hover:shadow-[0_4px_14px_-4px_rgba(52,211,153,0.55)]',
+    'focus-visible:ring-emerald-300/60',
+  );
+
+  const chunkStyles = cn(
+    'border-[#3eb5f9]/40 bg-[#3eb5f9]/[0.12] text-[#79cdfc]',
+    'hover:border-[#3eb5f9]/70 hover:bg-[#3eb5f9]/25 hover:text-white',
+    'hover:shadow-[0_4px_14px_-4px_rgba(62,181,249,0.6)]',
+    'focus-visible:ring-[#3eb5f9]/60',
+  );
+
   return (
     <button
       type="button"
       onClick={() => onOpen(source)}
       title={title}
+      aria-label={`Open source ${label}: ${title}`}
       className={cn(
-        'group mx-0.5 inline-flex items-baseline rounded-md px-[0.4em] py-[0.05em]',
-        'font-mono text-[0.7em] font-semibold leading-none',
-        'border transition duration-150',
-        'hover:-translate-y-px hover:shadow-[0_4px_14px_-4px_rgba(62,181,249,0.45)]',
-        'focus:outline-none focus-visible:ring-2 focus-visible:ring-[#3eb5f9]/60',
-        source.kind === 'turn'
-          ? 'border-emerald-300/30 bg-emerald-400/10 text-emerald-200 hover:border-emerald-300/60 hover:bg-emerald-400/20'
-          : 'border-[#3eb5f9]/30 bg-[#3eb5f9]/10 text-[#79cdfc] hover:border-[#3eb5f9]/60 hover:bg-[#3eb5f9]/20',
+        'group mx-0.5 inline-flex cursor-pointer items-center gap-0.5 rounded-md border',
+        'px-[0.45em] py-[0.1em] align-baseline',
+        'font-mono text-[0.78em] font-semibold leading-tight tracking-tight',
+        'transition-all duration-150 ease-out',
+        'hover:-translate-y-[1px]',
+        'focus:outline-none focus-visible:ring-2',
+        source.kind === 'turn' ? turnStyles : chunkStyles,
       )}
     >
-      {label}
+      <span>{label}</span>
     </button>
   );
 }
