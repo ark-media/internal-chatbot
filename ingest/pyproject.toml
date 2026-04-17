@@ -1,0 +1,14 @@
+[project]
+name = "ark-ingest"
+version = "0.1.0"
+description = "Transcript ingestion for the Ark internal chatbot"
+requires-python = ">=3.11"
+dependencies = [
+    "psycopg[binary]>=3.2",
+    "voyageai>=0.3",
+    "python-dotenv>=1.0",
+    "anthropic>=0.40",
+]
+
+[tool.setuptools]
+py-modules = ["parse", "chunk", "embed", "upsert", "main"]

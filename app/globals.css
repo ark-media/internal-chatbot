@@ -1,0 +1,287 @@
+@import "tailwindcss";
+
+/* ============================================================
+   Ark Media — brand tokens
+   Primary:   0b153c  (ink / brand navy)
+   Accent:    3eb5f9  (sky)
+   Navy scale 070b22 · 101736 · 1a244e · 253368 · 304181
+   Support:   eb0102 (red) · 033ec8 (royal)
+   ============================================================ */
+
+@theme {
+  --color-ink-950: #070b22;
+  --color-ink-900: #0b153c;
+  --color-ink-800: #101736;
+  --color-ink-700: #1a244e;
+  --color-ink-600: #253368;
+  --color-ink-500: #304181;
+  --color-ink-400: #4a5a9a;
+  --color-ink-300: #7e8ab8;
+  --color-ink-200: #b7bfda;
+  --color-ink-100: #dde2f0;
+  --color-ink-50:  #f3f5fb;
+
+  --color-sky-brand: #3eb5f9;
+  --color-sky-brand-soft: #79cdfc;
+  --color-royal: #033ec8;
+  --color-signal: #eb0102;
+
+  --color-canvas: var(--color-ink-900);
+  --color-canvas-raised: var(--color-ink-800);
+  --color-canvas-deep: var(--color-ink-950);
+
+  --font-display: var(--font-exo), "Exo 2", ui-sans-serif, system-ui, sans-serif;
+  --font-sans:    var(--font-lato), "Lato", ui-sans-serif, system-ui, sans-serif;
+  --font-mono:    ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+
+  --radius-chat: 1.25rem;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  color: var(--color-ink-50);
+  background: var(--color-ink-900);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ---------- Ambient brand backdrop ----------
+   A soft, radial aurora reminiscent of the brandbook's swirling
+   navy-to-sky gradient. Non-interactive, sits behind everything. */
+.ark-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(60% 55% at 18% 12%, rgba(62, 181, 249, 0.18) 0%, transparent 60%),
+    radial-gradient(45% 50% at 82% 20%, rgba(3, 62, 200, 0.22) 0%, transparent 65%),
+    radial-gradient(75% 60% at 65% 95%, rgba(62, 181, 249, 0.12) 0%, transparent 70%),
+    linear-gradient(180deg, #070b22 0%, #0b153c 45%, #101736 100%);
+}
+
+.ark-backdrop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(
+    rgba(255, 255, 255, 0.035) 1px,
+    transparent 1px
+  );
+  background-size: 3px 3px;
+  mix-blend-mode: overlay;
+  opacity: 0.4;
+}
+
+/* ---------- Selection + focus ---------- */
+::selection {
+  background: rgba(62, 181, 249, 0.35);
+  color: #ffffff;
+}
+
+/* ---------- Scrollbar ---------- */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(126, 138, 184, 0.25);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(126, 138, 184, 0.45);
+  background-clip: padding-box;
+}
+
+/* ============================================================
+   Prose — typography for streamed assistant markdown
+   Tuned for legibility on the deep navy canvas.
+   ============================================================ */
+.ark-prose {
+  font-family: var(--font-sans);
+  font-size: 0.95rem;
+  line-height: 1.7;
+  color: var(--color-ink-100);
+  letter-spacing: 0.005em;
+}
+
+.ark-prose > :first-child { margin-top: 0; }
+.ark-prose > :last-child  { margin-bottom: 0; }
+
+.ark-prose p {
+  margin: 0.75em 0;
+}
+
+.ark-prose h1,
+.ark-prose h2,
+.ark-prose h3,
+.ark-prose h4 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  color: #ffffff;
+  letter-spacing: -0.01em;
+  margin-top: 1.4em;
+  margin-bottom: 0.5em;
+  line-height: 1.25;
+}
+.ark-prose h1 { font-size: 1.5rem; }
+.ark-prose h2 { font-size: 1.25rem; }
+.ark-prose h3 { font-size: 1.05rem; }
+.ark-prose h4 { font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--color-sky-brand-soft); }
+
+.ark-prose strong {
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.ark-prose em {
+  color: var(--color-ink-100);
+}
+
+.ark-prose a {
+  color: var(--color-sky-brand);
+  text-decoration: underline;
+  text-decoration-color: rgba(62, 181, 249, 0.4);
+  text-underline-offset: 3px;
+  transition: text-decoration-color 150ms ease;
+}
+.ark-prose a:hover {
+  text-decoration-color: var(--color-sky-brand);
+}
+
+.ark-prose ul,
+.ark-prose ol {
+  margin: 0.75em 0;
+  padding-left: 1.25em;
+}
+.ark-prose ul { list-style: none; }
+.ark-prose ul > li {
+  position: relative;
+  padding-left: 1.1em;
+}
+.ark-prose ul > li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.7em;
+  width: 0.35em;
+  height: 0.35em;
+  border-radius: 999px;
+  background: var(--color-sky-brand);
+  box-shadow: 0 0 0 3px rgba(62, 181, 249, 0.15);
+}
+.ark-prose ol {
+  list-style: decimal;
+}
+.ark-prose ol > li::marker {
+  color: var(--color-sky-brand);
+  font-weight: 700;
+}
+.ark-prose li {
+  margin: 0.25em 0;
+}
+.ark-prose li > p { margin: 0.15em 0; }
+
+.ark-prose blockquote {
+  margin: 1em 0;
+  padding: 0.65em 1em;
+  border-left: 3px solid var(--color-sky-brand);
+  background: rgba(62, 181, 249, 0.06);
+  border-radius: 0 0.5rem 0.5rem 0;
+  color: var(--color-ink-100);
+  font-style: italic;
+}
+.ark-prose blockquote p { margin: 0.25em 0; }
+
+.ark-prose code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  padding: 0.12em 0.4em;
+  border-radius: 0.35rem;
+  background: rgba(62, 181, 249, 0.1);
+  color: var(--color-sky-brand-soft);
+  border: 1px solid rgba(62, 181, 249, 0.18);
+}
+
+.ark-prose pre {
+  font-family: var(--font-mono);
+  margin: 1em 0;
+  padding: 0.9em 1em;
+  background: rgba(7, 11, 34, 0.7);
+  border: 1px solid rgba(126, 138, 184, 0.18);
+  border-radius: 0.75rem;
+  overflow-x: auto;
+  font-size: 0.85em;
+  line-height: 1.55;
+  color: var(--color-ink-100);
+}
+.ark-prose pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+}
+
+.ark-prose hr {
+  border: 0;
+  height: 1px;
+  margin: 1.6em 0;
+  background: linear-gradient(
+    to right,
+    transparent,
+    rgba(126, 138, 184, 0.35),
+    transparent
+  );
+}
+
+.ark-prose table {
+  width: 100%;
+  margin: 1em 0;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+.ark-prose th,
+.ark-prose td {
+  padding: 0.45em 0.75em;
+  border-bottom: 1px solid rgba(126, 138, 184, 0.2);
+  text-align: left;
+  vertical-align: top;
+}
+.ark-prose th {
+  font-family: var(--font-display);
+  font-weight: 700;
+  color: #ffffff;
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom-color: rgba(62, 181, 249, 0.4);
+}
+
+/* ============================================================
+   Utility animations
+   ============================================================ */
+@keyframes ark-fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.ark-fade-up { animation: ark-fade-up 320ms ease-out both; }
+
+@keyframes ark-pulse-dot {
+  0%, 100% { opacity: 0.35; transform: scale(1); }
+  50%      { opacity: 1;    transform: scale(1.15); }
+}
+.ark-pulse-dot { animation: ark-pulse-dot 1.4s ease-in-out infinite; }

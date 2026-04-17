@@ -1,0 +1,110 @@
+{
+  "corrections": {
+    "_comment": "Spelling/phrase corrections applied to all transcripts. Pattern is case-insensitive regex, replacement is literal text.",
+    "besiege commanders": "Basij commanders",
+    "besiege (?=forces|militia|fighters|members)": "Basij "
+  },
+  "people": {
+    "_comment": "Known people and common mistranscriptions of their names.",
+    "Eyal Zamir": [
+      "Ayyaz Amir",
+      "Ayal Zamir",
+      "Ayal Tzamir",
+      "Eyal Tzamir"
+    ],
+    "Nadav Eyal": [
+      "Nadev Eyal",
+      "Nadav Egyal",
+      "Nadev Egyal",
+      "Nadav Ayal",
+      "Nadav Ayel",
+      "Nadav Eyle"
+    ],
+    "Ark Media": [
+      "art media"
+    ],
+    "Yechiel Leiter": [
+      "Yahiel, later"
+    ],
+    "Adaam James Levin-Areddy": [
+      "Adam James Levin Areddy",
+      "Adaam James Levin Areddy",
+      "Adam James Levin-Areddy",
+      "Adam Levin-Areddy",
+      "Adaam Levin-Areddy"
+    ],
+    "Donniel Hartman": [
+      "Daniel Hartman",
+      "Donyell Hartman",
+      "Doniel Hartman"
+    ],
+    "Yossi Klein Halevi": [
+      "Yossi Klein Halevy",
+      "Yossi Kleinhalevi",
+      "Yossi Klein-Halevi"
+    ],
+    "Yonatan Adiri": [
+      "Jonathan Adiri",
+      "Yonaton Adiri",
+      "Yonatan Adery"
+    ],
+    "Michal Lev-Ram": [
+      "Michal Levram",
+      "Michal Lev Ram",
+      "Michelle Lev-Ram"
+    ],
+    "Yael Wissner-Levy": [
+      "Yael Wisner-Levy",
+      "Yael Wissner Levy",
+      "Yael Wisner Levy"
+    ]
+  },
+  "shows": {
+    "Call me Back": {
+      "host": "Dan Senor",
+      "terms": [
+        "IRGC",
+        "Basij",
+        "Quds Force",
+        "Hezbollah",
+        "Fordow",
+        "Natanz",
+        "JCPOA"
+      ],
+      "guests": {}
+    },
+    "What's Your Number?": {
+      "host": "Yonatan Adiri",
+      "co_hosts": [
+        "Michal Lev-Ram",
+        "Yael Wissner-Levy"
+      ],
+      "terms": [],
+      "guests": {}
+    },
+    "Inside Call me Back": {
+      "host": "",
+      "terms": [],
+      "guests": {}
+    },
+    "For Heaven's Sake": {
+      "host": "Donniel Hartman",
+      "co_hosts": ["Yossi Klein Halevi"],
+      "terms": [],
+      "guests": {}
+    },
+    "Ark News Daily": {
+      "host": "Deborah Pardes",
+      "terms": [],
+      "guests": {}
+    }
+  },
+  "vocabulary": {
+    "_comment": "Domain-specific terms that Whisper frequently gets wrong. Only include words Whisper would misspell or mishear.",
+    "yedioth ahronoth": "Yedioth Ahronoth",
+    "ARC": "Ark",
+    "Elitani": "Litani",
+    "Egyal": "Eyal",
+    "Nadev": "Nadav"
+  }
+}
