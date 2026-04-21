@@ -630,8 +630,10 @@ export async function POST(req: Request) {
         },
     stopWhen: stepCountIs(8),
     temperature: 0.2,
-    onFinish: ({ text, usage, finishReason, toolCalls, toolResults }) => {
-      const toolChunkCount = (toolResults ?? []).reduce((sum, r) => {
+    onFinish: ({ text, usage, finishReason, steps }) => {
+      const allToolCalls = steps.flatMap((s) => s.toolCalls ?? []);
+      const allToolResults = steps.flatMap((s) => s.toolResults ?? []);
+      const toolChunkCount = allToolResults.reduce((sum, r) => {
         if (r.toolName === 'lookupCorpus') {
           const output = (r as { output?: unknown }).output as
             | { chunks?: unknown[] }
@@ -646,8 +648,15 @@ export async function POST(req: Request) {
         }
         return sum;
       }, 0);
-      const evidenceCount =
-        toolChunkCount + preRetrievedChunks.length + dossierTurns.length;
+      const aggregateToolCalled = allToolCalls.some(
+        (tc) =>
+          tc.toolName === 'topGuests' || tc.toolName === 'countGuestAppearances',
+      );
+      // Pre-retrieved chunks only count as citation-requiring evidence if the model
+      // didn't answer via an aggregate tool — topGuests/countGuestAppearances return
+      // database facts that the system prompt explicitly exempts from citations.
+      const passiveEvidence = aggregateToolCalled ? 0 : preRetrievedChunks.length;
+      const evidenceCount = toolChunkCount + passiveEvidence + dossierTurns.length;
       const hasCitation = CITATION_RE.test(text);
       const isRefusal = text.trim() === NO_INFO;
       const violatesCitationRule =
@@ -659,7 +668,7 @@ export async function POST(req: Request) {
           ms: Date.now() - started,
           finishReason,
           intent: routed?.intent ?? null,
-          toolCalls: toolCalls?.length ?? 0,
+          toolCalls: allToolCalls.length,
           toolChunkCount,
           preRetrievedCount: preRetrievedChunks.length,
           dossierTurnCount: dossierTurns.length,
