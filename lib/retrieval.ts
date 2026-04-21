@@ -84,6 +84,25 @@ export type AppearanceCount = {
   byShow: Array<{ showName: string; episodeCount: number; turnCount: number }>;
 };
 
+export type GuestAppearanceEpisode = {
+  episodeId: string;
+  title: string;
+  date: string | null;
+  driveUrl: string | null;
+  matchedBy: 'turns' | 'title' | 'both';
+  turnCount: number;
+};
+
+export type GuestAppearanceResult =
+  | { kind: 'host'; speakerName: string; showName: string }
+  | {
+      kind: 'count';
+      speakerName: string;
+      showName: string;
+      count: number;
+      episodes: GuestAppearanceEpisode[];
+    };
+
 export type EpisodeDetail = {
   episodeId: string;
   showId: number;
@@ -531,6 +550,105 @@ export async function countAppearances(opts: {
       episodeCount: r.episode_count,
       turnCount: r.turn_count,
     })),
+  };
+}
+
+// -- countGuestAppearancesOnShow: episode count by speaker + title match ----
+
+export async function countGuestAppearancesOnShow(opts: {
+  speakerId: number;
+  showId: number;
+}): Promise<GuestAppearanceResult> {
+  const [metaRows, aliasRows, hostRows] = (await Promise.all([
+    sql`
+      SELECT sp.canonical_name AS speaker_name, sh.name AS show_name
+        FROM speakers sp, shows sh
+       WHERE sp.speaker_id = ${opts.speakerId}
+         AND sh.show_id = ${opts.showId}
+    `,
+    sql`
+      SELECT alias_display
+        FROM speaker_aliases
+       WHERE speaker_id = ${opts.speakerId}
+    `,
+    sql`
+      SELECT 1 AS one FROM show_hosts
+       WHERE show_id = ${opts.showId}
+         AND speaker_id = ${opts.speakerId}
+    `,
+  ])) as unknown as [
+    Array<{ speaker_name: string; show_name: string }>,
+    Array<{ alias_display: string }>,
+    Array<{ one: number }>,
+  ];
+
+  const meta = metaRows[0];
+  if (!meta) {
+    throw new Error(
+      `Unknown speaker_id=${opts.speakerId} or show_id=${opts.showId}`,
+    );
+  }
+
+  if (hostRows.length > 0) {
+    return { kind: 'host', speakerName: meta.speaker_name, showName: meta.show_name };
+  }
+
+  // Only use multi-word aliases for title matching; bare first/last names cause
+  // cross-speaker false positives (e.g. "with Nadav" matching any Nadav).
+  const aliasSet = new Set<string>(
+    aliasRows.map((r) => r.alias_display.toLowerCase()),
+  );
+  aliasSet.add(meta.speaker_name.toLowerCase());
+  const titlePatterns = Array.from(aliasSet)
+    .filter((a) => a.trim().split(/\s+/).length >= 2)
+    .map((a) => `%with ${a}%`);
+  const noTitleMatch = titlePatterns.length === 0;
+
+  const rows = (await sql`
+    WITH ep AS (
+      SELECT e.episode_id, e.title, e.date::text AS date, e.drive_url,
+             (SELECT COUNT(*)::int FROM turns t
+               WHERE t.episode_id = e.episode_id
+                 AND t.speaker_id = ${opts.speakerId}) AS turn_count,
+             CASE WHEN ${noTitleMatch}::bool THEN FALSE
+                  ELSE LOWER(e.title) LIKE ANY(${titlePatterns}::text[])
+             END AS by_title
+        FROM episodes e
+       WHERE e.show_id = ${opts.showId}
+    )
+    SELECT episode_id, title, date, drive_url, turn_count, by_title
+      FROM ep
+     WHERE turn_count > 0 OR by_title
+  ORDER BY date DESC NULLS LAST, episode_id
+  `) as unknown as Array<{
+    episode_id: string;
+    title: string;
+    date: string | null;
+    drive_url: string | null;
+    turn_count: number;
+    by_title: boolean;
+  }>;
+
+  const episodes: GuestAppearanceEpisode[] = rows.map((r) => ({
+    episodeId: r.episode_id,
+    title: r.title,
+    date: r.date,
+    driveUrl: r.drive_url,
+    turnCount: r.turn_count,
+    matchedBy:
+      r.turn_count > 0 && r.by_title
+        ? 'both'
+        : r.turn_count > 0
+          ? 'turns'
+          : 'title',
+  }));
+
+  return {
+    kind: 'count',
+    speakerName: meta.speaker_name,
+    showName: meta.show_name,
+    count: episodes.length,
+    episodes,
   };
 }
 

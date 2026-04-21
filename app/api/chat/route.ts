@@ -9,11 +9,14 @@ import {
 import { z } from 'zod';
 
 import {
+  countGuestAppearancesOnShow,
   getDossier,
+  listSpeakers,
   lookupCorpus,
   type DossierTurn,
   type RetrievedChunk,
 } from '@/lib/retrieval';
+import { sql } from '@/lib/db';
 import { shows } from '@/lib/knowledge-base';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { routeQuery, type RoutedQuery } from '@/lib/router';
@@ -40,6 +43,7 @@ Rules — follow strictly:
 6. Tools available:
    - lookupCorpus — hybrid search for specific facts. Call when the pre-retrieved evidence is insufficient or the user asks a follow-up needing different evidence.
    - getDossier — page through additional turns of a speaker when the initial dossier is not enough (use offset).
+   - countGuestAppearances — for "how many times has <person> been on <show>" style questions. Returns the count plus the episode list. Aggregate results from this tool are database-level facts and do NOT need [id:N]/[turn:N] citations — just state the count and, if useful, list the episode titles/dates the tool returned.
 7. Keep answers concise. When comparing or summarising, use short bullets with citations.`;
 }
 
@@ -129,6 +133,108 @@ const dossierTool = tool({
       })),
       totalCount: page.totalCount,
       hasMore: page.hasMore,
+    };
+  },
+});
+
+const countAppearancesTool = tool({
+  description:
+    'Count how many times a named guest has appeared on a specific Ark Media show. An appearance is an episode where the person (a) spoke a turn in the transcript OR (b) was billed in the episode title as "…with <name>". Returns the count and the matching episodes. If the person is a regular host of the show, returns speakerIsHost=true with no count — in that case, tell the user a guest-count is not meaningful for a show host.',
+  inputSchema: z.object({
+    podcastName: z
+      .string()
+      .describe('Show name, e.g. "Call me Back", "For Heaven\'s Sake".'),
+    guestName: z.string().describe('Full name of the guest, e.g. "Nadav Eyal".'),
+  }),
+  execute: async (input) => {
+    const showRows = (await sql`
+      SELECT show_id, name FROM shows
+       WHERE LOWER(name) = LOWER(${input.podcastName})
+          OR LOWER(name) LIKE '%' || LOWER(${input.podcastName}) || '%'
+    ORDER BY (LOWER(name) = LOWER(${input.podcastName})) DESC, name
+    `) as unknown as Array<{ show_id: number; name: string }>;
+
+    if (showRows.length === 0) {
+      const all = (await sql`SELECT name FROM shows ORDER BY name`) as unknown as Array<{
+        name: string;
+      }>;
+      return {
+        error: 'unknown_show',
+        note: `No show matching "${input.podcastName}". Known shows: ${all.map((s) => s.name).join(', ')}.`,
+      };
+    }
+
+    const exactShow =
+      showRows[0].name.toLowerCase() === input.podcastName.toLowerCase()
+        ? showRows[0]
+        : null;
+    if (!exactShow && showRows.length > 1) {
+      return {
+        error: 'ambiguous_show',
+        note: `"${input.podcastName}" matches multiple shows. Ask the user which they meant.`,
+        candidates: showRows.map((s) => s.name),
+      };
+    }
+    const show = exactShow ?? showRows[0];
+    const showId = show.show_id;
+
+    const matches = await listSpeakers({
+      nameLike: input.guestName,
+      includeUnreviewed: false,
+      limit: 5,
+    });
+    if (matches.length === 0) {
+      return {
+        error: 'unknown_speaker',
+        note: `No speaker matching "${input.guestName}" in the corpus.`,
+      };
+    }
+
+    let speakerId: number;
+    if (matches.length === 1) {
+      speakerId = matches[0].speakerId;
+    } else {
+      const exact = matches.find(
+        (m) => m.canonicalName.toLowerCase() === input.guestName.toLowerCase(),
+      );
+      if (exact) {
+        speakerId = exact.speakerId;
+      } else {
+        return {
+          error: 'ambiguous_speaker',
+          note: `Multiple speakers match "${input.guestName}". Ask the user which one they meant.`,
+          candidates: matches.map((m) => ({
+            canonical_name: m.canonicalName,
+            episode_count: m.episodeCount,
+            shows: m.shows,
+          })),
+        };
+      }
+    }
+
+    const result = await countGuestAppearancesOnShow({ speakerId, showId });
+
+    if (result.kind === 'host') {
+      return {
+        speakerIsHost: true,
+        speakerName: result.speakerName,
+        showName: result.showName,
+        note: `${result.speakerName} is a regular host of ${result.showName} and appears on every episode — a guest-appearance count is not meaningful here.`,
+      };
+    }
+
+    return {
+      speakerName: result.speakerName,
+      showName: result.showName,
+      count: result.count,
+      episodes: result.episodes.map((ep) => ({
+        episode_id: ep.episodeId,
+        title: ep.title,
+        date: ep.date,
+        drive_url: ep.driveUrl,
+        matched_by: ep.matchedBy,
+        turn_count: ep.turnCount,
+      })),
     };
   },
 });
@@ -369,7 +475,11 @@ export async function POST(req: Request) {
     messages: await convertToModelMessages(messages),
     tools: shortCircuitInstruction
       ? undefined
-      : { lookupCorpus: lookupTool, getDossier: dossierTool },
+      : {
+          lookupCorpus: lookupTool,
+          getDossier: dossierTool,
+          countGuestAppearances: countAppearancesTool,
+        },
     stopWhen: stepCountIs(8),
     temperature: 0.2,
     onFinish: ({ text, usage, finishReason, toolCalls, toolResults }) => {
