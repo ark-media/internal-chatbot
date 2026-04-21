@@ -413,7 +413,7 @@ function EmptyState({
       >
         Ask the{' '}
         <span className="bg-gradient-to-r from-[#3eb5f9] via-[#79cdfc] to-white bg-clip-text text-transparent">
-          archive
+          arkive
         </span>
         .
       </h1>
