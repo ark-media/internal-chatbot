@@ -32,8 +32,24 @@ export default function ChatPage() {
 
   const [input, setInput] = useState('');
   const [openSource, setOpenSource] = useState<Source | null>(null);
+  const [episodeCount, setEpisodeCount] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/episode-count')
+      .then((r) => r.json())
+      .then((data: { count: number | null }) => {
+        if (!cancelled && typeof data.count === 'number') {
+          setEpisodeCount(data.count);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const sources = useMemo(() => {
     const map = new Map<string, Source>();
@@ -138,7 +154,7 @@ export default function ChatPage() {
           </div>
           <div className="hidden items-center gap-2 text-[0.7rem] text-white/40 sm:flex">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.6)]" />
-            <span>187 episodes indexed</span>
+            <span>{episodeCount ?? '—'} episodes indexed</span>
           </div>
         </header>
 
