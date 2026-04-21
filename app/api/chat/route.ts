@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import {
   convertToModelMessages,
+  createUIMessageStream,
+  createUIMessageStreamResponse,
   stepCountIs,
   streamText,
   tool,
@@ -21,6 +23,7 @@ import { sql } from '@/lib/db';
 import { shows } from '@/lib/knowledge-base';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { routeQuery, type RoutedQuery } from '@/lib/router';
+import type { ChatUIMessage, PreloadedSources } from '@/components/chat-types';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -44,8 +47,8 @@ Rules — follow strictly:
 6. Tools available:
    - lookupCorpus — hybrid search for specific facts. Call when the pre-retrieved evidence is insufficient or the user asks a follow-up needing different evidence.
    - getDossier — page through additional turns of a speaker when the initial dossier is not enough (use offset).
-   - countGuestAppearances — for "how many times has <person> been on <show>" style questions. Returns the count plus the episode list. Aggregate results from this tool are database-level facts and do NOT need [id:N]/[turn:N] citations — just state the count and, if useful, list the episode titles/dates the tool returned.
-   - topGuests — call this tool whenever the user asks for a ranking of guests on a show, group of shows, or the corpus as a whole. Trigger phrases include: "top N guests", "most frequent guests", "who appears most often", "recurring guests", "regulars (excluding hosts)", and variants with a date range ("top guests in 2024"). Accepts an optional show name OR show group name (mutually exclusive) and an optional date range; hosts of the selected shows are excluded automatically. Default limit is 10 if the user didn't specify. Returns a ranked list with episode counts and, for each guest, the list of episodes (on the filtered show/group) they appeared in. When presenting results: show rank, guest name, and episode count in a table; under each guest (or in a follow-up list) surface the episode titles and dates so the user can verify. Do NOT display turn counts — they are not part of the output. Aggregates do NOT need [id:N]/[turn:N] citations. Surface ties using the 'rank' field (two guests sharing a rank share that rank; within a rank they are ordered alphabetically).
+   - countGuestAppearances — for "how many times has <person> been on <show>" style questions. Returns the count plus the episode list. Aggregate results from this tool are database-level facts and do NOT need [id:N]/[turn:N] citations. State the count in prose (e.g. "Nadav Eyal has appeared on Call me Back 14 times"); the UI renders the episodes as a clickable list below your message, so do NOT re-list each episode title/date inline — a one-line summary (first date, last date, or notable range) is fine.
+   - topGuests — call this tool whenever the user asks for a ranking of guests on a show, group of shows, or the corpus as a whole. Trigger phrases include: "top N guests", "most frequent guests", "who appears most often", "recurring guests", "regulars (excluding hosts)", and variants with a date range ("top guests in 2024"). Accepts an optional show name OR show group name (mutually exclusive) and an optional date range; hosts of the selected shows are excluded automatically. Default limit is 10 if the user didn't specify. Returns a ranked list with episode counts and, for each guest, the list of episodes (on the filtered show/group) they appeared in. Presentation is handled entirely by the UI: it renders the ranking as a table with a "View" action that opens the guest's episode list in a side panel. Your text reply MUST be EXACTLY one short lead-in sentence and then STOP — for example: "Here are the most frequent guests on Call me Back." FORBIDDEN in your text (do NOT include any of these): (a) any markdown table or list of guests; (b) any list of episodes; (c) any mention of ties, tiebreaking, or "Note on ties"; (d) any explanation of what the UI shows, how to click, or how the list is rendered; (e) any methodology notes such as "hosts are excluded" or "ranked by episode count"; (f) turn counts. Aggregates do NOT need [id:N]/[turn:N] citations.
 7. Keep answers concise. When comparing or summarising, use short bullets with citations.`;
 }
 
@@ -617,6 +620,30 @@ export async function POST(req: Request) {
           )
         : '');
 
+  const preloaded: PreloadedSources = {
+    chunks: preRetrievedChunks.map((c) => ({
+      id: c.chunkId,
+      episode_id: c.episodeId,
+      show: c.showName,
+      title: c.title,
+      date: c.date,
+      section: c.section,
+      drive_url: c.driveUrl,
+      excerpt: `<transcript_excerpt id="${c.chunkId}">\n${c.text}\n</transcript_excerpt>`,
+    })),
+    turns: dossierTurns.map((t) => ({
+      id: t.turnId,
+      episode_id: t.episodeId,
+      episode_title: t.episodeTitle,
+      show: t.showName,
+      date: t.date,
+      section: t.section,
+      speaker: t.speakerName,
+      drive_url: t.driveUrl,
+      excerpt: `<dossier_turn id="${t.turnId}" date="${t.date ?? 'unknown'}" show="${t.showName}" episode="${t.episodeTitle}">\n${t.speakerName}: ${t.text}\n</dossier_turn>`,
+    })),
+  };
+
   const result = streamText({
     model: 'anthropic/claude-sonnet-4-6',
     system: {
@@ -700,8 +727,19 @@ export async function POST(req: Request) {
     },
   });
 
-  return result.toUIMessageStreamResponse({
-    sendSources: false,
-    sendReasoning: false,
+  const stream = createUIMessageStream<ChatUIMessage>({
+    execute: ({ writer }) => {
+      if (preloaded.chunks.length > 0 || preloaded.turns.length > 0) {
+        writer.write({ type: 'data-preloaded', data: preloaded });
+      }
+      writer.merge(
+        result.toUIMessageStream<ChatUIMessage>({
+          sendSources: false,
+          sendReasoning: false,
+        }),
+      );
+    },
   });
+
+  return createUIMessageStreamResponse({ stream });
 }

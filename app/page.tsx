@@ -3,15 +3,19 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
-import { ArrowUp, Loader2, Square, Sparkles, FileText } from 'lucide-react';
+import { ArrowUp, Loader2, Square, Sparkles, FileText, ChevronRight } from 'lucide-react';
 
 import { ArkLogo } from '@/components/ArkLogo';
 import { MessageText } from '@/components/MessageText';
 import { SourcePanel } from '@/components/SourcePanel';
 import type {
+  ChatUIMessage,
+  CountGuestAppearancesToolOutput,
   DossierToolOutput,
   LookupToolOutput,
+  PanelView,
   Source,
+  TopGuestsToolOutput,
 } from '@/components/chat-types';
 import { cn } from '@/lib/cn';
 
@@ -26,13 +30,16 @@ const EXAMPLE_PROMPTS = [
 ];
 
 export default function ChatPage() {
-  const { messages, sendMessage, status, stop } = useChat({
+  const { messages, sendMessage, status, stop } = useChat<ChatUIMessage>({
     transport: new DefaultChatTransport({ api: '/api/chat' }),
   });
 
   const [input, setInput] = useState('');
-  const [openSource, setOpenSource] = useState<Source | null>(null);
+  const [openPanel, setOpenPanel] = useState<PanelView | null>(null);
   const [episodeCount, setEpisodeCount] = useState<number | null>(null);
+
+  const openSource = (source: Source) =>
+    setOpenPanel({ view: 'source', source });
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -56,6 +63,38 @@ export default function ChatPage() {
     for (const m of messages) {
       if (m.role !== 'assistant') continue;
       for (const part of m.parts) {
+        if (part.type === 'data-preloaded') {
+          for (const c of part.data.chunks) {
+            const key = `id:${c.id}`;
+            map.set(key, {
+              kind: 'chunk',
+              id: c.id,
+              key,
+              title: c.title,
+              show: c.show,
+              date: c.date,
+              section: c.section,
+              speaker: null,
+              drive_url: c.drive_url,
+              excerpt: c.excerpt,
+            });
+          }
+          for (const t of part.data.turns) {
+            const key = `turn:${t.id}`;
+            map.set(key, {
+              kind: 'turn',
+              id: t.id,
+              key,
+              title: t.episode_title,
+              show: t.show,
+              date: t.date,
+              section: t.section,
+              speaker: t.speaker,
+              drive_url: t.drive_url,
+              excerpt: t.excerpt,
+            });
+          }
+        }
         if (part.type === 'tool-lookupCorpus' && 'output' in part && part.output) {
           const out = part.output as LookupToolOutput;
           for (const c of out.chunks ?? []) {
@@ -90,6 +129,54 @@ export default function ChatPage() {
               drive_url: t.drive_url,
               excerpt: t.excerpt,
             });
+          }
+        }
+        if (
+          part.type === 'tool-countGuestAppearances' &&
+          'output' in part &&
+          part.output
+        ) {
+          const out = part.output as CountGuestAppearancesToolOutput;
+          for (const ep of out.episodes ?? []) {
+            const key = `ep:${ep.episode_id}`;
+            map.set(key, {
+              kind: 'episode',
+              id: ep.episode_id,
+              key,
+              title: ep.title,
+              show: out.showName ?? '',
+              date: ep.date,
+              section: null,
+              speaker: out.speakerName ?? null,
+              drive_url: ep.drive_url,
+              excerpt: '',
+            });
+          }
+        }
+        if (part.type === 'tool-topGuests' && 'output' in part && part.output) {
+          const out = part.output as TopGuestsToolOutput;
+          const showContext =
+            out.showName ?? (out.groupName ? `${out.groupName} group` : '');
+          for (const g of out.guests ?? []) {
+            for (const ep of g.episodes ?? []) {
+              const key = `ep:${ep.episode_id}`;
+              // Prefer entries already set (e.g. from countGuestAppearances with
+              // richer metadata); otherwise populate from topGuests.
+              if (!map.has(key)) {
+                map.set(key, {
+                  kind: 'episode',
+                  id: ep.episode_id,
+                  key,
+                  title: ep.title,
+                  show: showContext,
+                  date: ep.date,
+                  section: null,
+                  speaker: g.speaker_name,
+                  drive_url: ep.drive_url,
+                  excerpt: '',
+                });
+              }
+            }
           }
         }
       }
@@ -171,7 +258,8 @@ export default function ChatPage() {
                 key={m.id}
                 message={m}
                 sources={sources}
-                onOpen={setOpenSource}
+                onOpen={openSource}
+                onOpenPanel={setOpenPanel}
               />
             ))}
 
@@ -253,8 +341,8 @@ export default function ChatPage() {
         </form>
       </div>
 
-      {openSource && (
-        <SourcePanel source={openSource} onClose={() => setOpenSource(null)} />
+      {openPanel && (
+        <SourcePanel panel={openPanel} onClose={() => setOpenPanel(null)} />
       )}
     </div>
   );
@@ -268,9 +356,10 @@ type MsgProps = {
   message: ReturnType<typeof useChat>['messages'][number];
   sources: Map<string, Source>;
   onOpen: (s: Source) => void;
+  onOpenPanel: (panel: PanelView) => void;
 };
 
-function MessageRow({ message, sources, onOpen }: MsgProps) {
+function MessageRow({ message, sources, onOpen, onOpenPanel }: MsgProps) {
   if (message.role === 'user') {
     return (
       <div className="ark-fade-up flex justify-end">
@@ -362,11 +451,251 @@ function MessageRow({ message, sources, onOpen }: MsgProps) {
               );
             }
           }
+          if (part.type === 'tool-topGuests') {
+            if (
+              part.state === 'input-streaming' ||
+              part.state === 'input-available'
+            ) {
+              return <ToolChip key={i} icon="file" label="Ranking guests…" pulsing />;
+            }
+            if (part.state === 'output-available') {
+              const out = part.output as TopGuestsToolOutput;
+              const guests = out.guests ?? [];
+              if (guests.length === 0) {
+                return (
+                  <ToolChip
+                    key={i}
+                    icon="file"
+                    label={out.note ?? 'No matching guests'}
+                  />
+                );
+              }
+              return (
+                <TopGuestsTable
+                  key={i}
+                  output={out}
+                  onOpenPanel={onOpenPanel}
+                />
+              );
+            }
+          }
+          if (part.type === 'tool-countGuestAppearances') {
+            if (
+              part.state === 'input-streaming' ||
+              part.state === 'input-available'
+            ) {
+              return (
+                <ToolChip key={i} icon="file" label="Counting appearances…" pulsing />
+              );
+            }
+            if (part.state === 'output-available') {
+              const out = part.output as CountGuestAppearancesToolOutput;
+              if (out.speakerIsHost) {
+                return (
+                  <ToolChip
+                    key={i}
+                    icon="file"
+                    label={`${out.speakerName ?? 'Speaker'} is a host of ${out.showName ?? 'the show'}`}
+                  />
+                );
+              }
+              const eps = out.episodes ?? [];
+              const count = out.count ?? eps.length;
+              if (eps.length === 0) {
+                return (
+                  <ToolChip
+                    key={i}
+                    icon="file"
+                    label={out.note ?? 'No appearances found'}
+                  />
+                );
+              }
+              return (
+                <div key={i} className="space-y-2">
+                  <ToolChip
+                    icon="file"
+                    label={`${count} appearance${count === 1 ? '' : 's'}${out.speakerName && out.showName ? ` · ${out.speakerName} on ${out.showName}` : ''}`}
+                  />
+                  <EpisodeList
+                    episodes={eps}
+                    sources={sources}
+                    onOpen={onOpen}
+                  />
+                </div>
+              );
+            }
+          }
           return null;
         })}
       </div>
     </div>
   );
+}
+
+type EpisodeListItem = {
+  episode_id: string;
+  title: string;
+  date: string | null;
+  drive_url: string | null;
+  matched_by?: 'turns' | 'title' | 'both';
+};
+
+function EpisodeList({
+  episodes,
+  sources,
+  onOpen,
+}: {
+  episodes: EpisodeListItem[];
+  sources: Map<string, Source>;
+  onOpen: (s: Source) => void;
+}) {
+  return (
+    <ul className="ml-0 flex flex-col gap-1.5">
+      {episodes.map((ep) => {
+        const key = `ep:${ep.episode_id}`;
+        const source = sources.get(key);
+        return (
+          <li key={ep.episode_id}>
+            <button
+              type="button"
+              onClick={() => source && onOpen(source)}
+              disabled={!source}
+              className={cn(
+                'group flex w-full items-start gap-2 rounded-lg border border-amber-300/20',
+                'bg-amber-400/[0.04] px-3 py-2 text-left transition',
+                'hover:border-amber-300/50 hover:bg-amber-400/[0.08]',
+                'focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60',
+                'disabled:cursor-not-allowed disabled:opacity-50',
+              )}
+            >
+              <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-200/80 transition group-hover:text-amber-100" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[0.85rem] font-medium text-white/90">
+                  {ep.title}
+                </div>
+                <div className="mt-0.5 text-[0.7rem] text-white/45">
+                  {ep.date ?? 'date unknown'}
+                  {ep.matched_by === 'title'
+                    ? ' · billed in title'
+                    : ep.matched_by === 'both'
+                      ? ' · billed + spoke'
+                      : ''}
+                </div>
+              </div>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function TopGuestsTable({
+  output,
+  onOpenPanel,
+}: {
+  output: TopGuestsToolOutput;
+  onOpenPanel: (panel: PanelView) => void;
+}) {
+  const guests = output.guests ?? [];
+  const scopeLabel =
+    output.showName ??
+    (output.groupName ? `${output.groupName} (group)` : 'all shows');
+  const dateRange =
+    output.since && output.until
+      ? `${output.since} → ${output.until}`
+      : output.since
+        ? `Since ${output.since}`
+        : output.until
+          ? `Until ${output.until}`
+          : null;
+
+  const hasTies = guests.some((g, idx, arr) =>
+    arr.some((o, j) => j !== idx && o.rank === g.rank),
+  );
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 text-[0.72rem] text-white/50">
+        <span className="uppercase tracking-[0.18em]">Top Guests</span>
+        <span className="text-white/25">·</span>
+        <span className="text-[#79cdfc]">{scopeLabel}</span>
+        {dateRange ? (
+          <>
+            <span className="text-white/25">·</span>
+            <span className="text-white/60">{dateRange}</span>
+          </>
+        ) : null}
+      </div>
+
+      <div className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.02]">
+        <table className="w-full text-[0.88rem]">
+          <thead>
+            <tr className="border-b border-white/[0.06] text-left text-[0.68rem] uppercase tracking-[0.14em] text-white/40">
+              <th className="px-4 py-2.5 font-medium">Rank</th>
+              <th className="px-4 py-2.5 font-medium">Guest</th>
+              <th className="px-4 py-2.5 text-right font-medium">Episodes</th>
+              <th className="px-4 py-2.5 font-medium" aria-label="Actions" />
+            </tr>
+          </thead>
+          <tbody>
+            {guests.map((g) => (
+              <tr
+                key={`${g.rank}-${g.speaker_name}`}
+                className="border-t border-white/[0.04] transition hover:bg-white/[0.025]"
+              >
+                <td className="px-4 py-2.5 text-white/60">
+                  <RankBadge rank={g.rank} />
+                </td>
+                <td className="px-4 py-2.5 font-medium text-white/90">
+                  {g.speaker_name}
+                </td>
+                <td className="px-4 py-2.5 text-right font-mono text-white/75 tabular-nums">
+                  {g.episode_count}
+                </td>
+                <td className="px-4 py-2.5 text-right">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onOpenPanel({
+                        view: 'guest_episodes',
+                        speakerName: g.speaker_name,
+                        scope: scopeLabel,
+                        dateRange,
+                        episodes: g.episodes,
+                      })
+                    }
+                    className={cn(
+                      'inline-flex items-center gap-1 rounded-md border border-[#3eb5f9]/30 bg-[#3eb5f9]/[0.08]',
+                      'px-2 py-1 text-[0.72rem] font-medium text-[#79cdfc]',
+                      'transition hover:border-[#3eb5f9]/60 hover:bg-[#3eb5f9]/[0.18] hover:text-white',
+                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-[#3eb5f9]/60',
+                    )}
+                  >
+                    View
+                    <ChevronRight className="h-3 w-3" />
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {hasTies ? (
+        <div className="text-[0.7rem] text-white/40">
+          Tied ranks share a position; within a tier guests are listed alphabetically.
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function RankBadge({ rank }: { rank: number }) {
+  if (rank === 1) return <span className="font-mono text-amber-300">🥇 1</span>;
+  if (rank === 2) return <span className="font-mono text-white/80">🥈 2</span>;
+  if (rank === 3) return <span className="font-mono text-orange-300">🥉 3</span>;
+  return <span className="font-mono text-white/55">{rank}</span>;
 }
 
 function ToolChip({
