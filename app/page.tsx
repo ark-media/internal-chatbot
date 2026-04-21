@@ -1,6 +1,13 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from 'react';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import { ArrowUp, Loader2, Square, Sparkles, FileText, ChevronRight } from 'lucide-react';
@@ -38,8 +45,10 @@ export default function ChatPage() {
   const [openPanel, setOpenPanel] = useState<PanelView | null>(null);
   const [episodeCount, setEpisodeCount] = useState<number | null>(null);
 
-  const openSource = (source: Source) =>
-    setOpenPanel({ view: 'source', source });
+  const openSource = useCallback(
+    (source: Source) => setOpenPanel({ view: 'source', source }),
+    [],
+  );
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -151,32 +160,6 @@ export default function ChatPage() {
               drive_url: ep.drive_url,
               excerpt: '',
             });
-          }
-        }
-        if (part.type === 'tool-topGuests' && 'output' in part && part.output) {
-          const out = part.output as TopGuestsToolOutput;
-          const showContext =
-            out.showName ?? (out.groupName ? `${out.groupName} group` : '');
-          for (const g of out.guests ?? []) {
-            for (const ep of g.episodes ?? []) {
-              const key = `ep:${ep.episode_id}`;
-              // Prefer entries already set (e.g. from countGuestAppearances with
-              // richer metadata); otherwise populate from topGuests.
-              if (!map.has(key)) {
-                map.set(key, {
-                  kind: 'episode',
-                  id: ep.episode_id,
-                  key,
-                  title: ep.title,
-                  show: showContext,
-                  date: ep.date,
-                  section: null,
-                  speaker: g.speaker_name,
-                  drive_url: ep.drive_url,
-                  excerpt: '',
-                });
-              }
-            }
           }
         }
       }
@@ -610,9 +593,7 @@ function TopGuestsTable({
           ? `Until ${output.until}`
           : null;
 
-  const hasTies = guests.some((g, idx, arr) =>
-    arr.some((o, j) => j !== idx && o.rank === g.rank),
-  );
+  const hasTies = new Set(guests.map((g) => g.rank)).size < guests.length;
 
   return (
     <div className="space-y-2">

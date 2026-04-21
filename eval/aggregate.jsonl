@@ -1,0 +1,3 @@
+{"id":"ag01","kind":"countAppearances","speaker":"Nadav Eyal","show":"Call me Back","expected_min_count":30,"notes":"As of Apr 2026 screenshot, Nadav Eyal had 39 CMB episodes"}
+{"id":"ag02","kind":"countAppearances","speaker":"Amit Segal","show":"Call me Back","expected_min_count":15,"notes":"As of Apr 2026, Amit Segal had 21 CMB episodes"}
+{"id":"ag03","kind":"topGuests","show":"Call me Back","limit":10,"expected_top":[{"name":"Nadav Eyal","min_episodes":30},{"name":"Amit Segal","min_episodes":15}],"notes":"Top recurring guests on Call me Back — hosts are excluded by listTopGuests"}
