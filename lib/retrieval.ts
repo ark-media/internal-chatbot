@@ -750,18 +750,32 @@ export async function listTopGuests(opts: {
        WHERE (${showIds}::int[] IS NULL OR show_id = ANY(${showIds}::int[]))
          AND (${showGroupIds}::int[] IS NULL OR group_id = ANY(${showGroupIds}::int[]))
     ),
-    speaker_episodes AS (
-      SELECT DISTINCT
-             t.speaker_id,
-             e.episode_id,
-             e.title,
-             e.date,
-             e.drive_url
+    scoped_turns AS (
+      SELECT t.speaker_id, t.text, e.episode_id, e.title, e.date, e.drive_url
         FROM turns t
         JOIN episodes e ON e.episode_id = t.episode_id
                        AND e.show_id IN (SELECT show_id FROM relevant_shows)
        WHERE (${since}::date IS NULL OR e.date >= ${since}::date)
          AND (${until}::date IS NULL OR e.date <= ${until}::date)
+    ),
+    episode_char_totals AS (
+      SELECT episode_id, SUM(LENGTH(text))::float AS total_chars
+        FROM scoped_turns
+       GROUP BY episode_id
+    ),
+    -- Require a speaker to hold >=5% of an episode's transcript to count as a
+    -- guest of that episode. Filters out cold-open clips, voicemail cameos,
+    -- and brief memorial soundbites that would otherwise inflate guest counts.
+    speaker_episodes AS (
+      SELECT st.speaker_id,
+             st.episode_id,
+             st.title,
+             st.date,
+             st.drive_url
+        FROM scoped_turns st
+        JOIN episode_char_totals ect ON ect.episode_id = st.episode_id
+       GROUP BY st.speaker_id, st.episode_id, st.title, st.date, st.drive_url, ect.total_chars
+      HAVING SUM(LENGTH(st.text))::float / NULLIF(ect.total_chars, 0) >= 0.05
     ),
     agg AS (
       SELECT sp.speaker_id,
