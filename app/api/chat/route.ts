@@ -45,7 +45,7 @@ Rules — follow strictly:
    - lookupCorpus — hybrid search for specific facts. Call when the pre-retrieved evidence is insufficient or the user asks a follow-up needing different evidence.
    - getDossier — page through additional turns of a speaker when the initial dossier is not enough (use offset).
    - countGuestAppearances — for "how many times has <person> been on <show>" style questions. Returns the count plus the episode list. Aggregate results from this tool are database-level facts and do NOT need [id:N]/[turn:N] citations — just state the count and, if useful, list the episode titles/dates the tool returned.
-   - topGuests — call this tool whenever the user asks for a ranking of guests on a show, group of shows, or the corpus as a whole. Trigger phrases include: "top N guests", "most frequent guests", "who appears most often", "recurring guests", "regulars (excluding hosts)", and variants with a date range ("top guests in 2024"). Accepts an optional show name OR show group name (mutually exclusive) and an optional date range; hosts of the selected shows are excluded automatically. Default limit is 10 if the user didn't specify. Returns a ranked list with episode counts; aggregates do NOT need [id:N]/[turn:N] citations. Surface ties using the 'rank' field (two guests sharing a rank share that rank).
+   - topGuests — call this tool whenever the user asks for a ranking of guests on a show, group of shows, or the corpus as a whole. Trigger phrases include: "top N guests", "most frequent guests", "who appears most often", "recurring guests", "regulars (excluding hosts)", and variants with a date range ("top guests in 2024"). Accepts an optional show name OR show group name (mutually exclusive) and an optional date range; hosts of the selected shows are excluded automatically. Default limit is 10 if the user didn't specify. Returns a ranked list with episode counts and, for each guest, the list of episodes (on the filtered show/group) they appeared in. When presenting results: show rank, guest name, and episode count in a table; under each guest (or in a follow-up list) surface the episode titles and dates so the user can verify. Do NOT display turn counts — they are not part of the output. Aggregates do NOT need [id:N]/[turn:N] citations. Surface ties using the 'rank' field (two guests sharing a rank share that rank; within a rank they are ordered alphabetically).
 7. Keep answers concise. When comparing or summarising, use short bullets with citations.`;
 }
 
@@ -297,7 +297,7 @@ const countAppearancesTool = tool({
 
 const topGuestsTool = tool({
   description:
-    'Rank the most frequent guests by distinct-episode count. Accepts either a show name OR a show group name (not both — they are mutually exclusive), plus an optional date range. Hosts of the selected shows (or all shows, if no scope filter is applied) are excluded automatically. Ties are preserved: when the row at position `limit` is tied with rows beyond it, all tied rows are returned, so the result may contain more than `limit` rows. Use the returned `rank` field to display ties; within a rank, rows are ordered by turn_count DESC then name ASC. Aggregate results do NOT require [id:N]/[turn:N] citations.',
+    'Rank the most frequent guests by distinct-episode count. Accepts either a show name OR a show group name (not both — they are mutually exclusive), plus an optional date range. Hosts of the selected shows (or all shows, if no scope filter is applied) are excluded automatically. Each guest in the result comes with the list of episodes (on the filtered show/group) they appeared in — surface these episode titles/dates in the answer so the user can verify the count. Ties are preserved: when the row at position `limit` is tied with rows beyond it, all tied rows are returned, so the result may contain more than `limit` rows. Use the returned `rank` field to display ties; within a rank, rows are ordered alphabetically by name. Aggregate results do NOT require [id:N]/[turn:N] citations.',
   inputSchema: z.object({
     podcastName: z
       .string()
@@ -378,9 +378,14 @@ const topGuestsTool = tool({
         rank: r.rank,
         speaker_name: r.speakerName,
         episode_count: r.episodeCount,
-        turn_count: r.turnCount,
         first_date: r.firstDate,
         last_date: r.lastDate,
+        episodes: r.episodes.map((ep) => ({
+          episode_id: ep.episodeId,
+          title: ep.title,
+          date: ep.date,
+          drive_url: ep.driveUrl,
+        })),
       })),
     };
   },

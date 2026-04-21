@@ -103,14 +103,21 @@ export type GuestAppearanceResult =
       episodes: GuestAppearanceEpisode[];
     };
 
+export type TopGuestEpisode = {
+  episodeId: string;
+  title: string;
+  date: string | null;
+  driveUrl: string | null;
+};
+
 export type TopGuestRow = {
   rank: number;
   speakerId: number;
   speakerName: string;
   episodeCount: number;
-  turnCount: number;
   firstDate: string | null;
   lastDate: string | null;
+  episodes: TopGuestEpisode[];
 };
 
 export type EpisodeDetail = {
@@ -743,21 +750,29 @@ export async function listTopGuests(opts: {
        WHERE (${showIds}::int[] IS NULL OR show_id = ANY(${showIds}::int[]))
          AND (${showGroupIds}::int[] IS NULL OR group_id = ANY(${showGroupIds}::int[]))
     ),
-    agg AS (
-      SELECT sp.speaker_id,
-             sp.canonical_name,
-             COUNT(DISTINCT t.episode_id)::int AS episode_count,
-             COUNT(*)::int AS turn_count,
-             MIN(e.date)::text AS first_date,
-             MAX(e.date)::text AS last_date
+    speaker_episodes AS (
+      SELECT DISTINCT
+             t.speaker_id,
+             e.episode_id,
+             e.title,
+             e.date,
+             e.drive_url
         FROM turns t
         JOIN episodes e ON e.episode_id = t.episode_id
                        AND e.show_id IN (SELECT show_id FROM relevant_shows)
-        JOIN speakers sp ON sp.speaker_id = t.speaker_id
+       WHERE (${since}::date IS NULL OR e.date >= ${since}::date)
+         AND (${until}::date IS NULL OR e.date <= ${until}::date)
+    ),
+    agg AS (
+      SELECT sp.speaker_id,
+             sp.canonical_name,
+             COUNT(*)::int AS episode_count,
+             MIN(se.date)::text AS first_date,
+             MAX(se.date)::text AS last_date
+        FROM speaker_episodes se
+        JOIN speakers sp ON sp.speaker_id = se.speaker_id
        WHERE sp.include_in_content = TRUE
          AND sp.review_status <> 'unreviewed'
-         AND (${since}::date IS NULL OR e.date >= ${since}::date)
-         AND (${until}::date IS NULL OR e.date <= ${until}::date)
          AND NOT EXISTS (
                SELECT 1 FROM show_hosts h
                 WHERE h.speaker_id = sp.speaker_id
@@ -769,30 +784,48 @@ export async function listTopGuests(opts: {
       SELECT speaker_id,
              canonical_name,
              episode_count,
-             turn_count,
              first_date,
              last_date,
              DENSE_RANK() OVER (ORDER BY episode_count DESC)::int AS rank
         FROM agg
+    ),
+    cutoff AS (
+      SELECT COALESCE(
+               (SELECT rank FROM ranked
+                 ORDER BY rank ASC, canonical_name ASC
+                 LIMIT 1 OFFSET ${limit - 1}),
+               (SELECT MAX(rank) FROM ranked)
+             ) AS max_rank
     )
-    SELECT speaker_id, canonical_name, episode_count, turn_count,
-           first_date, last_date, rank
-      FROM ranked
-     WHERE rank <= COALESCE(
-             (SELECT rank FROM ranked
-               ORDER BY rank ASC, turn_count DESC, canonical_name ASC
-               LIMIT 1 OFFSET ${limit - 1}),
-             (SELECT MAX(rank) FROM ranked)
-           )
-  ORDER BY rank ASC, turn_count DESC, canonical_name ASC
+    SELECT r.speaker_id, r.canonical_name, r.episode_count,
+           r.first_date, r.last_date, r.rank,
+           COALESCE(
+             (SELECT jsonb_agg(jsonb_build_object(
+                       'episode_id', se.episode_id,
+                       'title', se.title,
+                       'date', se.date::text,
+                       'drive_url', se.drive_url
+                     ) ORDER BY se.date DESC NULLS LAST, se.episode_id)
+                FROM speaker_episodes se
+               WHERE se.speaker_id = r.speaker_id),
+             '[]'::jsonb
+           ) AS episodes
+      FROM ranked r, cutoff c
+     WHERE r.rank <= c.max_rank
+  ORDER BY r.rank ASC, r.canonical_name ASC
   `) as unknown as Array<{
     speaker_id: number;
     canonical_name: string;
     episode_count: number;
-    turn_count: number;
     first_date: string | null;
     last_date: string | null;
     rank: number;
+    episodes: Array<{
+      episode_id: string;
+      title: string;
+      date: string | null;
+      drive_url: string | null;
+    }>;
   }>;
 
   return rows.map((r) => ({
@@ -800,8 +833,13 @@ export async function listTopGuests(opts: {
     speakerId: r.speaker_id,
     speakerName: r.canonical_name,
     episodeCount: r.episode_count,
-    turnCount: r.turn_count,
     firstDate: r.first_date,
     lastDate: r.last_date,
+    episodes: r.episodes.map((ep) => ({
+      episodeId: ep.episode_id,
+      title: ep.title,
+      date: ep.date,
+      driveUrl: ep.drive_url,
+    })),
   }));
 }
