@@ -103,6 +103,16 @@ export type GuestAppearanceResult =
       episodes: GuestAppearanceEpisode[];
     };
 
+export type TopGuestRow = {
+  rank: number;
+  speakerId: number;
+  speakerName: string;
+  episodeCount: number;
+  turnCount: number;
+  firstDate: string | null;
+  lastDate: string | null;
+};
+
 export type EpisodeDetail = {
   episodeId: string;
   showId: number;
@@ -711,4 +721,87 @@ export async function getEpisode(
       text: r.text,
     })),
   };
+}
+
+// -- listTopGuests: rank recurring guests by episode count -------------------
+
+export async function listTopGuests(opts: {
+  filters?: Pick<CorpusFilters, 'showIds' | 'showGroupIds' | 'since' | 'until'>;
+  limit?: number;
+}): Promise<TopGuestRow[]> {
+  const f = opts.filters ?? {};
+  const showIds = f.showIds?.length ? f.showIds : null;
+  const showGroupIds = f.showGroupIds?.length ? f.showGroupIds : null;
+  const since = f.since ?? null;
+  const until = f.until ?? null;
+  const limit = Math.min(Math.max(opts.limit ?? 10, 1), 50);
+
+  const rows = (await sql`
+    WITH relevant_shows AS (
+      SELECT show_id
+        FROM shows
+       WHERE (${showIds}::int[] IS NULL OR show_id = ANY(${showIds}::int[]))
+         AND (${showGroupIds}::int[] IS NULL OR group_id = ANY(${showGroupIds}::int[]))
+    ),
+    agg AS (
+      SELECT sp.speaker_id,
+             sp.canonical_name,
+             COUNT(DISTINCT t.episode_id)::int AS episode_count,
+             COUNT(*)::int AS turn_count,
+             MIN(e.date)::text AS first_date,
+             MAX(e.date)::text AS last_date
+        FROM turns t
+        JOIN episodes e ON e.episode_id = t.episode_id
+                       AND e.show_id IN (SELECT show_id FROM relevant_shows)
+        JOIN speakers sp ON sp.speaker_id = t.speaker_id
+       WHERE sp.include_in_content = TRUE
+         AND sp.review_status <> 'unreviewed'
+         AND (${since}::date IS NULL OR e.date >= ${since}::date)
+         AND (${until}::date IS NULL OR e.date <= ${until}::date)
+         AND NOT EXISTS (
+               SELECT 1 FROM show_hosts h
+                WHERE h.speaker_id = sp.speaker_id
+                  AND h.show_id IN (SELECT show_id FROM relevant_shows)
+             )
+    GROUP BY sp.speaker_id, sp.canonical_name
+    ),
+    ranked AS (
+      SELECT speaker_id,
+             canonical_name,
+             episode_count,
+             turn_count,
+             first_date,
+             last_date,
+             DENSE_RANK() OVER (ORDER BY episode_count DESC)::int AS rank
+        FROM agg
+    )
+    SELECT speaker_id, canonical_name, episode_count, turn_count,
+           first_date, last_date, rank
+      FROM ranked
+     WHERE rank <= COALESCE(
+             (SELECT rank FROM ranked
+               ORDER BY rank ASC, turn_count DESC, canonical_name ASC
+               LIMIT 1 OFFSET ${limit - 1}),
+             (SELECT MAX(rank) FROM ranked)
+           )
+  ORDER BY rank ASC, turn_count DESC, canonical_name ASC
+  `) as unknown as Array<{
+    speaker_id: number;
+    canonical_name: string;
+    episode_count: number;
+    turn_count: number;
+    first_date: string | null;
+    last_date: string | null;
+    rank: number;
+  }>;
+
+  return rows.map((r) => ({
+    rank: r.rank,
+    speakerId: r.speaker_id,
+    speakerName: r.canonical_name,
+    episodeCount: r.episode_count,
+    turnCount: r.turn_count,
+    firstDate: r.first_date,
+    lastDate: r.last_date,
+  }));
 }

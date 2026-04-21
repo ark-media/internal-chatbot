@@ -12,6 +12,7 @@ import {
   countGuestAppearancesOnShow,
   getDossier,
   listSpeakers,
+  listTopGuests,
   lookupCorpus,
   type DossierTurn,
   type RetrievedChunk,
@@ -44,7 +45,83 @@ Rules — follow strictly:
    - lookupCorpus — hybrid search for specific facts. Call when the pre-retrieved evidence is insufficient or the user asks a follow-up needing different evidence.
    - getDossier — page through additional turns of a speaker when the initial dossier is not enough (use offset).
    - countGuestAppearances — for "how many times has <person> been on <show>" style questions. Returns the count plus the episode list. Aggregate results from this tool are database-level facts and do NOT need [id:N]/[turn:N] citations — just state the count and, if useful, list the episode titles/dates the tool returned.
+   - topGuests — for "who are the top N recurring guests on <show>" / "most frequent guests" style questions. Accepts an optional show name, show group name, and date range; hosts of the selected shows are excluded automatically. Returns a ranked list with episode counts; like countGuestAppearances, these aggregates do NOT need [id:N]/[turn:N] citations. Surface ties using the 'rank' field (two guests with the same rank share that rank).
 7. Keep answers concise. When comparing or summarising, use short bullets with citations.`;
+}
+
+// -- Name resolvers ----------------------------------------------------------
+
+type ResolveError = {
+  ok: false;
+  error: string;
+  note: string;
+  candidates?: string[];
+};
+
+async function resolveShowByName(
+  name: string,
+): Promise<{ ok: true; showId: number; name: string } | ResolveError> {
+  const rows = (await sql`
+    SELECT show_id, name FROM shows
+     WHERE LOWER(name) = LOWER(${name})
+        OR LOWER(name) LIKE '%' || LOWER(${name}) || '%'
+  ORDER BY (LOWER(name) = LOWER(${name})) DESC, name
+  `) as unknown as Array<{ show_id: number; name: string }>;
+
+  if (rows.length === 0) {
+    const all = (await sql`SELECT name FROM shows ORDER BY name`) as unknown as Array<{
+      name: string;
+    }>;
+    return {
+      ok: false,
+      error: 'unknown_show',
+      note: `No show matching "${name}". Known shows: ${all.map((s) => s.name).join(', ')}.`,
+    };
+  }
+  const exact = rows[0].name.toLowerCase() === name.toLowerCase() ? rows[0] : null;
+  if (!exact && rows.length > 1) {
+    return {
+      ok: false,
+      error: 'ambiguous_show',
+      note: `"${name}" matches multiple shows. Ask the user which they meant.`,
+      candidates: rows.map((r) => r.name),
+    };
+  }
+  const pick = exact ?? rows[0];
+  return { ok: true, showId: pick.show_id, name: pick.name };
+}
+
+async function resolveShowGroupByName(
+  name: string,
+): Promise<{ ok: true; groupId: number; name: string } | ResolveError> {
+  const rows = (await sql`
+    SELECT group_id, name FROM show_groups
+     WHERE LOWER(name) = LOWER(${name})
+        OR LOWER(name) LIKE '%' || LOWER(${name}) || '%'
+  ORDER BY (LOWER(name) = LOWER(${name})) DESC, name
+  `) as unknown as Array<{ group_id: number; name: string }>;
+
+  if (rows.length === 0) {
+    const all = (await sql`SELECT name FROM show_groups ORDER BY name`) as unknown as Array<{
+      name: string;
+    }>;
+    return {
+      ok: false,
+      error: 'unknown_group',
+      note: `No show group matching "${name}". Known groups: ${all.map((g) => g.name).join(', ') || '(none)'}.`,
+    };
+  }
+  const exact = rows[0].name.toLowerCase() === name.toLowerCase() ? rows[0] : null;
+  if (!exact && rows.length > 1) {
+    return {
+      ok: false,
+      error: 'ambiguous_group',
+      note: `"${name}" matches multiple show groups. Ask the user which they meant.`,
+      candidates: rows.map((r) => r.name),
+    };
+  }
+  const pick = exact ?? rows[0];
+  return { ok: true, groupId: pick.group_id, name: pick.name };
 }
 
 // -- Tools -------------------------------------------------------------------
@@ -147,36 +224,15 @@ const countAppearancesTool = tool({
     guestName: z.string().describe('Full name of the guest, e.g. "Nadav Eyal".'),
   }),
   execute: async (input) => {
-    const showRows = (await sql`
-      SELECT show_id, name FROM shows
-       WHERE LOWER(name) = LOWER(${input.podcastName})
-          OR LOWER(name) LIKE '%' || LOWER(${input.podcastName}) || '%'
-    ORDER BY (LOWER(name) = LOWER(${input.podcastName})) DESC, name
-    `) as unknown as Array<{ show_id: number; name: string }>;
-
-    if (showRows.length === 0) {
-      const all = (await sql`SELECT name FROM shows ORDER BY name`) as unknown as Array<{
-        name: string;
-      }>;
+    const resolvedShow = await resolveShowByName(input.podcastName);
+    if (!resolvedShow.ok) {
       return {
-        error: 'unknown_show',
-        note: `No show matching "${input.podcastName}". Known shows: ${all.map((s) => s.name).join(', ')}.`,
+        error: resolvedShow.error,
+        note: resolvedShow.note,
+        ...(resolvedShow.candidates ? { candidates: resolvedShow.candidates } : {}),
       };
     }
-
-    const exactShow =
-      showRows[0].name.toLowerCase() === input.podcastName.toLowerCase()
-        ? showRows[0]
-        : null;
-    if (!exactShow && showRows.length > 1) {
-      return {
-        error: 'ambiguous_show',
-        note: `"${input.podcastName}" matches multiple shows. Ask the user which they meant.`,
-        candidates: showRows.map((s) => s.name),
-      };
-    }
-    const show = exactShow ?? showRows[0];
-    const showId = show.show_id;
+    const showId = resolvedShow.showId;
 
     const matches = await listSpeakers({
       nameLike: input.guestName,
@@ -234,6 +290,97 @@ const countAppearancesTool = tool({
         drive_url: ep.driveUrl,
         matched_by: ep.matchedBy,
         turn_count: ep.turnCount,
+      })),
+    };
+  },
+});
+
+const topGuestsTool = tool({
+  description:
+    'Rank the most frequent guests by distinct-episode count. Accepts either a show name OR a show group name (not both — they are mutually exclusive), plus an optional date range. Hosts of the selected shows (or all shows, if no scope filter is applied) are excluded automatically. Ties are preserved: when the row at position `limit` is tied with rows beyond it, all tied rows are returned, so the result may contain more than `limit` rows. Use the returned `rank` field to display ties; within a rank, rows are ordered by turn_count DESC then name ASC. Aggregate results do NOT require [id:N]/[turn:N] citations.',
+  inputSchema: z.object({
+    podcastName: z
+      .string()
+      .optional()
+      .describe('Show name, e.g. "Call me Back". Omit for corpus-wide ranking.'),
+    podcastGroupName: z
+      .string()
+      .optional()
+      .describe(
+        'Show group name spanning sibling shows, e.g. "Call me Back" family. Omit if podcastName is given or for corpus-wide ranking.',
+      ),
+    since: z.string().optional().describe('Lower-bound date YYYY-MM-DD.'),
+    until: z.string().optional().describe('Upper-bound date YYYY-MM-DD.'),
+    limit: z.number().int().min(1).max(50).default(10),
+  }),
+  execute: async (input) => {
+    if (input.podcastName && input.podcastGroupName) {
+      return {
+        error: 'conflicting_filters',
+        note: 'Provide either podcastName or podcastGroupName, not both. Ask the user which scope they meant.',
+      };
+    }
+
+    let showIds: number[] | undefined;
+    let showGroupIds: number[] | undefined;
+    let resolvedShowName: string | null = null;
+    let resolvedGroupName: string | null = null;
+
+    if (input.podcastName) {
+      const resolved = await resolveShowByName(input.podcastName);
+      if (!resolved.ok) {
+        return {
+          error: resolved.error,
+          note: resolved.note,
+          ...(resolved.candidates ? { candidates: resolved.candidates } : {}),
+        };
+      }
+      showIds = [resolved.showId];
+      resolvedShowName = resolved.name;
+    }
+
+    if (input.podcastGroupName) {
+      const resolved = await resolveShowGroupByName(input.podcastGroupName);
+      if (!resolved.ok) {
+        return {
+          error: resolved.error,
+          note: resolved.note,
+          ...(resolved.candidates ? { candidates: resolved.candidates } : {}),
+        };
+      }
+      showGroupIds = [resolved.groupId];
+      resolvedGroupName = resolved.name;
+    }
+
+    const rows = await listTopGuests({
+      filters: {
+        showIds,
+        showGroupIds,
+        since: input.since,
+        until: input.until,
+      },
+      limit: input.limit,
+    });
+
+    const scope: 'show' | 'group' | 'corpus' = resolvedShowName
+      ? 'show'
+      : resolvedGroupName
+        ? 'group'
+        : 'corpus';
+
+    return {
+      scope,
+      showName: resolvedShowName,
+      groupName: resolvedGroupName,
+      since: input.since ?? null,
+      until: input.until ?? null,
+      guests: rows.map((r) => ({
+        rank: r.rank,
+        speaker_name: r.speakerName,
+        episode_count: r.episodeCount,
+        turn_count: r.turnCount,
+        first_date: r.firstDate,
+        last_date: r.lastDate,
       })),
     };
   },
@@ -479,6 +626,7 @@ export async function POST(req: Request) {
           lookupCorpus: lookupTool,
           getDossier: dossierTool,
           countGuestAppearances: countAppearancesTool,
+          topGuests: topGuestsTool,
         },
     stopWhen: stepCountIs(8),
     temperature: 0.2,
