@@ -10,6 +10,7 @@ import {
 } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
+import Link from 'next/link';
 import { ArrowUp, Loader2, Square, Sparkles, FileText, ChevronRight } from 'lucide-react';
 
 import { ArkLogo } from '@/components/ArkLogo';
@@ -222,9 +223,22 @@ export default function ChatPage() {
               </div>
             </div>
           </div>
-          <div className="hidden items-center gap-2 text-[0.7rem] text-white/40 sm:flex">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.6)]" />
-            <span>{episodeCount ?? '—'} episodes indexed</span>
+          <div className="flex items-center gap-4">
+            <nav className="flex items-center gap-1 text-[0.75rem]">
+              <span className="rounded-md bg-[#3eb5f9]/[0.12] px-2.5 py-1 text-[#79cdfc]">
+                Archive
+              </span>
+              <Link
+                href="/prep"
+                className="rounded-md px-2.5 py-1 text-white/60 transition hover:bg-white/[0.05] hover:text-white"
+              >
+                Prep
+              </Link>
+            </nav>
+            <div className="hidden items-center gap-2 text-[0.7rem] text-white/40 sm:flex">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.6)]" />
+              <span>{episodeCount ?? '—'} episodes indexed</span>
+            </div>
           </div>
         </header>
 
