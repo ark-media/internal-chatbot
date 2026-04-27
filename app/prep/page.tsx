@@ -176,6 +176,12 @@ export default function PrepPage() {
             <span className="rounded-md bg-[#3eb5f9]/[0.12] px-2.5 py-1 text-[#79cdfc]">
               Prep
             </span>
+            <Link
+              href="/news"
+              className="rounded-md px-2.5 py-1 text-white/60 transition hover:bg-white/[0.05] hover:text-white"
+            >
+              News
+            </Link>
           </nav>
         </header>
 

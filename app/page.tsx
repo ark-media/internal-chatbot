@@ -234,6 +234,12 @@ export default function ChatPage() {
               >
                 Prep
               </Link>
+              <Link
+                href="/news"
+                className="rounded-md px-2.5 py-1 text-white/60 transition hover:bg-white/[0.05] hover:text-white"
+              >
+                News
+              </Link>
             </nav>
             <div className="hidden items-center gap-2 text-[0.7rem] text-white/40 sm:flex">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.6)]" />

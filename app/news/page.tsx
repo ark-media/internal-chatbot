@@ -1,0 +1,769 @@
+'use client';
+
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+} from 'react';
+import { useChat } from '@ai-sdk/react';
+import { DefaultChatTransport } from 'ai';
+import Link from 'next/link';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import {
+  ArrowUp,
+  FileText,
+  Loader2,
+  Paperclip,
+  Square,
+  X,
+  HardDriveUpload,
+  ExternalLink,
+  CheckCircle2,
+} from 'lucide-react';
+
+import { ArkLogo } from '@/components/ArkLogo';
+import type { NewsUIMessage } from '@/components/news-types';
+import { cn } from '@/lib/cn';
+import {
+  MAX_FILES,
+  MAX_FILE_BYTES,
+  MAX_TOTAL_BYTES,
+  formatBytes,
+} from '@/lib/prep-limits';
+
+const SKY = '#3eb5f9';
+const INK_900 = '#0b153c';
+const AMBER_500 = '#f59e0b';
+
+const EXAMPLE_PROMPTS = [
+  'Outline: Lead — Trump signals end to Iran War. B Block — New Middle East realignment. C Block — Passover under bombardment. Sources: WSJ, CBS, Times of Israel',
+  'Breaking: Gaza humanitarian crisis. Market implications. EU response.',
+  'Ukraine conflict update. NATO unity questions. Weapons systems analysis.',
+];
+
+const REFINEMENT_HINTS = [
+  'Tighten the B block and cut unnecessary detail.',
+  'Make the C block warmer and more reflective.',
+  'Smooth the transition from A to B — they feel disconnected.',
+  'Simplify the arms sales paragraph.',
+  'Strengthen the opening to be more compelling.',
+];
+
+type AttachedFile = {
+  id: string;
+  file: File;
+};
+
+export default function NewsPage() {
+  const { messages, sendMessage, status, stop } = useChat<NewsUIMessage>({
+    transport: new DefaultChatTransport({ api: '/api/news' }),
+  });
+
+  const [input, setInput] = useState('');
+  const [files, setFiles] = useState<AttachedFile[]>([]);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [driveLoading, setDriveLoading] = useState(false);
+  const [driveLink, setDriveLink] = useState<string | null>(null);
+  const [driveError, setDriveError] = useState<string | null>(null);
+  const [driveSaveInProgress, setDriveSaveInProgress] = useState(false);
+
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const busy = status === 'submitted' || status === 'streaming';
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({
+      top: scrollRef.current.scrollHeight,
+      behavior: 'smooth',
+    });
+  }, [messages, busy]);
+
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+  }, [input]);
+
+  const onPickFiles = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      const picked = e.target.files;
+      e.target.value = '';
+      if (!picked) return;
+      const accepted: AttachedFile[] = [];
+      const rejected: string[] = [];
+      let total = files.reduce((n, f) => n + f.file.size, 0);
+      for (let i = 0; i < picked.length; i++) {
+        const f = picked.item(i);
+        if (!f) continue;
+        if (files.length + accepted.length >= MAX_FILES) {
+          rejected.push(`too many files (max ${MAX_FILES})`);
+          break;
+        }
+        if (f.size > MAX_FILE_BYTES) {
+          rejected.push(`"${f.name}" is ${formatBytes(f.size)}, exceeds ${formatBytes(MAX_FILE_BYTES)}`);
+          continue;
+        }
+        if (total + f.size > MAX_TOTAL_BYTES) {
+          rejected.push(`"${f.name}" would exceed ${formatBytes(MAX_TOTAL_BYTES)} total`);
+          continue;
+        }
+        total += f.size;
+        accepted.push({
+          id: `${f.name}-${f.size}-${f.lastModified}-${Date.now()}-${i}`,
+          file: f,
+        });
+      }
+      if (accepted.length > 0) setFiles((prev) => [...prev, ...accepted]);
+      setUploadError(rejected.length > 0 ? rejected.join('; ') : null);
+    },
+    [files],
+  );
+
+  const removeFile = useCallback((id: string) => {
+    setFiles((prev) => prev.filter((f) => f.id !== id));
+    setUploadError(null);
+  }, []);
+
+  const submit = (text: string) => {
+    const q = text.trim();
+    if ((!q && files.length === 0) || busy) return;
+    const dt = new DataTransfer();
+    for (const f of files) dt.items.add(f.file);
+    const fileList = dt.files.length > 0 ? dt.files : undefined;
+    sendMessage({ text: q, files: fileList });
+    setInput('');
+    setFiles([]);
+  };
+
+  const onSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    submit(input);
+  };
+
+  const saveScriptToDrive = useCallback(async () => {
+    // Debounce: prevent multiple simultaneous uploads
+    if (driveSaveInProgress) return;
+
+    // Find the last assistant message with the script
+    const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
+    if (!lastAssistantMsg) return;
+
+    const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') ?? [];
+    if (textParts.length === 0) return;
+
+    const scriptText = textParts.map((p) => (p.type === 'text' ? p.text : '')).join('\n');
+    if (!scriptText.trim()) return;
+
+    setDriveSaveInProgress(true);
+    setDriveLoading(true);
+    setDriveError(null);
+    setDriveLink(null);
+
+    try {
+      // Extract headline from script or use generic title
+      const headline = extractHeadline(scriptText) || 'News Script';
+      const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+
+      const res = await fetch('/api/news/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scriptText,
+          title: headline,
+          date: today,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setDriveError(data.error || 'Upload failed');
+        return;
+      }
+
+      setDriveLink(data.driveUrl);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setDriveError(`Failed to upload: ${msg}`);
+    } finally {
+      setDriveLoading(false);
+      setDriveSaveInProgress(false);
+    }
+  }, [messages, driveSaveInProgress]);
+
+  return (
+    <div
+      className="flex h-screen w-full"
+      style={{ fontFamily: 'var(--font-sans)' }}
+    >
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* Header */}
+        <header className="relative z-10 flex items-center justify-between gap-4 border-b border-white/[0.06] bg-white/[0.02] px-6 py-3 backdrop-blur-md">
+          <div className="flex items-center gap-3">
+            <ArkLogo
+              className="h-9 text-white"
+              bg={SKY}
+              fg={INK_900}
+              markOnly
+            />
+            <div className="leading-tight">
+              <div
+                className="text-[0.95rem] font-black tracking-tight text-white"
+                style={{ fontFamily: 'var(--font-display)' }}
+              >
+                Ark Media
+              </div>
+              <div className="text-[0.72rem] uppercase tracking-[0.22em] text-white/45">
+                News Daily
+              </div>
+            </div>
+          </div>
+          <nav className="flex items-center gap-1 text-[0.75rem]">
+            <Link
+              href="/"
+              className="rounded-md px-2.5 py-1 text-white/60 transition hover:bg-white/[0.05] hover:text-white"
+            >
+              Archive
+            </Link>
+            <Link
+              href="/prep"
+              className="rounded-md px-2.5 py-1 text-white/60 transition hover:bg-white/[0.05] hover:text-white"
+            >
+              Prep
+            </Link>
+            <span className="rounded-md bg-[#3eb5f9]/[0.12] px-2.5 py-1 text-[#79cdfc]">
+              News
+            </span>
+          </nav>
+        </header>
+
+        {/* Message list */}
+        <main ref={scrollRef} className="relative flex-1 overflow-y-auto">
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-7 px-6 py-10">
+            {messages.length === 0 && <EmptyState onPick={submit} busy={busy} />}
+
+            {messages.map((m) => (
+              <MessageRow key={m.id} message={m} />
+            ))}
+
+            {busy && (
+              <div className="flex items-center gap-3 pl-12 text-xs text-white/50">
+                <TypingDots />
+                <span className="tracking-wide">
+                  {status === 'submitted' ? 'Fetching articles…' : 'Generating script…'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => stop()}
+                  className="ml-2 inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-[0.7rem] text-white/70 transition hover:bg-white/10 hover:text-white"
+                >
+                  <Square className="h-2.5 w-2.5 fill-current" />
+                  Stop
+                </button>
+              </div>
+            )}
+
+            {messages.length > 0 && messages[messages.length - 1]?.role === 'assistant' && (
+              <div className="mt-4 flex flex-col gap-3 border-t border-white/10 pt-4">
+                {driveLink ? (
+                  <div className="flex items-center gap-2 rounded-lg bg-green-500/10 px-4 py-3 text-sm text-green-200">
+                    <CheckCircle2 className="h-4 w-4" />
+                    <span>Saved to Drive</span>
+                    <a
+                      href={driveLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="ml-auto inline-flex items-center gap-1 rounded px-2 py-0.5 text-green-300 transition hover:bg-white/10"
+                    >
+                      Open
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </div>
+                ) : driveError ? (
+                  <div className="rounded-lg bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                    {driveError}
+                  </div>
+                ) : (
+                  <button
+                    onClick={saveScriptToDrive}
+                    disabled={driveLoading || driveSaveInProgress || !messages.length}
+                    className={cn(
+                      'flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
+                      'bg-blue-500/20 text-blue-200 transition hover:bg-blue-500/30',
+                      'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-blue-500/20',
+                    )}
+                  >
+                    {driveLoading ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Uploading…
+                      </>
+                    ) : (
+                      <>
+                        <HardDriveUpload className="h-4 w-4" />
+                        Save to Drive
+                      </>
+                    )}
+                  </button>
+                )}
+
+                <div className="mt-2">
+                  <div className="text-xs font-medium uppercase tracking-[0.2em] text-white/40 mb-2">
+                    Refine the script
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {REFINEMENT_HINTS.map((hint, i) => (
+                      <button
+                        key={i}
+                        onClick={() => submit(hint)}
+                        disabled={busy}
+                        className={cn(
+                          'rounded-full border border-white/20 bg-white/[0.03] px-3 py-1 text-[0.75rem] text-white/70',
+                          'transition hover:border-white/40 hover:bg-white/[0.06] hover:text-white',
+                          'disabled:cursor-not-allowed disabled:opacity-50',
+                        )}
+                      >
+                        {hint}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </main>
+
+        {/* Composer */}
+        <form
+          onSubmit={onSubmit}
+          className="relative z-10 border-t border-white/[0.06] bg-gradient-to-b from-transparent to-[#070b22]/60 px-6 py-4 backdrop-blur-md"
+        >
+          <div className="mx-auto max-w-3xl">
+            {files.length > 0 && (
+              <div className="mb-2 flex flex-wrap gap-1.5">
+                {files.map((f) => (
+                  <div
+                    key={f.id}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1 text-[0.72rem] text-white/75"
+                  >
+                    <FileText className="h-3 w-3 text-[#3eb5f9]" />
+                    <span className="max-w-[240px] truncate">{f.file.name}</span>
+                    <span className="text-white/35">{formatBytes(f.file.size)}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeFile(f.id)}
+                      className="ml-0.5 rounded p-0.5 text-white/45 transition hover:bg-white/10 hover:text-white"
+                      aria-label={`Remove ${f.file.name}`}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {uploadError && (
+              <div
+                role="alert"
+                className="mb-2 rounded-lg border border-amber-300/30 bg-amber-400/[0.08] px-3 py-2 text-[0.78rem] text-amber-100"
+              >
+                Some files were not attached — {uploadError}.
+              </div>
+            )}
+            <div
+              className={cn(
+                'group flex items-end gap-2 rounded-2xl border bg-white/[0.04] px-3 py-2.5 backdrop-blur',
+                'border-white/10 shadow-[0_12px_40px_-16px_rgba(3,62,200,0.45)]',
+                'transition focus-within:border-[#3eb5f9]/60',
+                'focus-within:shadow-[0_12px_40px_-14px_rgba(62,181,249,0.55)]',
+              )}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept=".pdf,.md,.txt,.csv,.tsv,.json,.yml,.yaml,.png,.jpg,.jpeg,.gif,.webp,application/pdf,text/markdown,text/plain,text/csv,application/json,image/*"
+                onChange={onPickFiles}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={busy}
+                className={cn(
+                  'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl',
+                  'text-white/60 transition hover:bg-white/[0.06] hover:text-white',
+                  'disabled:cursor-not-allowed disabled:opacity-40',
+                )}
+                aria-label="Attach files"
+                title="Attach source articles or outline notes"
+              >
+                <Paperclip className="h-4 w-4" />
+              </button>
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    submit(input);
+                  }
+                }}
+                rows={1}
+                placeholder="Story outline with article links (e.g. Lead: Iran War endgame. B: Middle East realignment. C: Passover impacts. Sources: https://wsj.com/… https://cbsnews.com/…)"
+                disabled={busy}
+                className={cn(
+                  'min-h-[40px] flex-1 resize-none bg-transparent px-1 py-1.5',
+                  'text-[0.95rem] leading-relaxed text-white placeholder:text-white/35',
+                  'outline-none disabled:opacity-60',
+                )}
+              />
+              <button
+                type="submit"
+                aria-label="Send"
+                disabled={busy || (!input.trim() && files.length === 0)}
+                className={cn(
+                  'group/btn relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl',
+                  'text-[#070b22] transition',
+                  'bg-[#3eb5f9] hover:bg-[#79cdfc]',
+                  'shadow-[0_6px_20px_-6px_rgba(62,181,249,0.7)]',
+                  'disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-white/30 disabled:shadow-none',
+                )}
+              >
+                {busy ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <ArrowUp className="h-4 w-4" strokeWidth={2.5} />
+                )}
+              </button>
+            </div>
+            <div className="mt-2 px-1 text-[0.68rem] uppercase tracking-[0.2em] text-white/30">
+              Enter to send · Shift + Enter for newline · Up to {MAX_FILES} files, {formatBytes(MAX_FILE_BYTES)} each
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* Helpers */
+
+function extractHeadline(scriptText: string): string | null {
+  // Extract from A BLOCK intro (usually the first few words after [A BLOCK])
+  const aBlockMatch = scriptText.match(/\[A BLOCK\]\s*HOST:\s*(.+?)(?:\n|$)/);
+  if (aBlockMatch) {
+    let text = aBlockMatch[1].trim();
+    // Try to get up to the first sentence boundary
+    const sentenceMatch = text.match(/^(.+?)[.!?]\s/);
+    if (sentenceMatch) {
+      text = sentenceMatch[1];
+    } else {
+      // Fallback: take first ~70 chars as a headline
+      text = text.slice(0, 70).trim();
+    }
+    // Ensure it's a reasonable length for a headline
+    if (text && text.length > 10 && text.length <= 150) {
+      return text;
+    }
+  }
+  return null;
+}
+
+/* Sub-components */
+
+function MessageRow({ message }: { message: NewsUIMessage }) {
+  if (message.role === 'user') {
+    const textParts = message.parts?.filter((p) => p.type === 'text') ?? [];
+    const fileParts = message.parts?.filter((p) => p.type === 'file') ?? [];
+    return (
+      <div className="ark-fade-up flex justify-end">
+        <div
+          className={cn(
+            'max-w-[82%] rounded-2xl rounded-br-md px-4 py-2.5',
+            'bg-gradient-to-br from-[#3eb5f9] to-[#2a8fd6] text-[#070b22]',
+            'shadow-[0_8px_22px_-10px_rgba(62,181,249,0.6)]',
+            'text-[0.95rem] font-medium leading-relaxed',
+          )}
+        >
+          {textParts.map((p, i) =>
+            p.type === 'text' ? (
+              <span key={i} className="whitespace-pre-wrap">
+                {p.text}
+              </span>
+            ) : null,
+          )}
+          {fileParts.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {fileParts.map((p, i) => (
+                <span key={i} className="inline-block rounded bg-white/20 px-1.5 py-0.5 text-[0.85rem]">
+                  {p.filename ?? 'file'}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="ark-fade-up flex justify-start">
+      <div className="max-w-[90%] rounded-2xl rounded-bl-md bg-white/[0.04] px-4 py-3 text-white">
+        <MessageContent message={message} />
+      </div>
+    </div>
+  );
+}
+
+function MessageContent({ message }: { message: NewsUIMessage }) {
+  return message.parts?.map((part, i) => {
+    if (part.type === 'text') {
+      return <NewsMarkdown key={i} text={part.text} />;
+    }
+    if (part.type === 'tool-fetchArticle') {
+      const state = (part as any).state;
+      if (state === 'input-streaming' || state === 'input-available') {
+        return <ToolCallChip key={i} name="Fetching article…" status="in-flight" />;
+      }
+      if (state === 'output-available') {
+        return <ToolCallChip key={i} name="Article fetched" status="done" />;
+      }
+    }
+    if (part.type === 'tool-searchCorpus') {
+      const state = (part as any).state;
+      if (state === 'input-streaming' || state === 'input-available') {
+        return <ToolCallChip key={i} name="Loading style examples…" status="in-flight" />;
+      }
+      if (state === 'output-available') {
+        return <ToolCallChip key={i} name="Style examples loaded" status="done" />;
+      }
+    }
+    if (part.type === 'tool-webSearch') {
+      const state = (part as any).state;
+      if (state === 'input-streaming' || state === 'input-available') {
+        return <ToolCallChip key={i} name="Searching the web…" status="in-flight" />;
+      }
+      if (state === 'output-available') {
+        return <ToolCallChip key={i} name="Web search complete" status="done" />;
+      }
+    }
+    return null;
+  });
+}
+
+function ToolCallChip({ name, status }: { name: string; status: 'in-flight' | 'done' }) {
+  const bgColor = status === 'in-flight' ? 'bg-blue-500/20' : 'bg-green-500/20';
+  const textColor = status === 'in-flight' ? 'text-blue-200' : 'text-green-200';
+  return (
+    <span className={cn('inline-block rounded-full px-2.5 py-1 text-[0.75rem] font-medium', bgColor, textColor)}>
+      {status === 'in-flight' && <Loader2 className="mr-1 inline h-3 w-3 animate-spin" />}
+      {name}
+    </span>
+  );
+}
+
+function NewsMarkdown({ text }: { text: string }) {
+  // Process the text to identify blocks, speakers, flags, and footnotes
+  const lines = text.split('\n');
+  const sections: React.ReactNode[] = [];
+  let currentSection: string[] = [];
+  let currentBlockType: string | null = null;
+
+  const blockColors: Record<string, { bg: string; border: string; text: string }> = {
+    'A BLOCK': { bg: 'bg-blue-500/10', border: 'border-l-4 border-blue-400', text: 'text-blue-200' },
+    'B BLOCK': { bg: 'bg-emerald-500/10', border: 'border-l-4 border-emerald-400', text: 'text-emerald-200' },
+    'C BLOCK': { bg: 'bg-amber-500/10', border: 'border-l-4 border-amber-400', text: 'text-amber-200' },
+  };
+
+  const flushCurrentSection = () => {
+    if (currentSection.length > 0) {
+      const content = currentSection.join('\n').trim();
+      if (currentBlockType && blockColors[currentBlockType]) {
+        const colors = blockColors[currentBlockType];
+        sections.push(
+          <div
+            key={sections.length}
+            className={cn('rounded-lg p-4 my-4', colors.bg, colors.border)}
+          >
+            <div className={cn('font-bold text-sm mb-3', colors.text)}>{currentBlockType}</div>
+            <NewsScriptContent content={content} />
+          </div>,
+        );
+      } else {
+        sections.push(
+          <div key={sections.length}>
+            <NewsScriptContent content={content} />
+          </div>,
+        );
+      }
+      currentSection = [];
+      currentBlockType = null;
+    }
+  };
+
+  for (const line of lines) {
+    if (line.includes('[A BLOCK]') || line.includes('[B BLOCK]') || line.includes('[C BLOCK]')) {
+      flushCurrentSection();
+      // Extract block type
+      const match = line.match(/\[(A|B|C) BLOCK\]/);
+      if (match) {
+        currentBlockType = `${match[1]} BLOCK`;
+      }
+    } else {
+      currentSection.push(line);
+    }
+  }
+  flushCurrentSection();
+
+  return <div className="space-y-4">{sections}</div>;
+}
+
+function NewsScriptContent({ content }: { content: string }) {
+  const parts: React.ReactNode[] = [];
+  const lines = content.split('\n');
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i].trim();
+
+    // SPEAKER: line
+    if (/^[A-Z_0-9]+:$/.test(line)) {
+      const speaker = line.slice(0, -1);
+      const quoteLines: string[] = [];
+      i++;
+      // Collect all following non-empty lines until a blank line or another SPEAKER line
+      while (i < lines.length && lines[i].trim() && !/^[A-Z_0-9]+:$/.test(lines[i])) {
+        quoteLines.push(lines[i].trim());
+        i++;
+      }
+      parts.push(
+        <div key={parts.length} className="my-3 ml-4 border-l-2 border-white/20 pl-4 italic text-white/80">
+          <div className="font-semibold text-white/90">{speaker}</div>
+          <div>{quoteLines.join(' ')}</div>
+        </div>,
+      );
+      continue;
+    }
+
+    // FLAG: line
+    if (line.includes('[FLAG:')) {
+      const flagMatch = line.match(/\[FLAG: (.+?)\]/);
+      if (flagMatch) {
+        const flagText = flagMatch[1];
+        const beforeFlag = line.slice(0, line.indexOf('[FLAG:'));
+        const afterFlag = line.slice(line.indexOf('[FLAG:') + flagMatch[0].length);
+        parts.push(
+          <div key={parts.length} className="my-2">
+            <span>{beforeFlag}</span>
+            <span className="inline-block ml-1 rounded-full bg-red-500/20 px-2 py-0.5 text-[0.75rem] text-red-200">
+              ⚠ {flagText}
+            </span>
+            <span>{afterFlag}</span>
+          </div>,
+        );
+        i++;
+        continue;
+      }
+    }
+
+    // Regular text with potential footnotes
+    if (line.length > 0) {
+      parts.push(
+        <p key={parts.length} className="my-2 leading-relaxed">
+          {renderLineWithFootnotes(line)}
+        </p>,
+      );
+    }
+
+    i++;
+  }
+
+  return <div>{parts}</div>;
+}
+
+function renderLineWithFootnotes(text: string): React.ReactNode {
+  // Replace superscript numbers with styled spans
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  const superscriptRegex = /([⁰¹²³⁴⁵⁶⁷⁸⁹]+)/g;
+  let match;
+
+  while ((match = superscriptRegex.exec(text)) !== null) {
+    // Add text before superscript
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    // Add styled superscript
+    parts.push(
+      <span key={parts.length} className="inline-flex items-center ml-0.5">
+        <sup className="text-cyan-300 font-semibold cursor-pointer hover:text-cyan-100">
+          {match[0]}
+        </sup>
+      </span>,
+    );
+    lastIndex = match.index + match[0].length;
+  }
+
+  // Add remaining text
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+
+  return parts.length > 0 ? parts : text;
+}
+
+function EmptyState({ onPick, busy }: { onPick: (text: string) => void; busy: boolean }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-20 text-center">
+      <div
+        className="mb-4 text-4xl font-black tracking-tight text-white"
+        style={{ fontFamily: 'var(--font-display)' }}
+      >
+        Ark News Daily
+      </div>
+      <p className="mb-8 text-white/60">Generate a complete daily news script with full sourcing and editorial flags.</p>
+      <div className="space-y-2">
+        <div className="text-[0.75rem] uppercase tracking-[0.15em] text-white/40">Example outlines:</div>
+        {EXAMPLE_PROMPTS.map((prompt, i) => (
+          <button
+            key={i}
+            onClick={() => onPick(prompt)}
+            disabled={busy}
+            className={cn(
+              'block max-w-md rounded-lg border border-white/10 bg-white/[0.02] px-4 py-2.5',
+              'text-left text-[0.85rem] text-white/70 transition',
+              'hover:border-white/20 hover:bg-white/[0.05] hover:text-white',
+              'disabled:opacity-50 disabled:cursor-not-allowed',
+            )}
+          >
+            {prompt}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TypingDots() {
+  return (
+    <span className="flex gap-1">
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          className="h-1.5 w-1.5 rounded-full bg-white/40"
+          style={{
+            animation: `ark-pulse-dot 1.4s infinite`,
+            animationDelay: `${i * 0.2}s`,
+          }}
+        />
+      ))}
+    </span>
+  );
+}
