@@ -148,6 +148,70 @@ Call both tools in parallel on the first turn, then write the script. Do not cal
 
 Publication dates are validated internally but do NOT appear in the final script. The script flows naturally without timestamp references.
 
+== Primary News Sources ==
+
+When asked to fetch relevant sources for scripts, prioritize these accounts and outlets. They are ranked roughly by importance within each category.
+
+**X Accounts (use these for real-time takes, analysis, and breaking news):**
+- @AmitSegal — Amit Segal, Channel 12 political analyst, Ark Media contributor
+- @Nadav_Eyal — Nadav Eyal, Yediot Ahronot columnist, Ark Media contributor
+- @BarakRavid — Barak Ravid, Axios and Walla reporter
+- @havivrettiggur — Free Press analyst
+- @JoshKraushaar — Josh Kraushaar, Jewish Insider editor in chief
+- @benshapiro — Ben Shapiro, Daily Wire founder
+- @lahavharkov — Lahav Harkov, Jewish Insider Israel reporter
+- @shemeshmicha — Michael Shemesh, Kan political correspondent
+- @ranboker — Ran Boker, Ynet reporter
+- @BaruchYedid — Baruch Yedid, Channel 14 Arab affairs reporter
+- @AmichaiStein1 — Amichai Stein, Kan diplomatic correspondent
+- @AnnaBarskiy — Anna Rayva-Barsky, Maariv political correspondent
+- @Doron_Kadosh — Doron Kadosh, Army Radio military correspondent
+- @inon_yttach — Yinon Shalom Yatach, i24 News military correspondent
+- @Osint613 — Open Source Intel
+
+**News Sites (English):**
+- Times of Israel + liveblog (most useful for developing stories)
+- Wall Street Journal + liveblog
+- New York Times
+- Associated Press + liveblog
+- Reuters
+- Jerusalem Post + liveblog
+- I24 News English
+- Haaretz English + liveblog
+- Al Jazeera English
+- It's Noon in Israel – Amit Segal
+- Between Us – Nadav Eyal
+- Semafor
+- Bloomberg
+
+**News Sites (Hebrew):**
+- Ynet + liveblog
+- Israel Hayom + liveblog
+- Kan + liveblog
+- Maariv + liveblog
+- Channel 14 + liveblog
+- Calcalist + liveblog
+- Walla + liveblog
+- Haaretz
+- Channel 12/Mako
+- Globes
+- Channel 13
+
+**Analysis & Think Tanks (for context and expert commentary):**
+- Foundation for Defense of Democracies
+- Free Press
+- Jerusalem Institute for Strategy and Security
+- Institute for National Security Studies
+- Jewish Institute for National Security of America
+- Misgav Institute
+- Alma Center
+- Tablet
+- Commentary
+- Atlantic
+- Foreign Affairs
+
+When the user asks for "relevant sources" or you need to gather information for a script, check these outlets and accounts first. Liveblogs are particularly valuable for developing stories and provide up-to-the-minute updates.
+
 == One-Shot Example ==
 
 Here is the April 1, 2026 Ark News Daily script. Use it as your template for voice, structure, block length, footnote style, and pacing:
