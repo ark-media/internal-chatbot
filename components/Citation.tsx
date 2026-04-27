@@ -14,16 +14,17 @@ export function Citation({ kind, id, source, onOpen }: Props) {
   const label = kind === 'turn' ? `t${id}` : String(id);
 
   if (!source) {
+    console.warn(`Citation missing source: ${kind}:${id}`);
     return (
       <span
         className={cn(
-          'mx-0.5 inline-flex items-center rounded-md border border-white/5 bg-white/[0.04]',
+          'mx-0.5 inline-flex items-center rounded-md border border-red-500/30 bg-red-400/[0.08]',
           'px-1.5 py-[0.1em] font-mono text-[0.72em] font-medium leading-tight',
-          'text-white/35',
+          'text-red-400/70',
         )}
         title={`missing source ${kind}:${id}`}
       >
-        {label}
+        {label}⚠
       </span>
     );
   }
@@ -50,7 +51,10 @@ export function Citation({ kind, id, source, onOpen }: Props) {
   return (
     <button
       type="button"
-      onClick={() => onOpen(source)}
+      onClick={() => {
+        console.log(`Opening citation ${kind}:${id}`, source);
+        onOpen(source);
+      }}
       title={title}
       aria-label={`Open source ${label}: ${title}`}
       className={cn(
