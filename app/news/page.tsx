@@ -98,14 +98,16 @@ export default function NewsPage() {
 
   const onPickFiles = useCallback(
     (e: ChangeEvent<HTMLInputElement>) => {
-      const picked = e.target.files;
+      // Convert FileList to array BEFORE clearing the input (FileList is a live collection)
+      const picked = e.target.files ? Array.from(e.target.files) : [];
       e.target.value = '';
-      if (!picked) return;
+      if (picked.length === 0) return;
+
       const accepted: AttachedFile[] = [];
       const rejected: string[] = [];
       let total = files.reduce((n, f) => n + f.file.size, 0);
       for (let i = 0; i < picked.length; i++) {
-        const f = picked.item(i);
+        const f = picked[i];
         if (!f) continue;
         if (files.length + accepted.length >= MAX_FILES) {
           rejected.push(`too many files (max ${MAX_FILES})`);
@@ -458,7 +460,11 @@ export default function NewsPage() {
               />
               <button
                 type="button"
-                onClick={() => fileInputRef.current?.click()}
+                onClick={() => {
+                  if (fileInputRef.current) {
+                    fileInputRef.current.click();
+                  }
+                }}
                 disabled={busy}
                 className={cn(
                   'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl',
