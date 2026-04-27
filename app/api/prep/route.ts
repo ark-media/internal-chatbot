@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { lookupCorpus, listSpeakers, getDossier } from '@/lib/retrieval';
 import { webSearch } from '@/lib/web-search';
 import { prepSystemPrompt } from '@/lib/prep-prompt';
+import { ensureTable, getCached, setCached, cacheKey } from '@/lib/tool-cache';
 import {
   MAX_FILES,
   MAX_FILE_BYTES,
@@ -40,6 +41,10 @@ const searchCorpusTool = tool({
       ),
   }),
   execute: async (input) => {
+    const key = cacheKey('prep-corpus', input);
+    const cached = await getCached(key, 24);
+    if (cached) return cached;
+
     let speakerIds: number[] | undefined;
     let resolvedGuest: string | null = null;
 
@@ -50,7 +55,6 @@ const searchCorpusTool = tool({
         limit: 3,
       });
       if (matches.length > 0) {
-        // Take the top match (most turns). If ambiguous, the extra matches don't hurt.
         speakerIds = [matches[0].speakerId];
         resolvedGuest = matches[0].canonicalName;
       }
@@ -61,28 +65,32 @@ const searchCorpusTool = tool({
       filters: { speakerIds },
       finalK: 6,
     });
-    if (chunks.length === 0) {
-      return {
-        chunks: [],
-        resolvedGuest,
-        note: resolvedGuest
-          ? `No matching passages found for ${resolvedGuest} on this topic.`
-          : 'No matching passages found in the corpus.',
-      };
-    }
-    return {
-      resolvedGuest,
-      chunks: chunks.map((c) => ({
-        id: c.chunkId,
-        episode_id: c.episodeId,
-        show: c.showName,
-        title: c.title,
-        date: c.date,
-        section: c.section,
-        drive_url: c.driveUrl,
-        excerpt: c.text,
-      })),
-    };
+
+    const response =
+      chunks.length === 0
+        ? {
+            chunks: [],
+            resolvedGuest,
+            note: resolvedGuest
+              ? `No matching passages found for ${resolvedGuest} on this topic.`
+              : 'No matching passages found in the corpus.',
+          }
+        : {
+            resolvedGuest,
+            chunks: chunks.map((c) => ({
+              id: c.chunkId,
+              episode_id: c.episodeId,
+              show: c.showName,
+              title: c.title,
+              date: c.date,
+              section: c.section,
+              drive_url: c.driveUrl,
+              excerpt: c.text,
+            })),
+          };
+
+    await setCached(key, response);
+    return response;
   },
 });
 
@@ -134,21 +142,29 @@ const webSearchTool = tool({
       .describe('Limit to results from the last N days. Useful for recent-news queries.'),
   }),
   execute: async (input) => {
+    const key = cacheKey('prep-websearch', input);
+    const cached = await getCached(key, 6);
+    if (cached) return cached;
+
     const res = await webSearch(input.query, {
       maxResults: 6,
       daysBack: input.daysBack,
     });
-    if (!res.ok) {
-      return { results: [], note: res.note };
-    }
-    return {
-      results: res.results.map((r) => ({
-        title: r.title,
-        url: r.url,
-        snippet: r.snippet,
-        published: r.publishedDate ?? null,
-      })),
-    };
+
+    const response =
+      !res.ok
+        ? { results: [], note: res.note }
+        : {
+            results: res.results.map((r) => ({
+              title: r.title,
+              url: r.url,
+              snippet: r.snippet,
+              published: r.publishedDate ?? null,
+            })),
+          };
+
+    await setCached(key, response);
+    return response;
   },
 });
 
@@ -241,6 +257,8 @@ function decodeDataUrl(url: string): string | null {
 // -- Route handler -----------------------------------------------------------
 
 export async function POST(req: Request) {
+  await ensureTable();
+
   const ip =
     req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
     req.headers.get('x-real-ip') ||

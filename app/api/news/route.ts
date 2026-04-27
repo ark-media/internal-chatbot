@@ -13,6 +13,7 @@ import { sql } from '@/lib/db';
 import { lookupCorpus } from '@/lib/retrieval';
 import { webSearch } from '@/lib/web-search';
 import { newsSystemPrompt } from '@/lib/news-prompt';
+import { ensureTable, getCached, setCached, cacheKey } from '@/lib/tool-cache';
 import {
   MAX_FILES,
   MAX_FILE_BYTES,
@@ -40,6 +41,10 @@ type TavilyExtractResponse =
   | { ok: false; reason: string; note: string };
 
 async function fetchArticle(articleUrl: string): Promise<TavilyExtractResponse> {
+  const key = cacheKey('article', { url: articleUrl });
+  const cached = await getCached<TavilyExtractResponse>(key, 72);
+  if (cached) return cached;
+
   const apiKey = process.env.TAVILY_API_KEY;
   if (!apiKey) {
     return {
@@ -56,7 +61,7 @@ async function fetchArticle(articleUrl: string): Promise<TavilyExtractResponse> 
       body: JSON.stringify({
         api_key: apiKey,
         urls: [articleUrl],
-        extract_depth: 'advanced', // Required for X/Twitter and paywalled sites
+        extract_depth: 'advanced',
       }),
     });
 
@@ -87,7 +92,7 @@ async function fetchArticle(articleUrl: string): Promise<TavilyExtractResponse> 
       };
     }
 
-    return {
+    const response: TavilyExtractResponse = {
       ok: true,
       url: result.url ?? articleUrl,
       title: result.title ?? 'Untitled',
@@ -95,6 +100,8 @@ async function fetchArticle(articleUrl: string): Promise<TavilyExtractResponse> 
       date: result.publish_date ?? null,
       source: result.source_name ?? 'Unknown',
     };
+    await setCached(key, response);
+    return response;
   } catch (err) {
     return {
       ok: false,
@@ -143,31 +150,37 @@ function createSearchCorpusTool(arkNewsDailyShowId: number | null) {
         ),
     }),
     execute: async (input) => {
+      const key = cacheKey('corpus', { query: input.query, showId: arkNewsDailyShowId });
+      const cached = await getCached(key, 24);
+      if (cached) return cached;
+
       const chunks = await lookupCorpus({
         query: input.query,
         filters: arkNewsDailyShowId ? { showIds: [arkNewsDailyShowId] } : undefined,
         finalK: 4,
       });
 
-      if (chunks.length === 0) {
-        return {
-          chunks: [],
-          note: 'No matching scripts found in Ark News Daily archive.',
-        };
-      }
+      const response =
+        chunks.length === 0
+          ? {
+              chunks: [],
+              note: 'No matching scripts found in Ark News Daily archive.',
+            }
+          : {
+              chunks: chunks.map((c) => ({
+                id: c.chunkId,
+                episode_id: c.episodeId,
+                show: c.showName,
+                title: c.title,
+                date: c.date,
+                section: c.section,
+                drive_url: c.driveUrl,
+                excerpt: c.text,
+              })),
+            };
 
-      return {
-        chunks: chunks.map((c) => ({
-          id: c.chunkId,
-          episode_id: c.episodeId,
-          show: c.showName,
-          title: c.title,
-          date: c.date,
-          section: c.section,
-          drive_url: c.driveUrl,
-          excerpt: c.text,
-        })),
-      };
+      await setCached(key, response);
+      return response;
     },
   });
 }
@@ -186,21 +199,29 @@ const webSearchTool = tool({
       .describe('Limit results to the last N days. Omit for all results.'),
   }),
   execute: async (input) => {
+    const key = cacheKey('websearch', { query: input.query, daysBack: input.daysBack });
+    const cached = await getCached(key, 6);
+    if (cached) return cached;
+
     const res = await webSearch(input.query, {
       maxResults: 6,
       daysBack: input.daysBack,
     });
-    if (!res.ok) {
-      return { results: [], note: res.note };
-    }
-    return {
-      results: res.results.map((r) => ({
-        title: r.title,
-        url: r.url,
-        snippet: r.snippet,
-        published: r.publishedDate ?? null,
-      })),
-    };
+
+    const response =
+      !res.ok
+        ? { results: [], note: res.note }
+        : {
+            results: res.results.map((r) => ({
+              title: r.title,
+              url: r.url,
+              snippet: r.snippet,
+              published: r.publishedDate ?? null,
+            })),
+          };
+
+    await setCached(key, response);
+    return response;
   },
 });
 
@@ -284,6 +305,8 @@ function decodeDataUrl(url: string): string | null {
 // -- Route handler -----------------------------------------------------------
 
 export async function POST(req: Request) {
+  await ensureTable();
+
   const ip =
     req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
     req.headers.get('x-real-ip') ||

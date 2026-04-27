@@ -24,6 +24,7 @@ import { shows } from '@/lib/knowledge-base';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { routeQuery, type RoutedQuery } from '@/lib/router';
 import type { ChatUIMessage, PreloadedSources } from '@/components/chat-types';
+import { ensureTable, getCached, setCached, cacheKey } from '@/lib/tool-cache';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -141,6 +142,10 @@ const lookupTool = tool({
     until: z.string().optional().describe('Upper-bound date YYYY-MM-DD'),
   }),
   execute: async (input) => {
+    const key = cacheKey('lookup', input);
+    const cached = await getCached(key, 24);
+    if (cached) return cached;
+
     const chunks = await lookupCorpus({
       query: input.query,
       filters: {
@@ -152,21 +157,25 @@ const lookupTool = tool({
       },
       finalK: 6,
     });
-    if (chunks.length === 0) {
-      return { chunks: [], note: 'No relevant transcripts found.' };
-    }
-    return {
-      chunks: chunks.map((c) => ({
-        id: c.chunkId,
-        episode_id: c.episodeId,
-        show: c.showName,
-        title: c.title,
-        date: c.date,
-        section: c.section,
-        drive_url: c.driveUrl,
-        excerpt: `<transcript_excerpt id="${c.chunkId}">\n${c.text}\n</transcript_excerpt>`,
-      })),
-    };
+
+    const response =
+      chunks.length === 0
+        ? { chunks: [], note: 'No relevant transcripts found.' }
+        : {
+            chunks: chunks.map((c) => ({
+              id: c.chunkId,
+              episode_id: c.episodeId,
+              show: c.showName,
+              title: c.title,
+              date: c.date,
+              section: c.section,
+              drive_url: c.driveUrl,
+              excerpt: `<transcript_excerpt id="${c.chunkId}">\n${c.text}\n</transcript_excerpt>`,
+            })),
+          };
+
+    await setCached(key, response);
+    return response;
   },
 });
 
@@ -184,6 +193,10 @@ const dossierTool = tool({
     until: z.string().optional(),
   }),
   execute: async (input) => {
+    const key = cacheKey('dossier', input);
+    const cached = await getCached(key, 24);
+    if (cached) return cached;
+
     const page = await getDossier({
       speakerId: input.speakerId,
       offset: input.offset,
@@ -196,24 +209,28 @@ const dossierTool = tool({
         until: input.until,
       },
     });
-    if (page.turns.length === 0) {
-      return { turns: [], totalCount: page.totalCount, hasMore: false };
-    }
-    return {
-      turns: page.turns.map((t) => ({
-        id: t.turnId,
-        episode_id: t.episodeId,
-        episode_title: t.episodeTitle,
-        show: t.showName,
-        date: t.date,
-        section: t.section,
-        speaker: t.speakerName,
-        drive_url: t.driveUrl,
-        excerpt: `<dossier_turn id="${t.turnId}" date="${t.date ?? 'unknown'}" show="${t.showName}" episode="${t.episodeTitle}">\n${t.speakerName}: ${t.text}\n</dossier_turn>`,
-      })),
-      totalCount: page.totalCount,
-      hasMore: page.hasMore,
-    };
+
+    const response =
+      page.turns.length === 0
+        ? { turns: [], totalCount: page.totalCount, hasMore: false }
+        : {
+            turns: page.turns.map((t) => ({
+              id: t.turnId,
+              episode_id: t.episodeId,
+              episode_title: t.episodeTitle,
+              show: t.showName,
+              date: t.date,
+              section: t.section,
+              speaker: t.speakerName,
+              drive_url: t.driveUrl,
+              excerpt: `<dossier_turn id="${t.turnId}" date="${t.date ?? 'unknown'}" show="${t.showName}" episode="${t.episodeTitle}">\n${t.speakerName}: ${t.text}\n</dossier_turn>`,
+            })),
+            totalCount: page.totalCount,
+            hasMore: page.hasMore,
+          };
+
+    await setCached(key, response);
+    return response;
   },
 });
 
@@ -471,6 +488,8 @@ function buildDisambiguationBlock(
 // -- Route handler -----------------------------------------------------------
 
 export async function POST(req: Request) {
+  await ensureTable();
+
   const ip =
     req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
     req.headers.get('x-real-ip') ||
