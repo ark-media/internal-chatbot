@@ -23,10 +23,11 @@ import {
   HardDriveUpload,
   ExternalLink,
   CheckCircle2,
+  Copy,
 } from 'lucide-react';
 
 import { ArkLogo } from '@/components/ArkLogo';
-import type { NewsUIMessage } from '@/components/news-types';
+import type { NewsUIMessage, NewsSource } from '@/components/news-types';
 import { cn } from '@/lib/cn';
 import {
   MAX_FILES,
@@ -70,6 +71,9 @@ export default function NewsPage() {
   const [driveLink, setDriveLink] = useState<string | null>(null);
   const [driveError, setDriveError] = useState<string | null>(null);
   const [driveSaveInProgress, setDriveSaveInProgress] = useState(false);
+  const [openSource, setOpenSource] = useState<NewsSource | null>(null);
+  const [allSources, setAllSources] = useState<NewsSource[]>([]);
+  const [copySuccess, setCopySuccess] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -147,19 +151,41 @@ export default function NewsPage() {
     submit(input);
   };
 
+  const extractScriptText = useCallback(() => {
+    const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
+    if (!lastAssistantMsg) return null;
+    const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') ?? [];
+    if (textParts.length === 0) return null;
+    return textParts.map((p) => (p.type === 'text' ? p.text : '')).join('\n');
+  }, [messages]);
+
+  useEffect(() => {
+    const scriptText = extractScriptText();
+    if (scriptText) {
+      setAllSources(extractSources(scriptText));
+    }
+  }, [messages, extractScriptText]);
+
+  const copyScriptToClipboard = useCallback(async () => {
+    const scriptText = extractScriptText();
+    if (!scriptText?.trim()) return;
+
+    try {
+      await navigator.clipboard.writeText(scriptText);
+      setCopySuccess(true);
+      setTimeout(() => setCopySuccess(false), 2000);
+    } catch {
+      // Fallback: show alert if clipboard API fails
+      alert('Failed to copy to clipboard');
+    }
+  }, [extractScriptText]);
+
   const saveScriptToDrive = useCallback(async () => {
     // Debounce: prevent multiple simultaneous uploads
     if (driveSaveInProgress) return;
 
-    // Find the last assistant message with the script
-    const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
-    if (!lastAssistantMsg) return;
-
-    const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') ?? [];
-    if (textParts.length === 0) return;
-
-    const scriptText = textParts.map((p) => (p.type === 'text' ? p.text : '')).join('\n');
-    if (!scriptText.trim()) return;
+    const scriptText = extractScriptText();
+    if (!scriptText?.trim()) return;
 
     setDriveSaveInProgress(true);
     setDriveLoading(true);
@@ -195,7 +221,7 @@ export default function NewsPage() {
       setDriveLoading(false);
       setDriveSaveInProgress(false);
     }
-  }, [messages, driveSaveInProgress]);
+  }, [driveSaveInProgress, extractScriptText]);
 
   return (
     <div
@@ -203,6 +229,7 @@ export default function NewsPage() {
       style={{ fontFamily: 'var(--font-sans)' }}
     >
       <div className="flex min-w-0 flex-1 flex-col">
+        {/* Main content */}
         {/* Header */}
         <header className="relative z-10 flex items-center justify-between gap-4 border-b border-white/[0.06] bg-white/[0.02] px-6 py-3 backdrop-blur-md">
           <div className="flex items-center gap-3">
@@ -246,13 +273,18 @@ export default function NewsPage() {
         {/* Message list */}
         <main ref={scrollRef} className="relative flex-1 overflow-y-auto">
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-7 px-6 py-10">
-            {messages.length === 0 && <EmptyState onPick={submit} busy={busy} />}
+            {messages.length === 0 ? <EmptyState onPick={submit} busy={busy} /> : null}
 
             {messages.map((m) => (
-              <MessageRow key={m.id} message={m} />
+              <MessageRow
+                key={m.id}
+                message={m}
+                onSourceClick={setOpenSource}
+                sources={allSources}
+              />
             ))}
 
-            {busy && (
+            {busy ? (
               <div className="flex items-center gap-3 pl-12 text-xs text-white/50">
                 <TypingDots />
                 <span className="tracking-wide">
@@ -267,9 +299,9 @@ export default function NewsPage() {
                   Stop
                 </button>
               </div>
-            )}
+            ) : null}
 
-            {messages.length > 0 && messages[messages.length - 1]?.role === 'assistant' && (
+            {messages.length > 0 && messages[messages.length - 1]?.role === 'assistant' ? (
               <div className="mt-4 flex flex-col gap-3 border-t border-white/10 pt-4">
                 {driveLink ? (
                   <div className="flex items-center gap-2 rounded-lg bg-green-500/10 px-4 py-3 text-sm text-green-200">
@@ -313,6 +345,28 @@ export default function NewsPage() {
                   </button>
                 )}
 
+                <button
+                  onClick={copyScriptToClipboard}
+                  disabled={!messages.length}
+                  className={cn(
+                    'flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
+                    'bg-emerald-500/20 text-emerald-200 transition hover:bg-emerald-500/30',
+                    'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-emerald-500/20',
+                  )}
+                >
+                  {copySuccess ? (
+                    <>
+                      <CheckCircle2 className="h-4 w-4" />
+                      Copied!
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-4 w-4" />
+                      Copy to Clipboard
+                    </>
+                  )}
+                </button>
+
                 <div className="mt-2">
                   <div className="text-xs font-medium uppercase tracking-[0.2em] text-white/40 mb-2">
                     Refine the script
@@ -335,7 +389,7 @@ export default function NewsPage() {
                   </div>
                 </div>
               </div>
-            )}
+            ) : null}
           </div>
         </main>
 
@@ -345,7 +399,7 @@ export default function NewsPage() {
           className="relative z-10 border-t border-white/[0.06] bg-gradient-to-b from-transparent to-[#070b22]/60 px-6 py-4 backdrop-blur-md"
         >
           <div className="mx-auto max-w-3xl">
-            {files.length > 0 && (
+            {files.length > 0 ? (
               <div className="mb-2 flex flex-wrap gap-1.5">
                 {files.map((f) => (
                   <div
@@ -366,15 +420,15 @@ export default function NewsPage() {
                   </div>
                 ))}
               </div>
-            )}
-            {uploadError && (
+            ) : null}
+            {uploadError ? (
               <div
                 role="alert"
                 className="mb-2 rounded-lg border border-amber-300/30 bg-amber-400/[0.08] px-3 py-2 text-[0.78rem] text-amber-100"
               >
                 Some files were not attached — {uploadError}.
               </div>
-            )}
+            ) : null}
             <div
               className={cn(
                 'group flex items-end gap-2 rounded-2xl border bg-white/[0.04] px-3 py-2.5 backdrop-blur',
@@ -449,6 +503,61 @@ export default function NewsPage() {
           </div>
         </form>
       </div>
+
+      {/* Sources sidebar */}
+      {openSource ? (
+        <aside className="ark-fade-up relative flex h-full w-full max-w-md flex-col border-l border-white/10 bg-[#070b22]/80 backdrop-blur-xl">
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 opacity-60"
+            style={{
+              background:
+                'radial-gradient(80% 50% at 50% 0%, rgba(62,181,249,0.14) 0%, transparent 60%)',
+            }}
+          />
+          <header className="relative flex items-start justify-between gap-3 border-b border-white/10 px-5 py-4">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center rounded-md border border-[#3eb5f9]/30 bg-[#3eb5f9]/10 px-1.5 py-0.5 font-mono text-[0.65rem] font-semibold uppercase tracking-wider text-[#79cdfc]">
+                  Source {openSource.number}
+                </span>
+              </div>
+              <div
+                className="mt-2 truncate text-base font-bold text-white"
+                style={{ fontFamily: 'var(--font-display)' }}
+              >
+                {openSource.title}
+              </div>
+              {openSource.date ? (
+                <div className="mt-1 text-xs text-white/55">{openSource.date}</div>
+              ) : null}
+            </div>
+            <button
+              onClick={() => setOpenSource(null)}
+              className="rounded p-1 text-white/60 transition hover:bg-white/10 hover:text-white"
+              aria-label="Close source"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </header>
+          <div className="relative flex-1 overflow-y-auto px-5 py-5">
+            <p className="text-[0.92rem] leading-[1.7] text-white/85">
+              {openSource.url}
+            </p>
+          </div>
+          <footer className="relative border-t border-white/10 px-5 py-3">
+            <a
+              href={openSource.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[#3eb5f9]/10 px-3 py-1.5 text-sm font-medium text-[#79cdfc] transition hover:bg-[#3eb5f9]/20 hover:text-white"
+            >
+              Open link
+              <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          </footer>
+        </aside>
+      ) : null}
     </div>
   );
 }
@@ -476,9 +585,39 @@ function extractHeadline(scriptText: string): string | null {
   return null;
 }
 
+function extractSources(scriptText: string): NewsSource[] {
+  const sources: NewsSource[] = [];
+  const sourcesMatch = scriptText.match(/SOURCES:\s*([\s\S]+?)(?:\n---|\Z)/);
+  if (!sourcesMatch) return sources;
+
+  const sourceLines = sourcesMatch[1].trim().split('\n');
+  for (const line of sourceLines) {
+    const match = line.match(/^(\d+)\.\s+(.+?),\s*"([^"]+)",\s*(.+?)\s*—\s*(.+?)$/);
+    if (match) {
+      const [, numStr, title, date, source, url] = match;
+      sources.push({
+        id: `source-${numStr}`,
+        number: parseInt(numStr),
+        title: `${source}, "${title}"`,
+        date: date || null,
+        url: url.trim(),
+      });
+    }
+  }
+  return sources;
+}
+
 /* Sub-components */
 
-function MessageRow({ message }: { message: NewsUIMessage }) {
+function MessageRow({
+  message,
+  onSourceClick,
+  sources,
+}: {
+  message: NewsUIMessage;
+  onSourceClick: (source: NewsSource) => void;
+  sources: NewsSource[];
+}) {
   if (message.role === 'user') {
     const textParts = message.parts?.filter((p) => p.type === 'text') ?? [];
     const fileParts = message.parts?.filter((p) => p.type === 'file') ?? [];
@@ -499,7 +638,7 @@ function MessageRow({ message }: { message: NewsUIMessage }) {
               </span>
             ) : null,
           )}
-          {fileParts.length > 0 && (
+          {fileParts.length > 0 ? (
             <div className="mt-2 flex flex-wrap gap-1">
               {fileParts.map((p, i) => (
                 <span key={i} className="inline-block rounded bg-white/20 px-1.5 py-0.5 text-[0.85rem]">
@@ -507,7 +646,7 @@ function MessageRow({ message }: { message: NewsUIMessage }) {
                 </span>
               ))}
             </div>
-          )}
+          ) : null}
         </div>
       </div>
     );
@@ -516,16 +655,24 @@ function MessageRow({ message }: { message: NewsUIMessage }) {
   return (
     <div className="ark-fade-up flex justify-start">
       <div className="max-w-[90%] rounded-2xl rounded-bl-md bg-white/[0.04] px-4 py-3 text-white">
-        <MessageContent message={message} />
+        <MessageContent message={message} onSourceClick={onSourceClick} sources={sources} />
       </div>
     </div>
   );
 }
 
-function MessageContent({ message }: { message: NewsUIMessage }) {
+function MessageContent({
+  message,
+  onSourceClick,
+  sources,
+}: {
+  message: NewsUIMessage;
+  onSourceClick: (source: NewsSource) => void;
+  sources: NewsSource[];
+}) {
   return message.parts?.map((part, i) => {
     if (part.type === 'text') {
-      return <NewsMarkdown key={i} text={part.text} />;
+      return <NewsMarkdown key={i} text={part.text} onSourceClick={onSourceClick} sources={sources} />;
     }
     if (part.type === 'tool-fetchArticle') {
       const state = (part as any).state;
@@ -563,13 +710,21 @@ function ToolCallChip({ name, status }: { name: string; status: 'in-flight' | 'd
   const textColor = status === 'in-flight' ? 'text-blue-200' : 'text-green-200';
   return (
     <span className={cn('inline-block rounded-full px-2.5 py-1 text-[0.75rem] font-medium', bgColor, textColor)}>
-      {status === 'in-flight' && <Loader2 className="mr-1 inline h-3 w-3 animate-spin" />}
+      {status === 'in-flight' ? <Loader2 className="mr-1 inline h-3 w-3 animate-spin" /> : null}
       {name}
     </span>
   );
 }
 
-function NewsMarkdown({ text }: { text: string }) {
+function NewsMarkdown({
+  text,
+  onSourceClick,
+  sources,
+}: {
+  text: string;
+  onSourceClick: (source: NewsSource) => void;
+  sources: NewsSource[];
+}) {
   // Process the text to identify blocks, speakers, flags, and footnotes
   const lines = text.split('\n');
   const sections: React.ReactNode[] = [];
@@ -593,13 +748,13 @@ function NewsMarkdown({ text }: { text: string }) {
             className={cn('rounded-lg p-4 my-4', colors.bg, colors.border)}
           >
             <div className={cn('font-bold text-sm mb-3', colors.text)}>{currentBlockType}</div>
-            <NewsScriptContent content={content} />
+            <NewsScriptContent content={content} onSourceClick={onSourceClick} sources={sources} />
           </div>,
         );
       } else {
         sections.push(
           <div key={sections.length}>
-            <NewsScriptContent content={content} />
+            <NewsScriptContent content={content} onSourceClick={onSourceClick} sources={sources} />
           </div>,
         );
       }
@@ -625,7 +780,15 @@ function NewsMarkdown({ text }: { text: string }) {
   return <div className="space-y-4">{sections}</div>;
 }
 
-function NewsScriptContent({ content }: { content: string }) {
+function NewsScriptContent({
+  content,
+  onSourceClick,
+  sources,
+}: {
+  content: string;
+  onSourceClick: (source: NewsSource) => void;
+  sources: NewsSource[];
+}) {
   const parts: React.ReactNode[] = [];
   const lines = content.split('\n');
   let i = 0;
@@ -677,7 +840,7 @@ function NewsScriptContent({ content }: { content: string }) {
     if (line.length > 0) {
       parts.push(
         <p key={parts.length} className="my-2 leading-relaxed">
-          {renderLineWithFootnotes(line)}
+          {renderLineWithFootnotes(line, onSourceClick, sources)}
         </p>,
       );
     }
@@ -688,7 +851,11 @@ function NewsScriptContent({ content }: { content: string }) {
   return <div>{parts}</div>;
 }
 
-function renderLineWithFootnotes(text: string): React.ReactNode {
+function renderLineWithFootnotes(
+  text: string,
+  onSourceClick: (source: NewsSource) => void,
+  sources: NewsSource[]
+): React.ReactNode {
   // Replace superscript numbers with styled spans
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
@@ -700,13 +867,33 @@ function renderLineWithFootnotes(text: string): React.ReactNode {
     if (match.index > lastIndex) {
       parts.push(text.slice(lastIndex, match.index));
     }
+    // Convert superscript to number
+    const superscriptMap: Record<string, string> = {
+      '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4',
+      '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9',
+    };
+    let numberStr = '';
+    for (const char of match[0]) {
+      numberStr += superscriptMap[char] || '';
+    }
+    const sourceNum = parseInt(numberStr);
+    const source = sources.find((s) => s.number === sourceNum);
+
     // Add styled superscript
     parts.push(
-      <span key={parts.length} className="inline-flex items-center ml-0.5">
-        <sup className="text-cyan-300 font-semibold cursor-pointer hover:text-cyan-100">
+      <button
+        key={parts.length}
+        onClick={() => source && onSourceClick(source)}
+        disabled={!source}
+        className="inline-flex items-center ml-0.5 bg-transparent border-none padding-0"
+      >
+        <sup className={cn(
+          'text-cyan-300 font-semibold',
+          source ? 'cursor-pointer hover:text-cyan-100' : 'opacity-60 cursor-default'
+        )}>
           {match[0]}
         </sup>
-      </span>,
+      </button>,
     );
     lastIndex = match.index + match[0].length;
   }

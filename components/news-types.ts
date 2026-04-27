@@ -35,4 +35,12 @@ export type WebSearchToolOutput = {
   note?: string;
 };
 
+export type NewsSource = {
+  id: string;
+  number: number;
+  title: string;
+  date: string | null;
+  url: string;
+};
+
 export type NewsUIMessage = UIMessage<unknown, Record<string, never>>;
