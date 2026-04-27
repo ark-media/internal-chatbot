@@ -23,7 +23,7 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import type { PrepUIMessage } from '@/components/prep-types';
 
 export const runtime = 'nodejs';
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 // -- Tools -------------------------------------------------------------------
 

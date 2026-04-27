@@ -26,7 +26,7 @@ import { routeQuery, type RoutedQuery } from '@/lib/router';
 import type { ChatUIMessage, PreloadedSources } from '@/components/chat-types';
 
 export const runtime = 'nodejs';
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 const NO_INFO = "I don't have information on that in the transcripts.";
 const CITATION_RE = /\[(?:id|turn):\s*\d+(?:\s*,\s*\d+)*\s*\]/;

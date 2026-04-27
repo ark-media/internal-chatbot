@@ -24,7 +24,7 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import type { NewsUIMessage } from '@/components/news-types';
 
 export const runtime = 'nodejs';
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 // -- Tavily Extract wrapper --------------------------------------------------
 
