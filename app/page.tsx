@@ -49,7 +49,10 @@ export default function ChatPage() {
   const [copySuccess, setCopySuccess] = useState(false);
 
   const openSource = useCallback(
-    (source: Source) => setOpenPanel({ view: 'source', source }),
+    (source: Source) => {
+      console.log('openSource called with:', source);
+      setOpenPanel({ view: 'source', source });
+    },
     [],
   );
 
@@ -98,6 +101,7 @@ export default function ChatPage() {
     const map = new Map<string, Source>();
     for (const m of messages) {
       if (m.role !== 'assistant') continue;
+      console.log('Processing assistant message with parts:', m.parts.map(p => p.type));
       for (const part of m.parts) {
         if (part.type === 'data-preloaded') {
           for (const c of part.data.chunks) {
@@ -191,6 +195,7 @@ export default function ChatPage() {
         }
       }
     }
+    console.log('Collected sources:', map.size, Array.from(map.keys()));
     return map;
   }, [messages]);
 

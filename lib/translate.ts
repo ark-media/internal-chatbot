@@ -1,5 +1,4 @@
 import { generateText } from 'ai';
-import { anthropic } from '@ai-sdk/anthropic';
 
 // Simple language detection: check for Hebrew Unicode ranges
 function detectHebrewContent(text: string): boolean {
@@ -16,7 +15,7 @@ export async function ensureEnglish(text: string): Promise<string> {
 
   try {
     const { text: translated } = await generateText({
-      model: anthropic('claude-opus-4-7'),
+      model: 'anthropic/claude-opus-4-7',
       prompt: `Translate the following Hebrew text to English. Preserve all factual details, dates, names, and quotes exactly. Return only the translation, no explanations.\n\n${text}`,
     });
 
