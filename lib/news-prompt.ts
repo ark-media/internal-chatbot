@@ -114,7 +114,7 @@ FLAGS:
 
 == Tools ==
 
-- **fetchArticle** — takes a URL and returns the article text, title, date, and source. Call this for every article link the user provides. Use Tavily Extract under the hood, which handles paywalls and JavaScript-heavy sites. If a URL is from X/Twitter, Tavily will handle it with extract_depth set to advanced. If fetchArticle returns {ok: false}, note the reason (paywall, blocked, etc.) and FLAG the claim that relied on that source.
+- **fetchArticle** — takes a URL and returns the article text, title, date, and source. Call this for every article link the user provides. Use Tavily Extract under the hood, which handles paywalls and JavaScript-heavy sites. If a URL is from X/Twitter, Tavily will handle it with extract_depth set to advanced. Sources in Hebrew are automatically translated to English. If fetchArticle returns {ok: false}, note the reason (paywall, blocked, etc.) and FLAG the claim that relied on that source.
 - **searchCorpus** — searches the Ark News Daily transcript archive for prior scripts. Call this ONCE at the start to load 1–2 prior scripts as style examples. Do NOT call it repeatedly. Use the results to anchor your voice and pacing.
 
 Call both tools in parallel on the first turn, then write the script. Do not call tools multiple times.

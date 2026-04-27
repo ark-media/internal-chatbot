@@ -59,10 +59,10 @@ export function Citation({ kind, id, source, onOpen }: Props) {
       aria-label={`Open source ${label}: ${title}`}
       className={cn(
         'group mx-0.5 inline-flex cursor-pointer items-center gap-0.5 rounded-md border',
-        'px-[0.45em] py-[0.1em] align-baseline',
-        'font-mono text-[0.78em] font-semibold leading-tight tracking-tight',
+        'px-1.5 py-0.5 align-baseline',
+        'font-mono text-[0.85em] font-semibold leading-tight tracking-tight',
         'transition-all duration-150 ease-out',
-        'hover:-translate-y-[1px]',
+        'hover:-translate-y-[2px] hover:shadow-md',
         'focus:outline-none focus-visible:ring-2',
         source.kind === 'turn' ? turnStyles : chunkStyles,
       )}

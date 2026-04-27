@@ -14,6 +14,7 @@ import { lookupCorpus } from '@/lib/retrieval';
 import { webSearch } from '@/lib/web-search';
 import { newsSystemPrompt } from '@/lib/news-prompt';
 import { ensureTable, getCached, setCached, cacheKey } from '@/lib/tool-cache';
+import { ensureEnglish } from '@/lib/translate';
 import {
   MAX_FILES,
   MAX_FILE_BYTES,
@@ -92,11 +93,14 @@ async function fetchArticle(articleUrl: string): Promise<TavilyExtractResponse> 
       };
     }
 
+    const text = result.raw_content ?? '';
+    const translatedText = await ensureEnglish(text);
+
     const response: TavilyExtractResponse = {
       ok: true,
       url: result.url ?? articleUrl,
       title: result.title ?? 'Untitled',
-      text: result.raw_content ?? '',
+      text: translatedText,
       date: result.publish_date ?? null,
       source: result.source_name ?? 'Unknown',
     };
@@ -208,17 +212,20 @@ const webSearchTool = tool({
       daysBack: input.daysBack,
     });
 
-    const response =
-      !res.ok
-        ? { results: [], note: res.note }
-        : {
-            results: res.results.map((r) => ({
-              title: r.title,
-              url: r.url,
-              snippet: r.snippet,
-              published: r.publishedDate ?? null,
-            })),
-          };
+    let response;
+    if (!res.ok) {
+      response = { results: [], note: res.note };
+    } else {
+      const translatedResults = await Promise.all(
+        res.results.map(async (r) => ({
+          title: await ensureEnglish(r.title),
+          url: r.url,
+          snippet: await ensureEnglish(r.snippet),
+          published: r.publishedDate ?? null,
+        }))
+      );
+      response = { results: translatedResults };
+    }
 
     await setCached(key, response);
     return response;
