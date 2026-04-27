@@ -67,6 +67,7 @@ export default function NewsPage() {
   const [input, setInput] = useState('');
   const [files, setFiles] = useState<AttachedFile[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [fileAttachSuccess, setFileAttachSuccess] = useState(false);
   const [driveLoading, setDriveLoading] = useState(false);
   const [driveLink, setDriveLink] = useState<string | null>(null);
   const [driveError, setDriveError] = useState<string | null>(null);
@@ -124,7 +125,11 @@ export default function NewsPage() {
           file: f,
         });
       }
-      if (accepted.length > 0) setFiles((prev) => [...prev, ...accepted]);
+      if (accepted.length > 0) {
+        setFiles((prev) => [...prev, ...accepted]);
+        setFileAttachSuccess(true);
+        setTimeout(() => setFileAttachSuccess(false), 2500);
+      }
       setUploadError(rejected.length > 0 ? rejected.join('; ') : null);
     },
     [files],
@@ -399,6 +404,12 @@ export default function NewsPage() {
           className="relative z-10 border-t border-white/[0.06] bg-gradient-to-b from-transparent to-[#070b22]/60 px-6 py-4 backdrop-blur-md"
         >
           <div className="mx-auto max-w-3xl">
+            {fileAttachSuccess ? (
+              <div className="mb-2 flex items-center gap-2 rounded-lg bg-green-500/10 px-3 py-2 text-sm text-green-200 animate-in fade-in duration-200">
+                <CheckCircle2 className="h-4 w-4" />
+                <span>{files.length} file{files.length !== 1 ? 's' : ''} attached</span>
+              </div>
+            ) : null}
             {files.length > 0 ? (
               <div className="mb-2 flex flex-wrap gap-1.5">
                 {files.map((f) => (
