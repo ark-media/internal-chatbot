@@ -415,7 +415,7 @@ type MsgProps = {
 };
 
 function MessageRow({ message, sources, onOpen, onOpenPanel }: MsgProps) {
-  const [copySuccess, setCopySuccess] = useState(false);
+  const [copyState, setCopyState] = useState<'idle' | 'success' | 'error'>('idle');
 
   const extractTextContent = useCallback((): string => {
     const textParts: string[] = [];
@@ -431,10 +431,12 @@ function MessageRow({ message, sources, onOpen, onOpenPanel }: MsgProps) {
     const text = extractTextContent();
     try {
       await navigator.clipboard.writeText(text);
-      setCopySuccess(true);
-      setTimeout(() => setCopySuccess(false), 2000);
-    } catch {
-      alert('Failed to copy');
+      setCopyState('success');
+      setTimeout(() => setCopyState('idle'), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+      setCopyState('error');
+      setTimeout(() => setCopyState('idle'), 2000);
     }
   }, [extractTextContent]);
 
@@ -609,20 +611,39 @@ function MessageRow({ message, sources, onOpen, onOpenPanel }: MsgProps) {
         <button
           type="button"
           onClick={handleCopy}
-          title={copySuccess ? 'Copied!' : 'Copy response'}
-          aria-label={copySuccess ? 'Copied!' : 'Copy response'}
+          title={
+            copyState === 'success'
+              ? 'Copied!'
+              : copyState === 'error'
+                ? 'Failed to copy'
+                : 'Copy response'
+          }
+          aria-label={
+            copyState === 'success'
+              ? 'Copied!'
+              : copyState === 'error'
+                ? 'Failed to copy'
+                : 'Copy response'
+          }
           className={cn(
             'mt-2 inline-flex items-center gap-1.5 rounded-md px-2 py-1.5',
             'text-[0.7rem] font-medium transition opacity-0 group-hover:opacity-100',
-            copySuccess
+            copyState === 'success'
               ? 'bg-emerald-400/20 text-emerald-300'
-              : 'bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/70',
+              : copyState === 'error'
+                ? 'bg-red-400/20 text-red-300'
+                : 'bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/70',
           )}
         >
-          {copySuccess ? (
+          {copyState === 'success' ? (
             <>
               <CheckCircle2 className="h-3.5 w-3.5" />
               <span>Copied</span>
+            </>
+          ) : copyState === 'error' ? (
+            <>
+              <Copy className="h-3.5 w-3.5" />
+              <span>Failed</span>
             </>
           ) : (
             <>
