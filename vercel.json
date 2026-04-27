@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "app/api/news/route.ts": {
+      "maxDuration": 300
+    }
+  }
+}
