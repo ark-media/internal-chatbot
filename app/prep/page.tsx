@@ -15,8 +15,12 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   ArrowUp,
+  CheckCircle2,
+  Copy,
+  ExternalLink,
   FileText,
   Globe,
+  HardDriveUpload,
   Loader2,
   Paperclip,
   Search,
@@ -69,6 +73,13 @@ export default function PrepPage() {
   const [input, setInput] = useState('');
   const [files, setFiles] = useState<AttachedFile[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [driveLoading, setDriveLoading] = useState(false);
+  const [driveLink, setDriveLink] = useState<string | null>(null);
+  const [driveError, setDriveError] = useState<string | null>(null);
+  const [driveSaveInProgress, setDriveSaveInProgress] = useState(false);
+  const [driveMatchedShow, setDriveMatchedShow] = useState<string | null>(null);
+  const [driveFallback, setDriveFallback] = useState(false);
+  const [copySuccess, setCopySuccess] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -138,12 +149,94 @@ export default function PrepPage() {
     sendMessage({ text: q, files: fileList });
     setInput('');
     setFiles([]);
+    // Reset post-generation actions when starting a new turn.
+    setDriveLink(null);
+    setDriveError(null);
+    setDriveMatchedShow(null);
+    setDriveFallback(false);
+    setCopySuccess(false);
   };
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
     submit(input);
   };
+
+  const extractQuestionsText = useCallback(() => {
+    const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
+    if (!lastAssistantMsg) return null;
+    const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') ?? [];
+    if (textParts.length === 0) return null;
+    return textParts.map((p) => (p.type === 'text' ? p.text : '')).join('\n');
+  }, [messages]);
+
+  const extractFirstUserPrompt = useCallback(() => {
+    const firstUserMsg = messages.find((m) => m.role === 'user');
+    if (!firstUserMsg) return null;
+    const textParts = firstUserMsg.parts?.filter((p) => p.type === 'text') ?? [];
+    if (textParts.length === 0) return null;
+    return textParts
+      .map((p) => (p.type === 'text' ? p.text : ''))
+      .join(' ')
+      .trim();
+  }, [messages]);
+
+  const copyQuestionsToClipboard = useCallback(async () => {
+    const text = extractQuestionsText();
+    if (!text?.trim()) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopySuccess(true);
+      setTimeout(() => setCopySuccess(false), 2000);
+    } catch {
+      alert('Failed to copy to clipboard');
+    }
+  }, [extractQuestionsText]);
+
+  const saveQuestionsToDrive = useCallback(async () => {
+    if (driveSaveInProgress) return;
+
+    const questionsText = extractQuestionsText();
+    if (!questionsText?.trim()) return;
+
+    const prompt = extractFirstUserPrompt() || '';
+    const { show, title } = parsePromptShow(prompt);
+
+    setDriveSaveInProgress(true);
+    setDriveLoading(true);
+    setDriveError(null);
+    setDriveLink(null);
+    setDriveMatchedShow(null);
+    setDriveFallback(false);
+
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const res = await fetch('/api/prep/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          questionsText,
+          show,
+          title: title || prompt || 'Episode prep',
+          date: today,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setDriveError(data.error || 'Upload failed');
+        return;
+      }
+      setDriveLink(data.driveUrl);
+      setDriveMatchedShow(data.matchedShow ?? null);
+      setDriveFallback(Boolean(data.fallback));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setDriveError(`Failed to upload: ${msg}`);
+    } finally {
+      setDriveLoading(false);
+      setDriveSaveInProgress(false);
+    }
+  }, [driveSaveInProgress, extractQuestionsText, extractFirstUserPrompt]);
 
   return (
     <div
@@ -202,6 +295,80 @@ export default function PrepPage() {
                 >
                   <Square className="h-2.5 w-2.5 fill-current" />
                   Stop
+                </button>
+              </div>
+            ) : null}
+
+            {!busy && messages.length > 0 && messages[messages.length - 1]?.role === 'assistant' ? (
+              <div className="mt-4 flex flex-col gap-3 border-t border-white/10 pt-4">
+                {driveLink ? (
+                  <div className="flex items-center gap-2 rounded-lg bg-green-500/10 px-4 py-3 text-sm text-green-200">
+                    <CheckCircle2 className="h-4 w-4" />
+                    <span>
+                      Saved to Drive
+                      {driveMatchedShow ? (
+                        <span className="text-green-200/70"> · {driveMatchedShow} folder</span>
+                      ) : driveFallback ? (
+                        <span className="text-green-200/70"> · default Prep folder</span>
+                      ) : null}
+                    </span>
+                    <a
+                      href={driveLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="ml-auto inline-flex items-center gap-1 rounded px-2 py-0.5 text-green-300 transition hover:bg-white/10"
+                    >
+                      Open
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </div>
+                ) : driveError ? (
+                  <div className="rounded-lg bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                    {driveError}
+                  </div>
+                ) : (
+                  <button
+                    onClick={saveQuestionsToDrive}
+                    disabled={driveLoading || driveSaveInProgress}
+                    className={cn(
+                      'flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
+                      'bg-blue-500/20 text-blue-200 transition hover:bg-blue-500/30',
+                      'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-blue-500/20',
+                    )}
+                  >
+                    {driveLoading ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Uploading…
+                      </>
+                    ) : (
+                      <>
+                        <HardDriveUpload className="h-4 w-4" />
+                        Save to Drive
+                      </>
+                    )}
+                  </button>
+                )}
+
+                <button
+                  onClick={copyQuestionsToClipboard}
+                  className={cn(
+                    'flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
+                    'bg-emerald-500/20 text-emerald-200 transition hover:bg-emerald-500/30',
+                    'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-emerald-500/20',
+                  )}
+                >
+                  {copySuccess ? (
+                    <>
+                      <CheckCircle2 className="h-4 w-4" />
+                      Copied!
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-4 w-4" />
+                      Copy to Clipboard
+                    </>
+                  )}
                 </button>
               </div>
             ) : null}
@@ -559,5 +726,19 @@ function TypingDots() {
       ))}
     </span>
   );
+}
+
+// Splits "Call me Back — 'Iran after the strikes' — with Ray Takeyh" into
+// { show: "Call me Back", title: "'Iran after the strikes' — with Ray Takeyh" }.
+// Tolerates em-dash, en-dash, and hyphen-with-spaces as separators.
+function parsePromptShow(prompt: string): { show: string | null; title: string } {
+  const trimmed = prompt.trim();
+  if (!trimmed) return { show: null, title: '' };
+  const parts = trimmed.split(/\s+[—–-]\s+/);
+  if (parts.length < 2) return { show: null, title: trimmed };
+  return {
+    show: parts[0].trim() || null,
+    title: parts.slice(1).join(' — ').trim(),
+  };
 }
 
