@@ -25,6 +25,9 @@ import {
   X,
 } from 'lucide-react';
 
+import { Header } from '@/components/Header';
+import { ModelSelector, MODELS } from '@/components/ModelSelector';
+import { EmptyState } from '@/components/EmptyState';
 import { ArkLogo } from '@/components/ArkLogo';
 import type {
   PastGuestAppearancesToolOutput,
@@ -40,9 +43,6 @@ import {
   formatBytes,
 } from '@/lib/prep-limits';
 
-const SKY = '#3eb5f9';
-const INK_900 = '#0b153c';
-
 const EXAMPLE_PROMPTS = [
   'Call me Back — "Can Israel Afford Another War?" — with Amos Yadlin',
   'For Heaven\'s Sake — "The Future of American Jewry" — with Bari Weiss',
@@ -55,8 +55,15 @@ type AttachedFile = {
 };
 
 export default function PrepPage() {
+  const [selectedModel, setSelectedModel] = useState(MODELS[1].id);
+
   const { messages, sendMessage, status, stop } = useChat<PrepUIMessage>({
-    transport: new DefaultChatTransport({ api: '/api/prep' }),
+    transport: new DefaultChatTransport({
+      api: '/api/prep',
+      headers: {
+        'x-model': selectedModel,
+      },
+    }),
   });
 
   const [input, setInput] = useState('');
@@ -79,8 +86,7 @@ export default function PrepPage() {
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+    el.style.height = '40px';
   }, [input]);
 
   const onPickFiles = useCallback(
@@ -145,56 +151,45 @@ export default function PrepPage() {
       style={{ fontFamily: 'var(--font-sans)' }}
     >
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* ---------- Header ---------- */}
-        <header className="relative z-10 flex items-center justify-between gap-4 border-b border-white/[0.06] bg-white/[0.02] px-6 py-3 backdrop-blur-md">
-          <div className="flex items-center gap-3">
-            <ArkLogo
-              className="h-9 text-white"
-              bg={SKY}
-              fg={INK_900}
-              markOnly
-            />
-            <div className="leading-tight">
-              <div
-                className="text-[0.95rem] font-black tracking-tight text-white"
-                style={{ fontFamily: 'var(--font-display)' }}
-              >
-                Ark Media
-              </div>
-              <div className="text-[0.72rem] uppercase tracking-[0.22em] text-white/45">
-                Episode Prep
-              </div>
-            </div>
-          </div>
-          <nav className="flex items-center gap-1 text-[0.75rem]">
-            <Link
-              href="/"
-              className="rounded-md px-2.5 py-1 text-white/60 transition hover:bg-white/[0.05] hover:text-white"
-            >
-              Archive
-            </Link>
-            <span className="rounded-md bg-[#3eb5f9]/[0.12] px-2.5 py-1 text-[#79cdfc]">
-              Prep
-            </span>
-            <Link
-              href="/news"
-              className="rounded-md px-2.5 py-1 text-white/60 transition hover:bg-white/[0.05] hover:text-white"
-            >
-              News
-            </Link>
-          </nav>
-        </header>
+        <Header variant="prep" />
 
         {/* ---------- Message list ---------- */}
         <main ref={scrollRef} className="relative flex-1 overflow-y-auto">
-          <div className="mx-auto flex w-full max-w-3xl flex-col gap-7 px-6 py-10">
-            {messages.length === 0 && <EmptyState onPick={submit} busy={busy} />}
+          <div className={cn('mx-auto flex w-full max-w-3xl flex-col gap-7 px-6 py-10', messages.length === 0 && 'min-h-full')}>
+            {messages.length === 0 && (
+              <EmptyState
+                title="Prep the"
+                highlight="next episode"
+                description={
+                  <>
+                    Give an episode title + guest. Get 6–7 questions tagged{' '}
+                    <span className="rounded border border-white/15 bg-white/[0.06] px-1 py-0.5 text-[0.72rem] text-white/70">
+                      open
+                    </span>{' '}
+                    /{' '}
+                    <span className="rounded border border-[#3eb5f9]/30 bg-[#3eb5f9]/[0.12] px-1 py-0.5 text-[0.72rem] text-[#79cdfc]">
+                      therefore
+                    </span>{' '}
+                    /{' '}
+                    <span className="rounded border border-amber-300/30 bg-amber-400/[0.12] px-1 py-0.5 text-[0.72rem] text-amber-200">
+                      but
+                    </span>{' '}
+                    — each building or pivoting on the last.
+                  </>
+                }
+                prompts={EXAMPLE_PROMPTS}
+                onPick={submit}
+                busy={busy}
+                promptLayout="grid"
+                footerNote="Attach prep notes, draft outlines, or past transcripts via the clip icon."
+              />
+            )}
 
             {messages.map((m) => (
               <MessageRow key={m.id} message={m} />
             ))}
 
-            {busy && (
+            {busy ? (
               <div className="flex items-center gap-3 pl-12 text-xs text-white/50">
                 <TypingDots />
                 <span className="tracking-wide">
@@ -209,7 +204,7 @@ export default function PrepPage() {
                   Stop
                 </button>
               </div>
-            )}
+            ) : null}
           </div>
         </main>
 
@@ -251,7 +246,7 @@ export default function PrepPage() {
             )}
             <div
               className={cn(
-                'group flex items-end gap-2 rounded-2xl border bg-white/[0.04] px-3 py-2.5 backdrop-blur',
+                'group flex items-center gap-2 rounded-2xl border bg-white/[0.04] px-3 py-2.5 backdrop-blur',
                 'border-white/10 shadow-[0_12px_40px_-16px_rgba(3,62,200,0.45)]',
                 'transition focus-within:border-[#3eb5f9]/60',
                 'focus-within:shadow-[0_12px_40px_-14px_rgba(62,181,249,0.55)]',
@@ -265,6 +260,29 @@ export default function PrepPage() {
                 onChange={onPickFiles}
                 className="hidden"
               />
+              <ModelSelector selectedModel={selectedModel} onModelChange={setSelectedModel} />
+              <div className="flex-1 min-w-0 flex items-center">
+                <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    submit(input);
+                  }
+                }}
+                rows={1}
+                placeholder="Episode title + guest"
+                disabled={busy}
+                className={cn(
+                  'h-[40px] w-full resize-none bg-transparent px-3 py-1.5',
+                  'text-[0.95rem] leading-relaxed text-white placeholder:text-white/35',
+                  'outline-none disabled:opacity-60 overflow-hidden',
+                )}
+              />
+              </div>
+
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
@@ -279,25 +297,7 @@ export default function PrepPage() {
               >
                 <Paperclip className="h-4 w-4" />
               </button>
-              <textarea
-                ref={textareaRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    submit(input);
-                  }
-                }}
-                rows={1}
-                placeholder="Episode title + guest (e.g. Call me Back — 'Iran after the strikes' — with Ray Takeyh)…"
-                disabled={busy}
-                className={cn(
-                  'min-h-[40px] flex-1 resize-none bg-transparent px-1 py-1.5',
-                  'text-[0.95rem] leading-relaxed text-white placeholder:text-white/35',
-                  'outline-none disabled:opacity-60',
-                )}
-              />
+
               <button
                 type="submit"
                 aria-label="Send"
@@ -561,69 +561,3 @@ function TypingDots() {
   );
 }
 
-function EmptyState({
-  onPick,
-  busy,
-}: {
-  onPick: (q: string) => void;
-  busy: boolean;
-}) {
-  return (
-    <div className="ark-fade-up flex flex-col items-center py-14 text-center">
-      <div className="mb-6 inline-flex h-20 w-20 items-center justify-center rounded-2xl border border-white/10 bg-gradient-to-br from-[#101736] to-[#070b22] shadow-[0_20px_60px_-20px_rgba(62,181,249,0.35)]">
-        <ArkLogo className="h-14" bg="transparent" fg="#3eb5f9" markOnly />
-      </div>
-      <h1
-        className="text-3xl font-black tracking-tight text-white sm:text-4xl"
-        style={{ fontFamily: 'var(--font-display)', letterSpacing: '-0.02em' }}
-      >
-        Prep the{' '}
-        <span className="bg-gradient-to-r from-[#3eb5f9] via-[#79cdfc] to-white bg-clip-text text-transparent">
-          next episode
-        </span>
-        .
-      </h1>
-      <p className="mt-3 max-w-md text-[0.95rem] leading-relaxed text-white/55">
-        Give an episode title + guest. Get 6–7 questions tagged{' '}
-        <span className="rounded border border-white/15 bg-white/[0.06] px-1 py-0.5 text-[0.72rem] text-white/70">
-          open
-        </span>{' '}
-        /{' '}
-        <span className="rounded border border-[#3eb5f9]/30 bg-[#3eb5f9]/[0.12] px-1 py-0.5 text-[0.72rem] text-[#79cdfc]">
-          therefore
-        </span>{' '}
-        /{' '}
-        <span className="rounded border border-amber-300/30 bg-amber-400/[0.12] px-1 py-0.5 text-[0.72rem] text-amber-200">
-          but
-        </span>{' '}
-        — each building or pivoting on the last.
-      </p>
-
-      <div className="mt-8 grid w-full max-w-2xl gap-2 sm:grid-cols-1">
-        {EXAMPLE_PROMPTS.map((q) => (
-          <button
-            key={q}
-            type="button"
-            disabled={busy}
-            onClick={() => onPick(q)}
-            className={cn(
-              'group rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left',
-              'text-[0.88rem] leading-snug text-white/75 transition',
-              'hover:border-[#3eb5f9]/40 hover:bg-[#3eb5f9]/[0.06] hover:text-white',
-              'disabled:cursor-not-allowed disabled:opacity-40',
-            )}
-          >
-            <div className="flex items-start gap-2.5">
-              <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#3eb5f9]/70 transition group-hover:text-[#3eb5f9]" />
-              <span>{q}</span>
-            </div>
-          </button>
-        ))}
-      </div>
-
-      <p className="mt-6 max-w-md text-[0.78rem] leading-relaxed text-white/40">
-        Attach prep notes, draft outlines, or past transcripts via the clip icon.
-      </p>
-    </div>
-  );
-}

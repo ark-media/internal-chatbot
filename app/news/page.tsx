@@ -26,7 +26,9 @@ import {
   Copy,
 } from 'lucide-react';
 
-import { ArkLogo } from '@/components/ArkLogo';
+import { Header } from '@/components/Header';
+import { ModelSelector, MODELS } from '@/components/ModelSelector';
+import { EmptyState } from '@/components/EmptyState';
 import type { NewsUIMessage, NewsSource } from '@/components/news-types';
 import { cn } from '@/lib/cn';
 import {
@@ -36,8 +38,6 @@ import {
   formatBytes,
 } from '@/lib/prep-limits';
 
-const SKY = '#3eb5f9';
-const INK_900 = '#0b153c';
 const AMBER_500 = '#f59e0b';
 
 const EXAMPLE_PROMPTS = [
@@ -60,8 +60,15 @@ type AttachedFile = {
 };
 
 export default function NewsPage() {
+  const [selectedModel, setSelectedModel] = useState(MODELS[1].id);
+
   const { messages, sendMessage, status, stop } = useChat<NewsUIMessage>({
-    transport: new DefaultChatTransport({ api: '/api/news' }),
+    transport: new DefaultChatTransport({
+      api: '/api/news',
+      headers: {
+        'x-model': selectedModel,
+      },
+    }),
   });
 
   const [input, setInput] = useState('');
@@ -92,8 +99,7 @@ export default function NewsPage() {
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+    el.style.height = '40px';
   }, [input]);
 
   const onPickFiles = useCallback(
@@ -236,51 +242,23 @@ export default function NewsPage() {
       style={{ fontFamily: 'var(--font-sans)' }}
     >
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Main content */}
-        {/* Header */}
-        <header className="relative z-10 flex items-center justify-between gap-4 border-b border-white/[0.06] bg-white/[0.02] px-6 py-3 backdrop-blur-md">
-          <div className="flex items-center gap-3">
-            <ArkLogo
-              className="h-9 text-white"
-              bg={SKY}
-              fg={INK_900}
-              markOnly
-            />
-            <div className="leading-tight">
-              <div
-                className="text-[0.95rem] font-black tracking-tight text-white"
-                style={{ fontFamily: 'var(--font-display)' }}
-              >
-                Ark Media
-              </div>
-              <div className="text-[0.72rem] uppercase tracking-[0.22em] text-white/45">
-                News Daily
-              </div>
-            </div>
-          </div>
-          <nav className="flex items-center gap-1 text-[0.75rem]">
-            <Link
-              href="/"
-              className="rounded-md px-2.5 py-1 text-white/60 transition hover:bg-white/[0.05] hover:text-white"
-            >
-              Archive
-            </Link>
-            <Link
-              href="/prep"
-              className="rounded-md px-2.5 py-1 text-white/60 transition hover:bg-white/[0.05] hover:text-white"
-            >
-              Prep
-            </Link>
-            <span className="rounded-md bg-[#3eb5f9]/[0.12] px-2.5 py-1 text-[#79cdfc]">
-              News
-            </span>
-          </nav>
-        </header>
+        <Header variant="news" />
 
         {/* Message list */}
         <main ref={scrollRef} className="relative flex-1 overflow-y-auto">
-          <div className="mx-auto flex w-full max-w-3xl flex-col gap-7 px-6 py-10">
-            {messages.length === 0 ? <EmptyState onPick={submit} busy={busy} /> : null}
+          <div className={cn('mx-auto flex w-full max-w-3xl flex-col gap-7 px-6 py-10', messages.length === 0 && 'min-h-full')}>
+            {messages.length === 0 ? (
+              <EmptyState
+                title="Ark news"
+                highlight="daily"
+                description="Generate a complete daily news script with full sourcing and editorial flags."
+                prompts={EXAMPLE_PROMPTS}
+                onPick={submit}
+                busy={busy}
+                promptLayout="grid"
+                promptLabel="Example outlines:"
+              />
+            ) : null}
 
             {messages.map((m) => (
               <MessageRow
@@ -458,6 +436,29 @@ export default function NewsPage() {
                 onChange={onPickFiles}
                 className="hidden"
               />
+              <ModelSelector selectedModel={selectedModel} onModelChange={setSelectedModel} />
+              <div className="flex-1 min-w-0 flex items-center">
+                <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    submit(input);
+                  }
+                }}
+                rows={1}
+                placeholder="Story outline with article links"
+                disabled={busy}
+                className={cn(
+                  'h-[40px] w-full resize-none bg-transparent px-3 py-1.5',
+                  'text-[0.95rem] leading-relaxed text-white placeholder:text-white/35',
+                  'outline-none disabled:opacity-60 overflow-hidden',
+                )}
+              />
+              </div>
+
               <button
                 type="button"
                 onClick={() => {
@@ -476,25 +477,7 @@ export default function NewsPage() {
               >
                 <Paperclip className="h-4 w-4" />
               </button>
-              <textarea
-                ref={textareaRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    submit(input);
-                  }
-                }}
-                rows={1}
-                placeholder="Story outline with article links (e.g. Lead: Iran War endgame. B: Middle East realignment. C: Passover impacts. Sources: https://wsj.com/… https://cbsnews.com/…)"
-                disabled={busy}
-                className={cn(
-                  'min-h-[40px] flex-1 resize-none bg-transparent px-1 py-1.5',
-                  'text-[0.95rem] leading-relaxed text-white placeholder:text-white/35',
-                  'outline-none disabled:opacity-60',
-                )}
-              />
+
               <button
                 type="submit"
                 aria-label="Send"
@@ -923,37 +906,6 @@ function renderLineWithFootnotes(
   return parts.length > 0 ? parts : text;
 }
 
-function EmptyState({ onPick, busy }: { onPick: (text: string) => void; busy: boolean }) {
-  return (
-    <div className="flex flex-col items-center justify-center py-20 text-center">
-      <div
-        className="mb-4 text-4xl font-black tracking-tight text-white"
-        style={{ fontFamily: 'var(--font-display)' }}
-      >
-        Ark News Daily
-      </div>
-      <p className="mb-8 text-white/60">Generate a complete daily news script with full sourcing and editorial flags.</p>
-      <div className="space-y-2">
-        <div className="text-[0.75rem] uppercase tracking-[0.15em] text-white/40">Example outlines:</div>
-        {EXAMPLE_PROMPTS.map((prompt, i) => (
-          <button
-            key={i}
-            onClick={() => onPick(prompt)}
-            disabled={busy}
-            className={cn(
-              'block max-w-md rounded-lg border border-white/10 bg-white/[0.02] px-4 py-2.5',
-              'text-left text-[0.85rem] text-white/70 transition',
-              'hover:border-white/20 hover:bg-white/[0.05] hover:text-white',
-              'disabled:opacity-50 disabled:cursor-not-allowed',
-            )}
-          >
-            {prompt}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 function TypingDots() {
   return (

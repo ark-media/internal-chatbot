@@ -281,6 +281,7 @@ export async function POST(req: Request) {
   }
 
   const { messages }: { messages: UIMessage[] } = await req.json();
+  const model = req.headers.get('x-model') || 'anthropic/claude-sonnet-4-6';
   const uploadError = validateUploads(messages);
   if (uploadError) {
     return new Response(uploadError, {
@@ -293,7 +294,7 @@ export async function POST(req: Request) {
   const started = Date.now();
 
   const result = streamText({
-    model: 'anthropic/claude-sonnet-4-6',
+    model,
     system: {
       role: 'system',
       content: prepSystemPrompt(today),

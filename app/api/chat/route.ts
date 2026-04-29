@@ -512,6 +512,7 @@ export async function POST(req: Request) {
   }
 
   const { messages }: { messages: UIMessage[] } = await req.json();
+  const model = req.headers.get('x-model') || 'anthropic/claude-sonnet-4-6';
   const userText = lastUserText(messages);
   const queryHash = hashQuery(userText);
   const started = Date.now();
@@ -664,7 +665,7 @@ export async function POST(req: Request) {
   };
 
   const result = streamText({
-    model: 'anthropic/claude-sonnet-4-6',
+    model,
     system: {
       role: 'system',
       content: system,
