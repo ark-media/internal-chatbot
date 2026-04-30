@@ -32,6 +32,7 @@ import {
 
 import { Header } from '@/components/Header';
 import { ModelSelector, MODELS } from '@/components/ModelSelector';
+import { ChatErrorBanner } from '@/components/ChatErrorBanner';
 import { EmptyState } from '@/components/EmptyState';
 import { ArkLogo } from '@/components/ArkLogo';
 import type {
@@ -41,6 +42,7 @@ import type {
   WebSearchToolOutput,
 } from '@/components/prep-types';
 import { cn } from '@/lib/cn';
+import { chatFetch } from '@/lib/chat-fetch';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
 import {
   MAX_FILES,
@@ -96,20 +98,22 @@ function PrepBody({
 }) {
   const [selectedModel, setSelectedModel] = useState(MODELS[1].id);
 
-  const { messages, sendMessage, status, stop } = useChat<PrepUIMessage>({
-    id: chatId,
-    messages: initialMessages,
-    transport: new DefaultChatTransport({
-      api: '/api/prep',
-      headers: {
-        'x-model': selectedModel,
+  const { messages, sendMessage, status, stop, error, regenerate, clearError } =
+    useChat<PrepUIMessage>({
+      id: chatId,
+      messages: initialMessages,
+      transport: new DefaultChatTransport({
+        api: '/api/prep',
+        fetch: chatFetch,
+        headers: {
+          'x-model': selectedModel,
+        },
+        body: { chatId },
+      }),
+      onFinish: () => {
+        notifyChatUpdated();
       },
-      body: { chatId },
-    }),
-    onFinish: () => {
-      notifyChatUpdated();
-    },
-  });
+    });
 
   const [input, setInput] = useState('');
   const [files, setFiles] = useState<AttachedFile[]>([]);
@@ -335,6 +339,16 @@ function PrepBody({
                 </button>
               </div>
             ) : null}
+
+            <ChatErrorBanner
+              error={error}
+              onRetry={() => {
+                clearError();
+                regenerate();
+              }}
+              onDismiss={clearError}
+              className="ml-12"
+            />
 
             {!busy && messages.length > 0 && messages[messages.length - 1]?.role === 'assistant' ? (
               <div className="mt-4 flex flex-col gap-3 border-t border-white/10 pt-4">

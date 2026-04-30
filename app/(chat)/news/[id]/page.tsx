@@ -29,9 +29,11 @@ import {
 
 import { Header } from '@/components/Header';
 import { ModelSelector, MODELS } from '@/components/ModelSelector';
+import { ChatErrorBanner } from '@/components/ChatErrorBanner';
 import { EmptyState } from '@/components/EmptyState';
 import type { NewsUIMessage, NewsSource } from '@/components/news-types';
 import { cn } from '@/lib/cn';
+import { chatFetch } from '@/lib/chat-fetch';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
 import {
   MAX_FILES,
@@ -97,20 +99,22 @@ function NewsBody({
 }) {
   const [selectedModel, setSelectedModel] = useState(MODELS[1].id);
 
-  const { messages, sendMessage, status, stop } = useChat<NewsUIMessage>({
-    id: chatId,
-    messages: initialMessages,
-    transport: new DefaultChatTransport({
-      api: '/api/news',
-      headers: {
-        'x-model': selectedModel,
+  const { messages, sendMessage, status, stop, error, regenerate, clearError } =
+    useChat<NewsUIMessage>({
+      id: chatId,
+      messages: initialMessages,
+      transport: new DefaultChatTransport({
+        api: '/api/news',
+        fetch: chatFetch,
+        headers: {
+          'x-model': selectedModel,
+        },
+        body: { chatId },
+      }),
+      onFinish: () => {
+        notifyChatUpdated();
       },
-      body: { chatId },
-    }),
-    onFinish: () => {
-      notifyChatUpdated();
-    },
-  });
+    });
 
   const [input, setInput] = useState('');
   const [files, setFiles] = useState<AttachedFile[]>([]);
@@ -323,6 +327,15 @@ function NewsBody({
                 </button>
               </div>
             ) : null}
+
+            <ChatErrorBanner
+              error={error}
+              onRetry={() => {
+                clearError();
+                regenerate();
+              }}
+              onDismiss={clearError}
+            />
 
             {messages.length > 0 && messages[messages.length - 1]?.role === 'assistant' ? (
               <div className="mt-4 flex flex-col gap-3 border-t border-white/10 pt-4">

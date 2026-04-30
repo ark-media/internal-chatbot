@@ -18,6 +18,7 @@ import { ArrowUp, Loader2, Square, Sparkles, FileText, ChevronRight, Copy, Check
 import { MessageText } from '@/components/MessageText';
 import { SourcePanel } from '@/components/SourcePanel';
 import { ModelSelector, MODELS } from '@/components/ModelSelector';
+import { ChatErrorBanner } from '@/components/ChatErrorBanner';
 import { Header } from '@/components/Header';
 import { EmptyState } from '@/components/EmptyState';
 import { ArkLogo } from '@/components/ArkLogo';
@@ -31,6 +32,7 @@ import type {
   TopGuestsToolOutput,
 } from '@/components/chat-types';
 import { cn } from '@/lib/cn';
+import { chatFetch } from '@/lib/chat-fetch';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
 
 const EXAMPLE_PROMPTS = [
@@ -76,20 +78,22 @@ function ChatBody({
 }) {
   const [selectedModel, setSelectedModel] = useState(MODELS[1].id);
 
-  const { messages, sendMessage, status, stop } = useChat<ChatUIMessage>({
-    id: chatId,
-    messages: initialMessages,
-    transport: new DefaultChatTransport({
-      api: '/api/chat',
-      headers: {
-        'x-model': selectedModel,
+  const { messages, sendMessage, status, stop, error, regenerate, clearError } =
+    useChat<ChatUIMessage>({
+      id: chatId,
+      messages: initialMessages,
+      transport: new DefaultChatTransport({
+        api: '/api/chat',
+        fetch: chatFetch,
+        headers: {
+          'x-model': selectedModel,
+        },
+        body: { chatId },
+      }),
+      onFinish: () => {
+        notifyChatUpdated();
       },
-      body: { chatId },
-    }),
-    onFinish: () => {
-      notifyChatUpdated();
-    },
-  });
+    });
 
   const [input, setInput] = useState('');
   const [openPanel, setOpenPanel] = useState<PanelView | null>(null);
@@ -343,6 +347,16 @@ function ChatBody({
                 </button>
               </div>
             )}
+
+            <ChatErrorBanner
+              error={error}
+              onRetry={() => {
+                clearError();
+                regenerate();
+              }}
+              onDismiss={clearError}
+              className="ml-12"
+            />
           </div>
         </main>
 
