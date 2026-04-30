@@ -2,6 +2,7 @@ import {
   convertToModelMessages,
   createUIMessageStream,
   createUIMessageStreamResponse,
+  safeValidateUIMessages,
   stepCountIs,
   streamText,
   tool,
@@ -21,6 +22,11 @@ import {
   formatBytes,
 } from '@/lib/prep-limits';
 import { checkRateLimit } from '@/lib/rate-limit';
+import {
+  ensureChatTables,
+  persistAssistantMessage,
+  persistIncomingMessages,
+} from '@/lib/chats';
 import type { PrepUIMessage } from '@/components/prep-types';
 
 export const runtime = 'nodejs';
@@ -258,6 +264,7 @@ function decodeDataUrl(url: string): string | null {
 
 export async function POST(req: Request) {
   await ensureTable();
+  await ensureChatTables();
 
   const ip =
     req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
@@ -280,7 +287,17 @@ export async function POST(req: Request) {
     }
   }
 
-  const { messages }: { messages: UIMessage[] } = await req.json();
+  const body = (await req.json()) as { messages?: unknown; chatId?: string };
+  const chatId = typeof body.chatId === 'string' ? body.chatId : undefined;
+
+  const validated = await safeValidateUIMessages<UIMessage>({ messages: body.messages });
+  if (!validated.success) {
+    return new Response(
+      JSON.stringify({ error: 'invalid_messages', detail: validated.error.message }),
+      { status: 400, headers: { 'content-type': 'application/json' } },
+    );
+  }
+  const messages = validated.data;
   const model = req.headers.get('x-model') || 'anthropic/claude-sonnet-4-6';
   const uploadError = validateUploads(messages);
   if (uploadError) {
@@ -289,6 +306,24 @@ export async function POST(req: Request) {
       headers: { 'content-type': 'text/plain; charset=utf-8' },
     });
   }
+
+  if (chatId) {
+    try {
+      await persistIncomingMessages({
+        chatId,
+        surface: 'prep',
+        messages: messages.map((m) => ({
+          id: m.id,
+          role: m.role,
+          parts: (m.parts ?? []) as Array<{ type: string; [key: string]: unknown }>,
+        })),
+        redactFiles: true,
+      });
+    } catch (err) {
+      console.warn(JSON.stringify({ event: 'prep.persist_user_error', err: String(err) }));
+    }
+  }
+
   const normalized = normalizeMessages(messages);
   const today = new Date().toISOString().slice(0, 10);
   const started = Date.now();
@@ -325,6 +360,7 @@ export async function POST(req: Request) {
   });
 
   const stream = createUIMessageStream<PrepUIMessage>({
+    originalMessages: messages as PrepUIMessage[],
     execute: ({ writer }) => {
       writer.merge(
         result.toUIMessageStream<PrepUIMessage>({
@@ -332,6 +368,22 @@ export async function POST(req: Request) {
           sendReasoning: false,
         }),
       );
+    },
+    onFinish: async ({ responseMessage }) => {
+      if (!chatId) return;
+      try {
+        await persistAssistantMessage({
+          chatId,
+          message: {
+            id: responseMessage.id,
+            role: responseMessage.role,
+            parts: (responseMessage.parts ?? []) as Array<{ type: string; [key: string]: unknown }>,
+          },
+          redactFiles: true,
+        });
+      } catch (err) {
+        console.warn(JSON.stringify({ event: 'prep.persist_assistant_error', err: String(err) }));
+      }
     },
   });
 

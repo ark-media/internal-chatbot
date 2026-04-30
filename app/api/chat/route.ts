@@ -3,6 +3,7 @@ import {
   convertToModelMessages,
   createUIMessageStream,
   createUIMessageStreamResponse,
+  safeValidateUIMessages,
   stepCountIs,
   streamText,
   tool,
@@ -25,6 +26,11 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { routeQuery, type RoutedQuery } from '@/lib/router';
 import type { ChatUIMessage, PreloadedSources } from '@/components/chat-types';
 import { ensureTable, getCached, setCached, cacheKey } from '@/lib/tool-cache';
+import {
+  ensureChatTables,
+  persistAssistantMessage,
+  persistIncomingMessages,
+} from '@/lib/chats';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -489,6 +495,7 @@ function buildDisambiguationBlock(
 
 export async function POST(req: Request) {
   await ensureTable();
+  await ensureChatTables();
 
   const ip =
     req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
@@ -511,7 +518,29 @@ export async function POST(req: Request) {
     }
   }
 
-  const { messages }: { messages: UIMessage[] } = await req.json();
+  const body = (await req.json()) as { messages?: unknown; chatId?: string };
+  const chatId = typeof body.chatId === 'string' ? body.chatId : undefined;
+
+  const validated = await safeValidateUIMessages<UIMessage>({ messages: body.messages });
+  if (!validated.success) {
+    return new Response(
+      JSON.stringify({ error: 'invalid_messages', detail: validated.error.message }),
+      { status: 400, headers: { 'content-type': 'application/json' } },
+    );
+  }
+  const messages = validated.data;
+
+  if (chatId) {
+    try {
+      await persistIncomingMessages({
+        chatId,
+        surface: 'archive',
+        messages: messages.map((m) => ({ id: m.id, role: m.role, parts: m.parts ?? [] })),
+      });
+    } catch (err) {
+      console.warn(JSON.stringify({ event: 'chat.persist_user_error', err: String(err) }));
+    }
+  }
   const model = req.headers.get('x-model') || 'anthropic/claude-sonnet-4-6';
   const userText = lastUserText(messages);
   const queryHash = hashQuery(userText);
@@ -748,6 +777,7 @@ export async function POST(req: Request) {
   });
 
   const stream = createUIMessageStream<ChatUIMessage>({
+    originalMessages: messages as ChatUIMessage[],
     execute: ({ writer }) => {
       if (preloaded.chunks.length > 0 || preloaded.turns.length > 0) {
         writer.write({ type: 'data-preloaded', data: preloaded });
@@ -758,6 +788,21 @@ export async function POST(req: Request) {
           sendReasoning: false,
         }),
       );
+    },
+    onFinish: async ({ responseMessage }) => {
+      if (!chatId) return;
+      try {
+        await persistAssistantMessage({
+          chatId,
+          message: {
+            id: responseMessage.id,
+            role: responseMessage.role,
+            parts: (responseMessage.parts ?? []) as Array<{ type: string; [key: string]: unknown }>,
+          },
+        });
+      } catch (err) {
+        console.warn(JSON.stringify({ event: 'chat.persist_assistant_error', err: String(err) }));
+      }
     },
   });
 

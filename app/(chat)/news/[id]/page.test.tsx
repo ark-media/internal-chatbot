@@ -13,6 +13,22 @@ vi.mock('@ai-sdk/react', () => ({
   }),
 }));
 
+// Mock useParams so the chat-id gate resolves; mock fetch so initial-message
+// loading completes immediately with an empty list.
+vi.mock('next/navigation', () => ({
+  useParams: () => ({ id: 'test-chat-id' }),
+}));
+
+beforeEach(() => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ messages: [] }),
+    }),
+  );
+});
+
 describe('NewsPage - File Attachment Regression Test', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -22,8 +38,11 @@ describe('NewsPage - File Attachment Regression Test', () => {
     render(<NewsPage />);
 
     // Get the hidden file input
-    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
-    expect(fileInput).toBeInTheDocument();
+    const fileInput = await waitFor(() => {
+      const el = document.querySelector('input[type="file"]') as HTMLInputElement | null;
+      if (!el) throw new Error('file input not yet rendered');
+      return el;
+    });
 
     // Create a test file
     const testFile = new File(['test content'], 'article.md', { type: 'text/markdown' });
@@ -52,7 +71,11 @@ describe('NewsPage - File Attachment Regression Test', () => {
   it('should show success message when files are attached', async () => {
     render(<NewsPage />);
 
-    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const fileInput = await waitFor(() => {
+      const el = document.querySelector('input[type="file"]') as HTMLInputElement | null;
+      if (!el) throw new Error('file input not yet rendered');
+      return el;
+    });
     const testFile = new File(['content'], 'outline.txt', { type: 'text/plain' });
 
     const dataTransfer = new DataTransfer();
@@ -74,7 +97,11 @@ describe('NewsPage - File Attachment Regression Test', () => {
   it('should handle multiple file attachments', async () => {
     render(<NewsPage />);
 
-    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const fileInput = await waitFor(() => {
+      const el = document.querySelector('input[type="file"]') as HTMLInputElement | null;
+      if (!el) throw new Error('file input not yet rendered');
+      return el;
+    });
     const file1 = new File(['content1'], 'article1.txt', { type: 'text/plain' });
     const file2 = new File(['content2'], 'article2.txt', { type: 'text/plain' });
 
@@ -104,7 +131,11 @@ describe('NewsPage - File Attachment Regression Test', () => {
   it('should display file size information', async () => {
     render(<NewsPage />);
 
-    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const fileInput = await waitFor(() => {
+      const el = document.querySelector('input[type="file"]') as HTMLInputElement | null;
+      if (!el) throw new Error('file input not yet rendered');
+      return el;
+    });
     const testFile = new File(['a'.repeat(1024)], 'large.txt', { type: 'text/plain' }); // 1KB file
 
     const dataTransfer = new DataTransfer();
