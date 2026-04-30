@@ -24,6 +24,8 @@ function unauthorized(): Response {
 export function proxy(request: NextRequest): Response | undefined {
   const { pathname } = request.nextUrl;
   if (pathname === '/api/health') return;
+  // Cron routes authenticate via CRON_SECRET in the route handler itself.
+  if (pathname.startsWith('/api/cron/')) return;
 
   const expected = process.env.CHATBOT_PASSWORD;
   const username = process.env.CHATBOT_USERNAME || 'team';
