@@ -6,7 +6,6 @@ import {
   useRef,
   useState,
   type ChangeEvent,
-  type FormEvent,
 } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
@@ -15,7 +14,6 @@ import { useParams } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
-  ArrowUp,
   CheckCircle2,
   Copy,
   ExternalLink,
@@ -23,7 +21,6 @@ import {
   Globe,
   HardDriveUpload,
   Loader2,
-  Paperclip,
   Search,
   Sparkles,
   Square,
@@ -31,7 +28,8 @@ import {
 } from 'lucide-react';
 
 import { Header } from '@/components/Header';
-import { ModelSelector, MODELS } from '@/components/ModelSelector';
+import { MODELS } from '@/components/ModelSelector';
+import { ChatComposer } from '@/components/ChatComposer';
 import { ChatErrorBanner } from '@/components/ChatErrorBanner';
 import { EmptyState } from '@/components/EmptyState';
 import { ArkLogo } from '@/components/ArkLogo';
@@ -127,8 +125,6 @@ function PrepBody({
   const [copySuccess, setCopySuccess] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const busy = status === 'submitted' || status === 'streaming';
 
@@ -138,12 +134,6 @@ function PrepBody({
       behavior: 'smooth',
     });
   }, [messages, busy]);
-
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = '40px';
-  }, [input]);
 
   const onPickFiles = useCallback(
     (e: ChangeEvent<HTMLInputElement>) => {
@@ -200,11 +190,6 @@ function PrepBody({
     setDriveMatchedShow(null);
     setDriveFallback(false);
     setCopySuccess(false);
-  };
-
-  const onSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    submit(input);
   };
 
   const extractQuestionsText = useCallback(() => {
@@ -427,119 +412,59 @@ function PrepBody({
         </main>
 
         {/* ---------- Composer ---------- */}
-        <form
-          onSubmit={onSubmit}
-          className="relative z-10 border-t border-white/[0.06] bg-gradient-to-b from-transparent to-[#070b22]/60 px-6 py-4 backdrop-blur-md"
-        >
-          <div className="mx-auto max-w-3xl">
-            {files.length > 0 && (
-              <div className="mb-2 flex flex-wrap gap-1.5">
-                {files.map((f) => (
-                  <div
-                    key={f.id}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1 text-[0.72rem] text-white/75"
-                  >
-                    <FileText className="h-3 w-3 text-[#3eb5f9]" />
-                    <span className="max-w-[240px] truncate">{f.file.name}</span>
-                    <span className="text-white/35">{formatBytes(f.file.size)}</span>
-                    <button
-                      type="button"
-                      onClick={() => removeFile(f.id)}
-                      className="ml-0.5 rounded p-0.5 text-white/45 transition hover:bg-white/10 hover:text-white"
-                      aria-label={`Remove ${f.file.name}`}
+        <ChatComposer
+          input={input}
+          onInputChange={setInput}
+          onSubmit={() => submit(input)}
+          placeholder="Episode title + guest"
+          selectedModel={selectedModel}
+          onModelChange={setSelectedModel}
+          busy={busy}
+          canSubmit={input.trim().length > 0 || files.length > 0}
+          footerHint={`Enter to send · Shift + Enter for newline · Up to ${MAX_FILES} files, ${formatBytes(MAX_FILE_BYTES)} each`}
+          fileAttach={{
+            accept:
+              '.pdf,.md,.txt,.csv,.tsv,.json,.yml,.yaml,.png,.jpg,.jpeg,.gif,.webp,application/pdf,text/markdown,text/plain,text/csv,application/json,image/*',
+            multiple: true,
+            onPick: onPickFiles,
+            ariaLabel: 'Attach files',
+            tooltip: 'Attach prep notes, transcripts, or outlines',
+          }}
+          attachments={
+            <>
+              {files.length > 0 && (
+                <div className="mb-2 flex flex-wrap gap-1.5">
+                  {files.map((f) => (
+                    <div
+                      key={f.id}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1 text-[0.72rem] text-white/75"
                     >
-                      <X className="h-3 w-3" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            {uploadError && (
-              <div
-                role="alert"
-                className="mb-2 rounded-lg border border-amber-300/30 bg-amber-400/[0.08] px-3 py-2 text-[0.78rem] text-amber-100"
-              >
-                Some files were not attached — {uploadError}.
-              </div>
-            )}
-            <div
-              className={cn(
-                'group flex items-center gap-2 rounded-2xl border bg-white/[0.04] px-3 py-2.5 backdrop-blur',
-                'border-white/10 shadow-[0_12px_40px_-16px_rgba(3,62,200,0.45)]',
-                'transition focus-within:border-[#3eb5f9]/60',
-                'focus-within:shadow-[0_12px_40px_-14px_rgba(62,181,249,0.55)]',
+                      <FileText className="h-3 w-3 text-[#3eb5f9]" />
+                      <span className="max-w-[240px] truncate">{f.file.name}</span>
+                      <span className="text-white/35">{formatBytes(f.file.size)}</span>
+                      <button
+                        type="button"
+                        onClick={() => removeFile(f.id)}
+                        className="ml-0.5 rounded p-0.5 text-white/45 transition hover:bg-white/10 hover:text-white"
+                        aria-label={`Remove ${f.file.name}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
               )}
-            >
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                accept=".pdf,.md,.txt,.csv,.tsv,.json,.yml,.yaml,.png,.jpg,.jpeg,.gif,.webp,application/pdf,text/markdown,text/plain,text/csv,application/json,image/*"
-                onChange={onPickFiles}
-                className="hidden"
-              />
-              <ModelSelector selectedModel={selectedModel} onModelChange={setSelectedModel} />
-              <div className="flex-1 min-w-0 flex items-center">
-                <textarea
-                ref={textareaRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    submit(input);
-                  }
-                }}
-                rows={1}
-                placeholder="Episode title + guest"
-                disabled={busy}
-                className={cn(
-                  'h-[40px] w-full resize-none bg-transparent px-3 py-1.5',
-                  'text-[0.95rem] leading-relaxed text-white placeholder:text-white/35',
-                  'outline-none disabled:opacity-60 overflow-hidden',
-                )}
-              />
-              </div>
-
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={busy}
-                className={cn(
-                  'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl',
-                  'text-white/60 transition hover:bg-white/[0.06] hover:text-white',
-                  'disabled:cursor-not-allowed disabled:opacity-40',
-                )}
-                aria-label="Attach files"
-                title="Attach prep notes, transcripts, or outlines"
-              >
-                <Paperclip className="h-4 w-4" />
-              </button>
-
-              <button
-                type="submit"
-                aria-label="Send"
-                disabled={busy || (!input.trim() && files.length === 0)}
-                className={cn(
-                  'group/btn relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl',
-                  'text-[#070b22] transition',
-                  'bg-[#3eb5f9] hover:bg-[#79cdfc]',
-                  'shadow-[0_6px_20px_-6px_rgba(62,181,249,0.7)]',
-                  'disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-white/30 disabled:shadow-none',
-                )}
-              >
-                {busy ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <ArrowUp className="h-4 w-4" strokeWidth={2.5} />
-                )}
-              </button>
-            </div>
-            <div className="mt-2 px-1 text-[0.68rem] uppercase tracking-[0.2em] text-white/30">
-              Enter to send · Shift + Enter for newline · Up to {MAX_FILES} files, {formatBytes(MAX_FILE_BYTES)} each
-            </div>
-          </div>
-        </form>
+              {uploadError && (
+                <div
+                  role="alert"
+                  className="mb-2 rounded-lg border border-amber-300/30 bg-amber-400/[0.08] px-3 py-2 text-[0.78rem] text-amber-100"
+                >
+                  Some files were not attached — {uploadError}.
+                </div>
+              )}
+            </>
+          }
+        />
     </div>
   );
 }
