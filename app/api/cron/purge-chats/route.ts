@@ -1,6 +1,17 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
+
 import { ensureChatTables, purgeExpired } from '@/lib/chats';
 
 export const runtime = 'nodejs';
+
+// Constant-time string compare. Hashing both sides to a fixed-length digest
+// before comparing means timingSafeEqual never throws on length mismatch and
+// the comparison itself doesn't leak length or content via timing.
+function safeEqual(a: string, b: string): boolean {
+  const ah = createHash('sha256').update(a).digest();
+  const bh = createHash('sha256').update(b).digest();
+  return timingSafeEqual(ah, bh);
+}
 
 function authorized(req: Request): boolean {
   const expected = process.env.CRON_SECRET;
@@ -14,7 +25,7 @@ function authorized(req: Request): boolean {
   }
   const header = req.headers.get('authorization');
   if (!header) return false;
-  return header === `Bearer ${expected}`;
+  return safeEqual(header, `Bearer ${expected}`);
 }
 
 async function run(req: Request) {
