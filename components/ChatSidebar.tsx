@@ -7,7 +7,11 @@ import { Plus, Trash2, MessageSquare } from 'lucide-react';
 
 import { ArkLogo } from '@/components/ArkLogo';
 import { cn } from '@/lib/cn';
-import { useChatUpdates } from '@/lib/chat-refresh';
+import {
+  clearChatDeleting,
+  markChatDeleting,
+  useChatUpdates,
+} from '@/lib/chat-refresh';
 import {
   SURFACES,
   activeChatId,
@@ -21,8 +25,6 @@ type ChatSummary = {
   title: string | null;
   updated_at: string;
 };
-
-const PENDING_DELETE_TIMEOUT_MS = 3000;
 
 export function ChatSidebar() {
   const pathname = usePathname();
@@ -40,7 +42,6 @@ export function ChatSidebar() {
 
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [loading, setLoading] = useState(true);
-  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
 
   const refresh = useCallback(async (surface: Surface) => {
     try {
@@ -65,49 +66,33 @@ export function ChatSidebar() {
   }, [refresh, viewSurface]);
   useChatUpdates(onUpdated);
 
-  useEffect(() => {
-    if (!pendingDelete) return;
-    const t = window.setTimeout(
-      () => setPendingDelete(null),
-      PENDING_DELETE_TIMEOUT_MS,
-    );
-    return () => window.clearTimeout(t);
-  }, [pendingDelete]);
-
   const newChatHref = useMemo(
     () => SURFACES.find((s) => s.key === viewSurface)?.href ?? '/',
     [viewSurface],
-  );
-
-  const onDelete = useCallback(
-    async (chatId: string) => {
-      const wasActive = pathname?.includes(`/${chatId}`);
-      try {
-        await fetch(`/api/chats/${chatId}?confirm=1`, { method: 'DELETE' });
-      } catch {
-        return;
-      }
-      setChats((prev) => prev.filter((c) => c.id !== chatId));
-      if (wasActive) {
-        const home = SURFACES.find((s) => s.key === viewSurface)?.href ?? '/';
-        router.push(home);
-      }
-    },
-    [pathname, router, viewSurface],
   );
 
   const handleDeleteClick = useCallback(
     (e: React.MouseEvent, chatId: string) => {
       e.preventDefault();
       e.stopPropagation();
-      if (pendingDelete === chatId) {
-        setPendingDelete(null);
-        onDelete(chatId);
-      } else {
-        setPendingDelete(chatId);
+      const wasActive = activeChatId(pathname, viewSurface) === chatId;
+      if (wasActive) {
+        // Swap the main viewer for a loader before nav so the deleted chat's
+        // messages don't render through the transition.
+        markChatDeleting(chatId);
+        const home = SURFACES.find((s) => s.key === viewSurface)?.href ?? '/';
+        router.push(home);
       }
+      setChats((prev) => prev.filter((c) => c.id !== chatId));
+      fetch(`/api/chats/${chatId}?confirm=1`, { method: 'DELETE' })
+        .catch(() => {
+          refresh(viewSurface);
+        })
+        .finally(() => {
+          clearChatDeleting(chatId);
+        });
     },
-    [onDelete, pendingDelete],
+    [pathname, refresh, router, viewSurface],
   );
 
   const activeId = activeChatId(pathname, viewSurface);
@@ -174,7 +159,6 @@ export function ChatSidebar() {
               const base = SURFACES.find((s) => s.key === viewSurface)?.chatHrefBase ?? '/chat';
               const href = `${base}/${c.id}`;
               const isActive = c.id === activeId;
-              const isPendingDelete = pendingDelete === c.id;
               return (
                 <li key={c.id} className="group relative">
                   <Link
@@ -196,19 +180,10 @@ export function ChatSidebar() {
                   </Link>
                   <button
                     type="button"
-                    aria-label={
-                      isPendingDelete
-                        ? `Confirm delete chat ${c.title ?? c.id}`
-                        : `Delete chat ${c.title ?? c.id}`
-                    }
-                    title={isPendingDelete ? 'Click again to confirm' : 'Delete'}
+                    aria-label={`Delete chat ${c.title ?? c.id}`}
+                    title="Delete"
                     onClick={(e) => handleDeleteClick(e, c.id)}
-                    className={cn(
-                      'absolute right-1.5 top-1.5 rounded p-1 transition',
-                      isPendingDelete
-                        ? 'bg-red-500/25 text-red-200 opacity-100'
-                        : 'text-white/40 opacity-0 group-hover:opacity-100 hover:bg-red-500/15 hover:text-red-300',
-                    )}
+                    className="absolute right-1.5 top-1.5 rounded p-1 text-white/40 opacity-0 transition group-hover:opacity-100 hover:bg-red-500/15 hover:text-red-300"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
