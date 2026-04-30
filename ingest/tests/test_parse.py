@@ -114,6 +114,82 @@ class FormatATimestampedSpeakersTests(unittest.TestCase):
 
         self.assertEqual([t.speaker for t in episode.turns], ["Alice"])
 
+    def test_non_timestamp_brackets_are_not_stripped(self):
+        # Lock in: only digit-shaped brackets get stripped. A name-with-tag
+        # like "Alice [editor]" would survive unchanged (vanishing edge case
+        # but worth pinning down).
+        body = (
+            "Show: Test\n"
+            "Title: T\n"
+            "Date: 2026-01-01\n"
+            "Hosts: Alice [editor]\n"
+            "\n"
+            "Alice [editor]\n"
+            "\n"
+            "Body.\n"
+        )
+        with tempfile.TemporaryDirectory() as d:
+            path = _write(Path(d), "simplecast_brackets.txt", body)
+            episode = parse_transcript(path)
+
+        self.assertEqual([t.speaker for t in episode.turns], ["Alice [editor]"])
+
+
+class FormatANoDiarizationTests(unittest.TestCase):
+    """When diarization fails, the upstream renderer emits standalone [ts]
+    markers and no Hosts: header. The parser must skip the markers and
+    attribute body text to a fallback speaker so content isn't dropped.
+    """
+
+    def test_skips_standalone_timestamp_markers(self):
+        body = (
+            "Show: Test\n"
+            "Title: No diarization\n"
+            "Date: 2026-04-30\n"
+            "Hosts: Alice\n"
+            "\n"
+            "[00:00]\n"
+            "First sentence. Mid sentence.\n"
+            "\n"
+            "[05:05]\n"
+            "After five minutes.\n"
+        )
+        with tempfile.TemporaryDirectory() as d:
+            path = _write(Path(d), "simplecast_nodiar.txt", body)
+            episode = parse_transcript(path)
+
+        # Markers stripped; both bodies attributed to the host.
+        self.assertEqual([t.speaker for t in episode.turns], ["Alice", "Alice"])
+        self.assertEqual(
+            [t.text for t in episode.turns],
+            ["First sentence. Mid sentence.", "After five minutes."],
+        )
+
+    def test_orphan_body_falls_back_to_unknown_when_no_hosts_header(self):
+        # The renderer's no-diarization branch omits Hosts: entirely. Without
+        # the Unknown fallback, this content would be silently dropped.
+        body = (
+            "Show: Test\n"
+            "Title: No header hosts\n"
+            "Date: 2026-04-30\n"
+            "\n"
+            "[00:00]\n"
+            "First sentence.\n"
+            "\n"
+            "[05:05]\n"
+            "Second sentence.\n"
+        )
+        with tempfile.TemporaryDirectory() as d:
+            path = _write(Path(d), "simplecast_nohosts.txt", body)
+            episode = parse_transcript(path)
+
+        self.assertEqual(episode.hosts, [])
+        self.assertEqual([t.speaker for t in episode.turns], ["Unknown", "Unknown"])
+        self.assertEqual(
+            [t.text for t in episode.turns],
+            ["First sentence.", "Second sentence."],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

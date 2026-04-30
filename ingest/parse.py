@@ -43,10 +43,21 @@ from pathlib import Path
 # Some transcripts have "INTERVIEW:" and others just "INTERVIEW".
 FORMAT_A_SECTION_RE = re.compile(r"^[A-Z][A-Z0-9 \-'&]{1,40}:?$")
 FORMAT_B_SPEAKER_RE = re.compile(r"^([A-Z][A-Za-z0-9_ .\-]*?):$")
+# Standalone timestamp marker — emitted by the no-diarization fallback in the
+# upstream renderer. Skipped in both Format A and Format B as navigation noise.
 # [MM:SS] for short episodes, [H:MM:SS] for episodes >=1h.
-FORMAT_B_TIMESTAMP_RE = re.compile(r"^\[\d{1,2}(?::\d{2}){1,2}\]$")
+TIMESTAMP_LINE_RE = re.compile(r"^\[\d{1,2}(?::\d{2}){1,2}\]$")
+FORMAT_B_TIMESTAMP_RE = TIMESTAMP_LINE_RE
 # Trailing block-start marker on Format A speaker labels, e.g. "Yonatan Adiri [12:34]".
+# Cross-repo contract: this regex must match the format produced by
+# transcripts/src/transcriber.py:_format_timestamp. If the renderer changes
+# the marker shape, update this regex too — otherwise every block becomes a
+# unique canonical speaker and pollutes the speakers table.
 SPEAKER_TIMESTAMP_SUFFIX_RE = re.compile(r"\s*\[\d{1,2}(?::\d{2}){1,2}\]$")
+# Last-resort speaker name when a transcript lacks a Hosts: header (e.g. the
+# no-diarization fallback) and orphan body text appears with no speaker label.
+# Without this, that body would be silently dropped.
+UNKNOWN_SPEAKER = "Unknown"
 HEADER_KEYS = ("Show", "Title", "Date", "Hosts")
 
 
@@ -129,9 +140,12 @@ def _parse_format_a(lines: list[str], episode_id: str) -> Episode:
     pending_speaker: str | None = None
     pending_lines: list[str] = []
     # Some transcripts have orphan body text with no preceding speaker label
-    # (e.g. the cold-open monologue sitting under an INTERVIEW section marker).
-    # The first listed host is almost always the narrator in these cases.
-    fallback_speaker = episode.hosts[0] if episode.hosts else None
+    # (e.g. the cold-open monologue sitting under an INTERVIEW section marker,
+    # or the no-diarization fallback which has no speaker labels at all).
+    # The first listed host is almost always the narrator; if no Hosts: header
+    # exists, attribute to UNKNOWN_SPEAKER so content reaches the vector DB
+    # instead of being silently dropped.
+    fallback_speaker = episode.hosts[0] if episode.hosts else UNKNOWN_SPEAKER
 
     def flush() -> None:
         nonlocal pending_speaker, pending_lines
@@ -148,6 +162,12 @@ def _parse_format_a(lines: list[str], episode_id: str) -> Episode:
         raw = lines[i]
         stripped = raw.strip()
         if not stripped:
+            i += 1
+            continue
+
+        # Standalone timestamp marker (no-diarization fallback emits these).
+        # Drop without flushing so adjacent text blocks merge into one turn.
+        if TIMESTAMP_LINE_RE.match(stripped):
             i += 1
             continue
 
