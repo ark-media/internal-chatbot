@@ -16,9 +16,21 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Schema migrations
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+The transcripts/chunks pipeline schema is in `ingest/sql/001_init.sql` (applied via the Python ingest bootstrap). Subsequent migrations live alongside it:
+
+- `ingest/sql/002_chat_history.sql` — `chats` + `chat_messages` for the saved-chats sidebar (7-day retention).
+
+Apply manually:
+
+```bash
+psql "$DATABASE_URL" -f ingest/sql/002_chat_history.sql
+```
+
+The chat route handlers also self-heal via `ensureChatTables()` on first request, so a missed migration won't 500 — but applying explicitly avoids one slow cold-start request per Lambda.
+
+The daily TTL purge runs at `app/api/cron/purge-chats` on the Vercel cron schedule in `vercel.json`. It requires `CRON_SECRET` in the environment; see `.env.example`.
 
 ## Learn More
 
