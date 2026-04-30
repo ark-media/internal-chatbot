@@ -7,6 +7,7 @@ export type Source = {
   kind: 'chunk' | 'turn' | 'episode';
   id: number | string;
   key: string; // "id:<n>" | "turn:<n>" | "ep:<episode_id>"
+  episode_id: string; // anchors links into /transcript/<episode_id>
   title: string;
   show: string;
   date: string | null;

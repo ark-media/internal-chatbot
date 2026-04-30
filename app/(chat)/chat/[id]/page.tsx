@@ -6,18 +6,18 @@ import {
   useMemo,
   useRef,
   useState,
-  type FormEvent,
   type ReactNode,
 } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { ArrowUp, Loader2, Square, Sparkles, FileText, ChevronRight, Copy, CheckCircle2 } from 'lucide-react';
+import { Square, Sparkles, FileText, ChevronRight, Copy, CheckCircle2 } from 'lucide-react';
 
 import { MessageText } from '@/components/MessageText';
 import { SourcePanel } from '@/components/SourcePanel';
-import { ModelSelector, MODELS } from '@/components/ModelSelector';
+import { MODELS } from '@/components/ModelSelector';
+import { ChatComposer } from '@/components/ChatComposer';
 import { ChatErrorBanner } from '@/components/ChatErrorBanner';
 import { Header } from '@/components/Header';
 import { EmptyState } from '@/components/EmptyState';
@@ -128,7 +128,6 @@ function ChatBody({
   }, [extractAnswerText]);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -152,11 +151,16 @@ function ChatBody({
       for (const part of m.parts) {
         if (part.type === 'data-preloaded') {
           for (const c of part.data.chunks) {
+            if (!c.episode_id) {
+              console.warn(`Dropping chunk ${c.id} with missing episode_id`);
+              continue;
+            }
             const key = `id:${c.id}`;
             map.set(key, {
               kind: 'chunk',
               id: c.id,
               key,
+              episode_id: c.episode_id,
               title: c.title,
               show: c.show,
               date: c.date,
@@ -167,11 +171,16 @@ function ChatBody({
             });
           }
           for (const t of part.data.turns) {
+            if (!t.episode_id) {
+              console.warn(`Dropping turn ${t.id} with missing episode_id`);
+              continue;
+            }
             const key = `turn:${t.id}`;
             map.set(key, {
               kind: 'turn',
               id: t.id,
               key,
+              episode_id: t.episode_id,
               title: t.episode_title,
               show: t.show,
               date: t.date,
@@ -185,11 +194,16 @@ function ChatBody({
         if (part.type === 'tool-lookupCorpus' && 'output' in part && part.output) {
           const out = part.output as LookupToolOutput;
           for (const c of out.chunks ?? []) {
+            if (!c.episode_id) {
+              console.warn(`Dropping chunk ${c.id} with missing episode_id`);
+              continue;
+            }
             const key = `id:${c.id}`;
             map.set(key, {
               kind: 'chunk',
               id: c.id,
               key,
+              episode_id: c.episode_id,
               title: c.title,
               show: c.show,
               date: c.date,
@@ -203,11 +217,16 @@ function ChatBody({
         if (part.type === 'tool-getDossier' && 'output' in part && part.output) {
           const out = part.output as DossierToolOutput;
           for (const t of out.turns ?? []) {
+            if (!t.episode_id) {
+              console.warn(`Dropping turn ${t.id} with missing episode_id`);
+              continue;
+            }
             const key = `turn:${t.id}`;
             map.set(key, {
               kind: 'turn',
               id: t.id,
               key,
+              episode_id: t.episode_id,
               title: t.episode_title,
               show: t.show,
               date: t.date,
@@ -225,11 +244,16 @@ function ChatBody({
         ) {
           const out = part.output as CountGuestAppearancesToolOutput;
           for (const ep of out.episodes ?? []) {
+            if (!ep.episode_id) {
+              console.warn('Dropping episode with missing episode_id');
+              continue;
+            }
             const key = `ep:${ep.episode_id}`;
             map.set(key, {
               kind: 'episode',
               id: ep.episode_id,
               key,
+              episode_id: ep.episode_id,
               title: ep.title,
               show: out.showName ?? '',
               date: ep.date,
@@ -254,22 +278,11 @@ function ChatBody({
     });
   }, [messages, busy]);
 
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = '40px';
-  }, [input]);
-
   const submit = (text: string) => {
     const q = text.trim();
     if (!q || busy) return;
     sendMessage({ text: q });
     setInput('');
-  };
-
-  const onSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    submit(input);
   };
 
   return (
@@ -361,67 +374,17 @@ function ChatBody({
         </main>
 
         {/* ---------- Composer ---------- */}
-        <form
-          onSubmit={onSubmit}
-          className="relative z-10 border-t border-white/[0.06] bg-gradient-to-b from-transparent to-[#070b22]/60 px-6 py-4 backdrop-blur-md"
-        >
-          <div className="mx-auto max-w-3xl">
-            <div
-              className={cn(
-                'group flex items-center gap-2 rounded-2xl border bg-white/[0.04] px-3 py-2.5 backdrop-blur',
-                'border-white/10 shadow-[0_12px_40px_-16px_rgba(3,62,200,0.45)]',
-                'transition focus-within:border-[#3eb5f9]/60',
-                'focus-within:shadow-[0_12px_40px_-14px_rgba(62,181,249,0.55)]',
-              )}
-            >
-              <ModelSelector selectedModel={selectedModel} onModelChange={setSelectedModel} />
-
-              <div className="flex-1 min-w-0 flex items-center">
-                <textarea
-                ref={textareaRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    submit(input);
-                  }
-                }}
-                rows={1}
-                placeholder="Ask about past episodes…"
-                disabled={busy}
-                className={cn(
-                  'h-[40px] w-full resize-none bg-transparent px-3 py-1.5',
-                  'text-[0.95rem] leading-relaxed text-white placeholder:text-white/35',
-                  'outline-none disabled:opacity-60 overflow-hidden',
-                )}
-              />
-              </div>
-
-              <button
-                type="submit"
-                aria-label="Send"
-                disabled={busy || !input.trim()}
-                className={cn(
-                  'group/btn relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl',
-                  'text-[#070b22] transition',
-                  'bg-[#3eb5f9] hover:bg-[#79cdfc]',
-                  'shadow-[0_6px_20px_-6px_rgba(62,181,249,0.7)]',
-                  'disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-white/30 disabled:shadow-none',
-                )}
-              >
-                {busy ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <ArrowUp className="h-4 w-4" strokeWidth={2.5} />
-                )}
-              </button>
-            </div>
-            <div className="mt-2 px-1 text-[0.68rem] uppercase tracking-[0.2em] text-white/30">
-              Enter to send · Shift + Enter for newline
-            </div>
-          </div>
-        </form>
+        <ChatComposer
+          input={input}
+          onInputChange={setInput}
+          onSubmit={() => submit(input)}
+          placeholder="Ask about past episodes…"
+          selectedModel={selectedModel}
+          onModelChange={setSelectedModel}
+          busy={busy}
+          canSubmit={input.trim().length > 0}
+          footerHint="Enter to send · Shift + Enter for newline"
+        />
       </div>
 
       {openPanel && (

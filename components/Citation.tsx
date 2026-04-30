@@ -2,17 +2,19 @@
 
 import type { Source } from './chat-types';
 import { cn } from '@/lib/cn';
+import { citationChipLabel } from '@/lib/citation-label';
 
 type Props = {
   kind: 'id' | 'turn';
   id: number;
   source: Source | undefined;
   onOpen: (source: Source) => void;
+  // Shared "today" so every chip in a render computes the same year-boundary,
+  // and so a New Year boundary mid-session can't make sibling chips disagree.
+  today?: Date;
 };
 
-export function Citation({ kind, id, source, onOpen }: Props) {
-  const label = kind === 'turn' ? `t${id}` : String(id);
-
+export function Citation({ kind, id, source, onOpen, today }: Props) {
   if (!source) {
     console.warn(`Citation missing source: ${kind}:${id}`);
     return (
@@ -24,10 +26,12 @@ export function Citation({ kind, id, source, onOpen }: Props) {
         )}
         title={`missing source ${kind}:${id}`}
       >
-        {label}⚠
+        {kind === 'turn' ? `t${id}` : id}⚠
       </span>
     );
   }
+
+  const label = citationChipLabel(source, today);
 
   const title =
     source.kind === 'turn'
@@ -60,7 +64,7 @@ export function Citation({ kind, id, source, onOpen }: Props) {
       className={cn(
         'group mx-0.5 inline-flex cursor-pointer items-center gap-0.5 rounded-md border',
         'px-1.5 py-0.5 align-baseline',
-        'font-mono text-[0.85em] font-semibold leading-tight tracking-tight',
+        'text-[0.78em] font-semibold leading-tight tracking-tight whitespace-nowrap',
         'transition-all duration-150 ease-out',
         'hover:-translate-y-[2px] hover:shadow-md',
         'focus:outline-none focus-visible:ring-2',

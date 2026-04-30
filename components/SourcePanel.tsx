@@ -1,7 +1,9 @@
 'use client';
 
-import { X, ExternalLink } from 'lucide-react';
+import Link from 'next/link';
+import { X, ExternalLink, FileText } from 'lucide-react';
 import type { PanelView, Source } from './chat-types';
+import { transcriptHref } from '@/lib/transcript-href';
 
 type Props = {
   panel: PanelView | null;
@@ -54,11 +56,13 @@ function SourceBody({
       : source.kind === 'episode'
         ? 'Episode'
         : 'Excerpt';
+  // Numeric DB ids are useful for chunks/turns; episode_ids are long opaque
+  // strings that just clutter the badge, so episodes show no trailing tag.
   const tag =
     source.kind === 'turn'
       ? `t${source.id}`
       : source.kind === 'episode'
-        ? 'ep'
+        ? null
         : `${source.id}`;
 
   return (
@@ -75,7 +79,7 @@ function SourceBody({
                     : 'inline-flex items-center rounded-md border border-[#3eb5f9]/30 bg-[#3eb5f9]/10 px-1.5 py-0.5 font-mono text-[0.65rem] font-semibold uppercase tracking-wider text-[#79cdfc]'
               }
             >
-              {labelKind} · {tag}
+              {tag ? `${labelKind} · ${tag}` : labelKind}
             </span>
           </div>
           <div
@@ -113,19 +117,26 @@ function SourceBody({
         )}
       </div>
 
-      {source.drive_url && (
-        <footer className="relative border-t border-white/10 px-5 py-3">
+      <footer className="relative flex items-center justify-between gap-3 border-t border-white/10 px-5 py-3">
+        <Link
+          href={transcriptHref(source)}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-[#3eb5f9]/10 px-3 py-1.5 text-sm font-medium text-[#79cdfc] transition hover:bg-[#3eb5f9]/20 hover:text-white"
+        >
+          <FileText className="h-3.5 w-3.5" />
+          Open in transcript
+        </Link>
+        {source.drive_url ? (
           <a
             href={source.drive_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[#3eb5f9]/10 px-3 py-1.5 text-sm font-medium text-[#79cdfc] transition hover:bg-[#3eb5f9]/20 hover:text-white"
+            className="inline-flex items-center gap-1 text-xs text-white/45 transition hover:text-white/80"
           >
-            Open full transcript in Drive
-            <ExternalLink className="h-3.5 w-3.5" />
+            Drive
+            <ExternalLink className="h-3 w-3" />
           </a>
-        </footer>
-      )}
+        ) : null}
+      </footer>
     </>
   );
 }

@@ -26,6 +26,7 @@ type Ctx = {
   sources: Map<string, Source>;
   onOpen: (s: Source) => void;
   keyRef: { n: number };
+  today: Date;
 };
 
 function splitCitations(text: string, ctx: Ctx): ReactNode[] {
@@ -55,6 +56,7 @@ function splitCitations(text: string, ctx: Ctx): ReactNode[] {
             id={id}
             source={ctx.sources.get(key)}
             onOpen={ctx.onOpen}
+            today={ctx.today}
           />,
         );
       }
@@ -89,7 +91,10 @@ type Props = {
 };
 
 export function MessageText({ text, sources, onOpen }: Props) {
-  const ctx: Ctx = { sources, onOpen, keyRef: { n: 0 } };
+  // One Date per message render so all chips agree on the year boundary,
+  // even if the user has the page open across midnight.
+  const today = new Date();
+  const ctx: Ctx = { sources, onOpen, keyRef: { n: 0 }, today };
 
   return (
     <div className="ark-prose">
