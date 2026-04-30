@@ -43,7 +43,10 @@ from pathlib import Path
 # Some transcripts have "INTERVIEW:" and others just "INTERVIEW".
 FORMAT_A_SECTION_RE = re.compile(r"^[A-Z][A-Z0-9 \-'&]{1,40}:?$")
 FORMAT_B_SPEAKER_RE = re.compile(r"^([A-Z][A-Za-z0-9_ .\-]*?):$")
-FORMAT_B_TIMESTAMP_RE = re.compile(r"^\[\d{1,2}:\d{2}\]$")
+# [MM:SS] for short episodes, [H:MM:SS] for episodes >=1h.
+FORMAT_B_TIMESTAMP_RE = re.compile(r"^\[\d{1,2}(?::\d{2}){1,2}\]$")
+# Trailing block-start marker on Format A speaker labels, e.g. "Yonatan Adiri [12:34]".
+SPEAKER_TIMESTAMP_SUFFIX_RE = re.compile(r"\s*\[\d{1,2}(?::\d{2}){1,2}\]$")
 HEADER_KEYS = ("Show", "Title", "Date", "Hosts")
 
 
@@ -165,7 +168,10 @@ def _parse_format_a(lines: list[str], episode_id: str) -> Episode:
         )
         if is_speaker_line:
             flush()
-            pending_speaker = stripped
+            # Strip trailing "[12:34]" / "[1:23:45]" block-start markers so the
+            # canonical speaker name is stable across blocks — otherwise every
+            # block becomes a unique speaker and pollutes the speakers table.
+            pending_speaker = SPEAKER_TIMESTAMP_SUFFIX_RE.sub("", stripped).strip()
             i += 1
             while i < len(lines) and not lines[i].strip():
                 i += 1
