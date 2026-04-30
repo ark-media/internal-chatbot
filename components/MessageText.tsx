@@ -11,62 +11,31 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Source } from './chat-types';
 import { Citation } from './Citation';
-
-// Match any bracket that contains at least one id:N or turn:N reference.
-// Examples handled:
-//   [id:1]                       → 1 chip
-//   [id:1,2,3]                   → 3 chips
-//   [turn:4, 5]                  → 2 chips
-//   [turn:8368, id:2985]         → 2 chips (mixed kinds in one bracket)
-//   [id:1, turn:2,3]             → 3 chips
-const BRACKET_RE = /\[[^\]]*(?:id|turn):\s*\d+[^\]]*\]/g;
-const INNER_RE = /(id|turn):\s*(\d+(?:\s*,\s*\d+)*)/g;
+import { parseCitations } from '@/lib/citation-parser';
 
 type Ctx = {
   sources: Map<string, Source>;
-  onOpen: (s: Source) => void;
+  onOpen: (s: Source, quote?: string) => void;
   keyRef: { n: number };
   today: Date;
 };
 
 function splitCitations(text: string, ctx: Ctx): ReactNode[] {
-  const nodes: ReactNode[] = [];
-  let lastIndex = 0;
-  let bracket: RegExpExecArray | null;
-  BRACKET_RE.lastIndex = 0;
-  while ((bracket = BRACKET_RE.exec(text)) !== null) {
-    if (bracket.index > lastIndex) {
-      nodes.push(text.slice(lastIndex, bracket.index));
-    }
-    const inner = bracket[0];
-    INNER_RE.lastIndex = 0;
-    let ref: RegExpExecArray | null;
-    while ((ref = INNER_RE.exec(inner)) !== null) {
-      const [, kind, idsStr] = ref;
-      const ids = idsStr
-        .split(',')
-        .map((s) => Number(s.trim()))
-        .filter((n) => Number.isFinite(n));
-      for (const id of ids) {
-        const key = `${kind}:${id}`;
-        nodes.push(
-          <Citation
-            key={`cit-${ctx.keyRef.n++}`}
-            kind={kind as 'id' | 'turn'}
-            id={id}
-            source={ctx.sources.get(key)}
-            onOpen={ctx.onOpen}
-            today={ctx.today}
-          />,
-        );
-      }
-    }
-    lastIndex = bracket.index + bracket[0].length;
-  }
-  if (lastIndex < text.length) {
-    nodes.push(text.slice(lastIndex));
-  }
-  return nodes;
+  return parseCitations(text).map((token) => {
+    if (token.type === 'text') return token.text;
+    const key = `${token.kind}:${token.id}`;
+    return (
+      <Citation
+        key={`cit-${ctx.keyRef.n++}`}
+        kind={token.kind}
+        id={token.id}
+        source={ctx.sources.get(key)}
+        quote={token.quote}
+        onOpen={ctx.onOpen}
+        today={ctx.today}
+      />
+    );
+  });
 }
 
 function walk(children: ReactNode, ctx: Ctx): ReactNode {
@@ -87,7 +56,7 @@ function walk(children: ReactNode, ctx: Ctx): ReactNode {
 type Props = {
   text: string;
   sources: Map<string, Source>;
-  onOpen: (source: Source) => void;
+  onOpen: (source: Source, quote?: string) => void;
 };
 
 export function MessageText({ text, sources, onOpen }: Props) {

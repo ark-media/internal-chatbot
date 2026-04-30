@@ -1,8 +1,10 @@
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ExternalLink } from 'lucide-react';
+import { ArrowLeft, ExternalLink } from 'lucide-react';
 
 import { Header } from '@/components/Header';
 import { TranscriptScroll } from '@/components/TranscriptScroll';
+import { HighlightedText } from '@/components/HighlightedText';
 import {
   getChunkRange,
   getEpisodeMeta,
@@ -16,8 +18,18 @@ export const runtime = 'nodejs';
 
 type Props = {
   params: Promise<{ episode_id: string }>;
-  searchParams: Promise<{ turn?: string; chunk?: string }>;
+  searchParams: Promise<{ turn?: string; chunk?: string; quote?: string }>;
 };
+
+// Tolerate already-decoded values: a malformed escape like '%' alone would
+// throw URIError, so fall back to the raw segment in that case.
+function safeDecode(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
 
 // `?turn=1.7` or `?turn=-3` would slip past Number.isFinite. Only positive
 // integers correspond to real SERIAL ids.
@@ -28,7 +40,11 @@ function parsePositiveInt(raw: string | undefined): number | null {
 }
 
 export default async function TranscriptPage({ params, searchParams }: Props) {
-  const { episode_id } = await params;
+  const { episode_id: rawEpisodeId } = await params;
+  // Next 16 hands the raw segment through without URL-decoding, so reserved
+  // characters in episode_ids (e.g. the ':' in 'simplecast:<uuid>') arrive as
+  // '%3A' and miss the DB lookup unless we decode them ourselves.
+  const episode_id = safeDecode(rawEpisodeId);
   const sp = await searchParams;
 
   const [episode, turns] = await Promise.all([
@@ -68,6 +84,8 @@ export default async function TranscriptPage({ params, searchParams }: Props) {
     turnId >= highlightStart &&
     turnId <= highlightEnd;
 
+  const quote = typeof sp.quote === 'string' ? sp.quote : undefined;
+
   const sectionStart = new Array<boolean>(turns.length);
   for (let i = 0; i < turns.length; i++) {
     const prev = i === 0 ? undefined : turns[i - 1].section;
@@ -84,6 +102,13 @@ export default async function TranscriptPage({ params, searchParams }: Props) {
       <main className="relative flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-3xl px-6 py-10">
           <header className="mb-8 border-b border-white/[0.06] pb-6">
+            <Link
+              href="/"
+              className="mb-4 inline-flex items-center gap-1.5 text-[0.78rem] text-white/55 transition hover:text-white"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Back to chat
+            </Link>
             <div className="text-[0.7rem] uppercase tracking-[0.22em] text-white/45">
               <span className="text-[#79cdfc]">{episode.show}</span>
               {headerDate ? (
@@ -148,7 +173,9 @@ export default async function TranscriptPage({ params, searchParams }: Props) {
                       {t.speaker}
                     </div>
                     <div className="whitespace-pre-wrap text-[0.95rem] leading-[1.65] text-white/85">
-                      {t.text}
+                      {highlighted
+                        ? <HighlightedText text={t.text} quote={quote} />
+                        : t.text}
                     </div>
                   </article>
                 </div>

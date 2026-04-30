@@ -8,13 +8,17 @@ type Props = {
   kind: 'id' | 'turn';
   id: number;
   source: Source | undefined;
-  onOpen: (source: Source) => void;
+  // Verbatim substring the model attached to this citation, used by the
+  // panel/transcript view to pinpoint the exact passage. Only set when the
+  // model emitted [id:N "..."] / [turn:N "..."] for a single-ref citation.
+  quote?: string;
+  onOpen: (source: Source, quote?: string) => void;
   // Shared "today" so every chip in a render computes the same year-boundary,
   // and so a New Year boundary mid-session can't make sibling chips disagree.
   today?: Date;
 };
 
-export function Citation({ kind, id, source, onOpen, today }: Props) {
+export function Citation({ kind, id, source, quote, onOpen, today }: Props) {
   if (!source) {
     console.warn(`Citation missing source: ${kind}:${id}`);
     return (
@@ -55,10 +59,7 @@ export function Citation({ kind, id, source, onOpen, today }: Props) {
   return (
     <button
       type="button"
-      onClick={() => {
-        console.log(`Opening citation ${kind}:${id}`, source);
-        onOpen(source);
-      }}
+      onClick={() => onOpen(source, quote)}
       title={title}
       aria-label={`Open source ${label}: ${title}`}
       className={cn(

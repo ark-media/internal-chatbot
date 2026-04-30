@@ -81,15 +81,33 @@ export type EpisodeRef = {
 };
 
 // Discriminated union of views that can occupy the right-side panel.
+// `transcript` carries an optional `previous` so the panel back button can
+// restore the source-excerpt view it was opened from instead of just closing.
+//
+// `quote` (on source/transcript views) is the verbatim substring the model
+// attached to a single-ref citation; it lets the renderer pinpoint the exact
+// passage inside an otherwise-turn-level highlight.
 export type PanelView =
-  | { view: 'source'; source: Source }
+  | { view: 'source'; source: Source; quote?: string }
   | {
       view: 'guest_episodes';
       speakerName: string;
       scope: string; // e.g. "Call me Back", "Call me Back group", "all shows"
       dateRange: string | null;
       episodes: EpisodeRef[];
+    }
+  | {
+      view: 'transcript';
+      episode_id: string;
+      turnId: number | null;
+      chunkId: number | null;
+      quote?: string;
+      previous: PanelSimpleView | null;
     };
+
+// `transcript` panels remember where they came from but cannot themselves be
+// the previous view (no nested back stacks).
+export type PanelSimpleView = Exclude<PanelView, { view: 'transcript' }>;
 
 // Evidence the server pre-loads (router-driven dossier or pre-retrieval) and
 // surfaces to the client as a `data-preloaded` UI part. Without this, the

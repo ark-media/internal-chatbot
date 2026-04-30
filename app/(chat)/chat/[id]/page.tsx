@@ -100,8 +100,8 @@ function ChatBody({
   const [episodeCount, setEpisodeCount] = useState<number | null>(null);
   const [copySuccess, setCopySuccess] = useState(false);
 
-  const openSource = useCallback((source: Source) => {
-    setOpenPanel({ view: 'source', source });
+  const openSource = useCallback((source: Source, quote?: string) => {
+    setOpenPanel({ view: 'source', source, quote });
   }, []);
 
   const extractAnswerText = useCallback(() => {
@@ -110,8 +110,11 @@ function ChatBody({
     const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') ?? [];
     if (textParts.length === 0) return null;
     const combined = textParts.map((p) => (p.type === 'text' ? p.text : '')).join('\n');
-    // Strip citation brackets like [id:123] or [turn:456]
-    return combined.replace(/\[\s*(?:id|turn):\s*\d+(?:\s*,\s*\d+)*\s*\]/g, '').trim();
+    // Strip citation brackets like [id:123], [turn:456], or the quoted form
+    // [id:123 "..."] / [turn:456 "..."].
+    return combined
+      .replace(/\[\s*(?:id|turn):\s*\d+(?:\s*,\s*\d+)*(?:\s+"[^"]*")?\s*\]/g, '')
+      .trim();
   }, [messages]);
 
   const copyToClipboard = useCallback(async () => {
@@ -388,7 +391,11 @@ function ChatBody({
       </div>
 
       {openPanel && (
-        <SourcePanel panel={openPanel} onClose={() => setOpenPanel(null)} />
+        <SourcePanel
+          panel={openPanel}
+          onClose={() => setOpenPanel(null)}
+          onChange={setOpenPanel}
+        />
       )}
     </div>
   );
@@ -401,7 +408,7 @@ function ChatBody({
 type MsgProps = {
   message: ReturnType<typeof useChat>['messages'][number];
   sources: Map<string, Source>;
-  onOpen: (s: Source) => void;
+  onOpen: (s: Source, quote?: string) => void;
   onOpenPanel: (panel: PanelView) => void;
 };
 
