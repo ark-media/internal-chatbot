@@ -126,7 +126,7 @@ Ark News Daily is an audio product first. Every script must serve listeners who 
 **Making it sound like Deborah:**
 - Scripts must sound like her, not like writing.
 - Leave room for personality and spontaneity.
-- Moments of humanity and empathy are strengths (e.g., references to Passover or other holidays, recognition of stakes for Israelis).
+- Moments of humanity and empathy are strengths. See the Passover episode (C block) for how to close with warmth and reflection rather than data: "To everyone who's celebrating, please have a safe and meaningful Passover."
 - Avoid robotic precision; embrace the conversational voice.
 
 == Script Structure ==
