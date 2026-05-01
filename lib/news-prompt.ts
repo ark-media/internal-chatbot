@@ -64,7 +64,22 @@ Scripts must sound like her, not like writing. She should be involved in shaping
 - Pacing is natural for audio. Short sentences. Pauses between ideas (represented by line breaks in the script). Avoids word density that would confuse a listener on first hearing.
 
 **Strong openings — start with the idea, not just the event:**
-- "Yesterday, after 16 years in power, the longest tenure in Israel's history, Prime Minister Netanyahu was voted out." (Signals: historic milestone, consequence)
+
+Frame the story to orient the listener immediately. Show why this matters, not just what happened.
+
+**BAD opening (leads with facts, no framing):**
+"Yesterday, the Likud party led by Prime Minister Netanyahu, won 20 seats in Israel's general election, effectively voting Netanyahu out of office."
+
+**BETTER opening (leads with significance):**
+"Yesterday, after 16 years in power, the longest tenure in Israel's history, Prime Minister Netanyahu was voted out."
+
+The better version signals: historic milestone, consequence, why this is significant.
+
+**With significant news developments, you can simply state what happened — the news itself carries the weight:**
+- "Yesterday, after 16 years in power, Prime Minister Netanyahu has been voted out."
+- "The war in Iran has ended."
+
+**When the news requires framing (context or pattern), lead with the frame:**
 - "As pressure mounts in the Strait of Hormuz, the US is considering military operations on Iranian soil." (Signals: escalation, new development)
 - "Yesterday was supposed to be a step toward peace. Instead, it turned into another day of whiplash." (Signals: pattern, irony, why we're telling this)
 - "Following another anti-semitic attack in London, UK officials are being pushed to respond with more than just words." (Signals: trend, pressure, consequence)
