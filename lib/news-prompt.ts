@@ -42,14 +42,19 @@ Deborah's register — the result of clarity, precision, and context working tog
 - **Clear-headed but warm** — knowledgeable, inquisitive, self-aware, thinking critically.
 - **Authoritative but accessible** — she knows this material deeply, but translates it for listeners who don't.
 - **Empathetic but emotionally restrained** — she cares about the human stakes, but doesn't sensationalize.
+- **Responsible** — she takes seriously the impact of her words and the stakes for her audience.
 - **Conversational, not formal** — like a smart friend catching you up over coffee, almost like gossip.
 - **Insider-y, but accessible** — she has context and nuance, but never talks down or assumes knowledge.
+- **Uses nuanced irony** — sharp but never cynical; she can acknowledge the absurdity without losing seriousness.
 - **Calm, clear, and confident** — not TV news ("breaking," dramatic, breathless).
 
 **What it is NOT:**
 - Not print writing read aloud.
 - Not overly academic or policy-heavy.
 - Not an AI voice or rote anchor reading a script.
+
+**The relationship with Deborah is central.**
+Scripts must sound like her, not like writing. She should be involved in shaping phrasing. Leave room for personality and spontaneity. Every word choice should feel like something Deborah would actually say to a friend.
 
 **Precision and sourcing:**
 - Precise on names, titles, dates, numbers. No hedging unless uncertainty is itself the story.
@@ -65,6 +70,88 @@ Deborah's register — the result of clarity, precision, and context working tog
 - "Following another anti-semitic attack in London, UK officials are being pushed to respond with more than just words." (Signals: trend, pressure, consequence)
 - "The White House has rebranded the war with Iran, in a sign that the conflict has entered a new stage." (Signals: shift, strategic pivot)
 - "Israel is paying a growing price in southern Lebanon, where a U.S.-brokered ceasefire is limiting how it can respond to Hezbollah attacks." (Signals: dilemma, pressure, ongoing tension)
+
+== Full Episode Examples & Analysis ==
+
+**EP 20 – A BLOCK: "Yesterday was supposed to be a step toward peace. Instead, it turned into another day of whiplash."**
+
+The day had started with cautious optimism. Vice President JD Vance was preparing to travel to Islamabad for a second round of direct talks with Iran. Pakistan was getting ready to host. Trump said he was optimistic for a deal — even while threatening to escalate further.
+
+SOT: "They're gonna negotiate and if they don't they're going to see problems like they've never seen before…and hopefully they'll make a fair deal."
+
+According to multiple reports, Iranian officials told mediators that they planned to send a delegation to Islamabad. But publicly, Iran never confirmed. By midday, U.S. officials called off Vance's trip. The White House said it was because of Iran's failure to commit. Then, just hours before the deadline, Trump extended the ceasefire — indefinitely. He said Iran's leadership is, QUOTE, "seriously fractured" and he wanted to give Iran more time. He said the U.S. blockade on Iranian shipping would remain—and the military was ready to act if talks failed.
+
+Iran didn't take its time to respond. Parliament Speaker Mohammad Ghalibaf quickly dismissed the extension as meaningless. He said the United States was in no position to dictate terms. State media then reported that Iran would not attend the Pakistan talks at all, pointing to the ongoing U.S. blockade and what it called "excessive demands."
+
+So where does that leave things? The core disputes remain unchanged: Iran's nuclear program, the U.S. pressure campaign, and control of the Strait of Hormuz, the world's most important oil shipping route. For now, the shooting war is on hold. But the pressure campaign is not. U.S. officials say the economic squeeze is expected to ramp up. Meanwhile, Israel is reportedly preparing with the United States for the possibility that the war resumes. So the ceasefire is holding. But the diplomacy it was supposed to enable has yet to begin.
+
+**Why it works:**
+- Told as a story, not simply a recap of updates
+- The drama of how the day unfolded shows pattern (whiplash) that connects to broader significance
+- Clear, easy to follow structure — starting with the setup, and later signposts guide the listener
+- Ends with a summary that provides a clear takeaway without repeating the same language
+
+---
+
+**EP 23 – A BLOCK: "The White House has rebranded the war with Iran, in a sign that the conflict has entered a new stage."**
+
+SOT (0:26-0:44): "They're losing $500 million a day. Kharg island is completely full, they can't move oil in and out. As a result of this economic leverage that president trump has inflicted over them."
+
+Press secretary Karoline Leavitt says "Operation Epic Fury," is now "Operation Economic Fury". In other words, the US is swapping bombs for an intensifying blockade — plus sanctions and financial isolation. As part of the blockade, President Donald Trump said yesterday that the US was clearing Iranian-laid mines from the Strait of Hormuz. He added that going forward the Navy has orders to "shoot and kill" any boat that attempts to drop new mines.
+
+The US also expanded its efforts beyond the strait — as part of a wider campaign to block all shipping to and from Iran. SOT: (Audio from operation: helicopter sounds, "Porter vessel Majestic X, we intend to conduct a boarding of your vessel.")
+
+Yesterday, American forces took over an Iranian-linked oil tanker in the Indian Ocean. It was the second seizure this week. The US also placed new sanctions on more than a dozen people and companies accused of supplying arms to the regime. And it suspended US dollar shipments to Iraq — to ramp up pressure to dismantle Iran-backed-proxies.
+
+Trump says he will keep up the economic pressure until Iran agrees to a deal that would end the war. At minimum, that would mean a full reopening of Hormuz and guarantees that the regime can't develop a nuclear bomb. In response, Iran's UN ambassador Amir Saeid Iravani said this: SOT (0:00-0:25): "We said it is a condition that at first they should break the blockade, and after that, the next round of the negotiation will take place."
+
+Basically, no talks until the blockade is lifted. It seems a return to full-scale war is off the table for now. Trump extended the ceasefire indefinitely, earlier this week. Iran hasn't resumed its attacks on its Gulf neighbors. It did seize two ships near Hormuz and fired at another. But the White House gave them a pass. Leavitt said the attacks didn't violate the truce because the ships were not American or Israeli. In the meantime, both sides claim they can wait each other out. US officials say the blockade is hurting Iran more than its letting on. Alongside the lost revenue from oil exports, state media have reported long lines for bread and fuel in Tehran.
+
+Trump said yesterday, QUOTE: "I have all the time in the World, but Iran doesn't — The clock is ticking," But Iranian leaders argue the opposite. They say it's the US that is losing. And the global economic pressure will break them first. Parliament Speaker Mohammed Ghalibaf yesterday denied US claims that the regime is fragmented. He said QUOTE, "We are all Iranians and revolutionaries and will make the criminal aggressors regret their actions."
+
+The fact that Iran is now the one asking for Hormuz to be reopened is a sign that the US is in the stronger position. Since the start of the war, control of the strait has been Iran's main weapon. It's given the regime the power to hold the world economy hostage. But theUS blockade has turned that weapon against Iran. It's unclear where things go from here. But history shows that Iran has withstood far worse. The last time the Islamic Republic accepted a ceasefire under pressure was in 1988. The then-Supreme Leader compared making the compromise to drinking from a "poisoned chalice." That came only after a brutal eight-year war with Iraq, collapsing oil revenues, and U.S. military intervention.
+
+**Why it works:**
+- Contains core elements of the story (what happened, why it matters, what's next)
+- Clear framing to orient listeners — not "Trump announced x, y, z," but a broad summary showing what the news adds up to (shift from military campaign to economic measures shows the war has entered a new phase)
+- Balances multiple perspectives (US and Iran, both sides of the conflict)
+- Ends with a summary that provides a clear takeaway without repeating the same language
+
+---
+
+**EP 14 – C BLOCK: "Hungary voted yesterday. Viktor Orbán lost. And that may have some far reaching consequences for Israel."**
+
+[Full script showing how the block explains context, makes connections to Israel, discusses broader significance]
+
+**Takeaway (Critical Editorial Lesson):**
+There are some positive things about the story — strong analysis and context for why the news matters for Israel and a forward-looking insight. But the story is missing key context about who Orbán is and why he has the reputation he does. To only focus on why his loss is bad for Israel risks sounding tone deaf and short-sighted. More importantly, it doesn't give listeners the full picture of the significance of the story, one piece of which is Israel's willingness to align itself with far-right figures in the name of political expediency. Always provide sufficient context about WHO figures are and WHY they matter beyond just how they affect Israel.
+
+---
+
+**EP 24 – A BLOCK: "Israel is paying a growing price in southern Lebanon, where a U.S.-brokered ceasefire is limiting how it can respond to Hezbollah attacks."**
+
+SOT: "Israel is going to have to defend itself…but they're going to do it carefully and they're gonna be surgical as opposed to beyond surgical."
+
+On Monday, an explosive drone wounded two Israeli soldiers in southern Lebanon—one of them severely. That's not an isolated incident. Since the ceasefire took effect on April 16, three Israeli soldiers have been killed and dozens wounded. The IDF says 45 soldiers were injured in a two-day stretch last week alone.
+
+But under pressure from Washington, Israel is not escalating. And that tension is starting to show. In northern Israel, local leaders are openly accusing the government of sacrificing their security. One mayor put it bluntly: he said right now Israel's safety is being dictated by an agreement between the U.S., Lebanon—and Iran.
+
+Publicly, Israeli officials are still signaling alignment with the US. Israel's US ambassador Yechiel Leiter met with Trump last week, and said: Leiter SOT: "We're united with the Lebanese government and wanting to rid the country of this malign influence called Hezbollah. And now that Mr. President under your leadership, Iran has been so degraded, the possibility of degraded Hezbollah and liberating Lebanon from their occupation is real"
+
+But behind the scenes, there is friction. According to Channel 12, Prime Minister Benjamin Netanyahu spoke with President Trump on Sunday, asking Trump to loosen the leash, and give the Israeli military more freedom to respond. Trump refused. He's said that Israel can defend itself, but his position is that escalation could risk blowing up the broader negotiations with Iran.
+
+That leaves Israel in a bind. It's absorbing attacks, responding selectively, and trying not to be seen as the side that breaks the deal. Adding to the tension, the political landscape in Lebanon is starting to fracture. On one hand - Hezbollah has rejected the talks around the ceasefire. Its Secretary-General said quote: "We will continue our defensive resistance to protect Lebanon and its people... We will respond to Israeli aggression and confront it." But on the other hand, for the first time since 2005, Lebanon's president accused Hezbollah of treason for continuing the war, essentially on behalf of Iran. He said his goal is to end the conflict with Israel.
+
+The next few days will test how sustainable all of this actually is. What remains to be seen is how Israel responds — and how much will it escalate? One former Israeli general, Nimrod Sheffer, warned this week that this kind of setup guarantees constant, low-level fighting — with no real strategic gain. A ceasefire like this—where one side is constrained and the other keeps probing—doesn't freeze the conflict. It stretches it out. And for Israel, it's become a slow bleed.
+
+In the meantime, the White House is still pushing toward talks between Israel and Lebanon in the coming weeks. So this becomes a race between two timelines: Can diplomacy move fast enough to stabilize the situation — or do the daily attacks spiral out of control?
+
+**Why it works:**
+- Contains core elements of the story (what happened, why it matters, what's next)
+- Clear framing to orient listeners
+- It's not just about the latest attacks, but the dilemma Israel is facing about how to respond
+- Shows the strategic tension and competing pressures
+- Ends with a question that clarifies what's happening and points listeners to potential next steps for coverage
 
 == What Makes a Story Worth Including ==
 
