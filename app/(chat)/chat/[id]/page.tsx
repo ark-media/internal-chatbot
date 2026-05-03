@@ -364,7 +364,7 @@ function ChatBody({
           className="relative flex-1 overflow-y-auto"
         >
           <div className={cn('mx-auto flex w-full max-w-3xl flex-col gap-7 px-6 py-10', messages.length === 0 && 'min-h-full')}>
-            {messages.length === 0 && (
+            {messages.length === 0 ? (
               <EmptyState
                 title="Ask the"
                 highlight="arkive"
@@ -374,7 +374,7 @@ function ChatBody({
                 busy={busy}
                 promptLayout="grid"
               />
-            )}
+            ) : null}
 
             {messages.map((m) => (
               <MessageRow
@@ -388,7 +388,7 @@ function ChatBody({
               />
             ))}
 
-            {messages.some((m) => m.role === 'assistant') && !busy && (
+            {messages.some((m) => m.role === 'assistant') && !busy ? (
               <div className="flex gap-2 pl-12">
                 <button
                   onClick={copyToClipboard}
@@ -412,9 +412,9 @@ function ChatBody({
                   )}
                 </button>
               </div>
-            )}
+            ) : null}
 
-            {busy && (
+            {busy ? (
               <div className="flex items-center gap-3 pl-12 text-xs text-white/50">
                 <TypingDots />
                 <span className="tracking-wide">
@@ -429,7 +429,7 @@ function ChatBody({
                   Stop
                 </button>
               </div>
-            )}
+            ) : null}
 
             <ChatErrorBanner
               error={error}
@@ -483,13 +483,13 @@ function ChatBody({
         />
       </div>
 
-      {openPanel && (
+      {openPanel ? (
         <SourcePanel
           panel={openPanel}
           onClose={() => setOpenPanel(null)}
           onChange={setOpenPanel}
         />
-      )}
+      ) : null}
     </div>
   );
 }
@@ -554,7 +554,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
             ) : null,
           )}
         </div>
-        {onEdit && (
+        {onEdit ? (
           <button
             onClick={() => onEdit(message as ChatUIMessage)}
             className={cn(
@@ -567,7 +567,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
           >
             <Pencil className="h-4 w-4" />
           </button>
-        )}
+        ) : null}
       </div>
     );
   }

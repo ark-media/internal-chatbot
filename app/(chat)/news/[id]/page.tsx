@@ -717,7 +717,7 @@ function MessageRow({
             </div>
           ) : null}
         </div>
-        {onEdit && (
+        {onEdit ? (
           <button
             onClick={() => onEdit(message)}
             className={cn(
@@ -730,7 +730,7 @@ function MessageRow({
           >
             <Pencil className="h-4 w-4" />
           </button>
-        )}
+        ) : null}
       </div>
     );
   }

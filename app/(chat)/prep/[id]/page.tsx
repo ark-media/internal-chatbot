@@ -340,7 +340,7 @@ function PrepBody({
         {/* ---------- Message list ---------- */}
         <main ref={scrollRef} className="relative flex-1 overflow-y-auto">
           <div className={cn('mx-auto flex w-full max-w-3xl flex-col gap-7 px-6 py-10', messages.length === 0 && 'min-h-full')}>
-            {messages.length === 0 && (
+            {messages.length === 0 ? (
               <EmptyState
                 title="Prep the"
                 highlight="next episode"
@@ -367,7 +367,7 @@ function PrepBody({
                 promptLayout="grid"
                 footerNote="Attach prep notes, draft outlines, or past transcripts via the clip icon."
               />
-            )}
+            ) : null}
 
             {messages.map((m) => (
               <MessageRow
@@ -528,7 +528,7 @@ function PrepBody({
           }}
           attachments={
             <>
-              {files.length > 0 && (
+              {files.length > 0 ? (
                 <div className="mb-2 flex flex-wrap gap-1.5">
                   {files.map((f) => (
                     <div
@@ -549,15 +549,15 @@ function PrepBody({
                     </div>
                   ))}
                 </div>
-              )}
-              {uploadError && (
+              ) : null}
+              {uploadError ? (
                 <div
                   role="alert"
                   className="mb-2 rounded-lg border border-amber-300/30 bg-amber-400/[0.08] px-3 py-2 text-[0.78rem] text-amber-100"
                 >
                   Some files were not attached — {uploadError}.
                 </div>
-              )}
+              ) : null}
             </>
           }
         />
@@ -600,7 +600,7 @@ function MessageRow({
               </span>
             ) : null,
           )}
-          {fileParts.length > 0 && (
+          {fileParts.length > 0 ? (
             <div className="mt-2 flex flex-wrap gap-1.5">
               {fileParts.map((p, i) => {
                 if (p.type !== 'file') return null;
@@ -615,9 +615,9 @@ function MessageRow({
                 );
               })}
             </div>
-          )}
+          ) : null}
         </div>
-        {onEdit && (
+        {onEdit ? (
           <button
             onClick={() => onEdit(message)}
             className={cn(
@@ -630,7 +630,7 @@ function MessageRow({
           >
             <Pencil className="h-4 w-4" />
           </button>
-        )}
+        ) : null}
       </div>
     );
   }
