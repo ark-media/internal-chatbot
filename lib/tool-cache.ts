@@ -17,9 +17,11 @@ export async function ensureTable() {
         key TEXT PRIMARY KEY,
         result JSONB NOT NULL,
         created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
-      );
+      )
+    `;
+    await sql`
       CREATE INDEX IF NOT EXISTS idx_tool_cache_created_at
-        ON tool_cache(created_at DESC);
+        ON tool_cache(created_at DESC)
     `;
   } catch (err) {
     console.error('Failed to create cache table:', err);
