@@ -31,7 +31,7 @@ export async function getCached<T>(key: CacheKey, ttlHours: number = 24): Promis
     const rows = await sql`
       SELECT result FROM tool_cache
       WHERE key = ${key}
-      AND created_at > NOW() - INTERVAL '${ttlHours} hours'
+      AND created_at > NOW() - MAKE_INTERVAL(hours => ${ttlHours})
       LIMIT 1
     `;
     if (rows.length > 0) {
