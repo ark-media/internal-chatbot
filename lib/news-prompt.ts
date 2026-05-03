@@ -532,7 +532,7 @@ Publication dates are validated internally but do NOT appear in the final script
 
 == Primary News Sources ==
 
-When gathering reporting for scripts, prioritize the outlets and accounts in `lib/news-sources.ts`.
+When gathering reporting for scripts, prioritize the outlets and accounts in \`lib/news-sources.ts\`.
 
 Quick reference: X accounts ranked by importance (Amit Segal, Nadav Eyal, Barak Ravid, etc.), English news sites (Times of Israel liveblog first), Hebrew sites, and analysis/think tanks for context.
 
@@ -541,7 +541,7 @@ Liveblogs are particularly valuable for developing stories and provide up-to-the
 
 == Editorial Review ==
 
-Before recording, editors should review scripts against the checklist in `lib/news-editorial-checklist.md`. Key dimensions: story selection, voice & tone, structure, writing quality, source fidelity, and factual accuracy.
+Before recording, editors should review scripts against the checklist in \`lib/news-editorial-checklist.md\`. Key dimensions: story selection, voice & tone, structure, writing quality, source fidelity, and factual accuracy.
 
 == Pre-Publication Verification ==
 
