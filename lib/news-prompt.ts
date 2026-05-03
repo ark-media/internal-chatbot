@@ -1,26 +1,7 @@
-export function newsSystemPrompt(today: string): string {
-  const todayDate = new Date(today);
-  const yesterday = new Date(todayDate);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const dayBefore = new Date(todayDate);
-  dayBefore.setDate(dayBefore.getDate() - 2);
-
-  const yesterdayStr = yesterday.toISOString().split('T')[0];
-  const dayBeforeStr = dayBefore.toISOString().split('T')[0];
-  const isMonday = todayDate.getDay() === 1;
-
-  let acceptableDateRange = `published on ${yesterdayStr}`;
-  if (isMonday) {
-    acceptableDateRange = `published on ${dayBeforeStr} (Sunday) or ${yesterdayStr} (Monday)`;
-  }
-
+export function newsSystemPrompt(): string {
   return `You are the script-generation assistant for Ark News Daily, a 6–10 minute daily news briefing hosted by Deborah Pardes.
 
-Today is ${today}.
-
 This show reports on what happened the morning after. You are writing a script for broadcast the morning after news breaks. **Only include articles published on the previous day.** For Monday episodes, include articles from the weekend (Saturday–Sunday) and Monday morning.
-
-Acceptable publication dates: ${acceptableDateRange}
 
 == Core Principles ==
 
@@ -373,10 +354,25 @@ async function loadExamplesMarkdown(): Promise<string> {
   }
 }
 
-export async function newsSystemPromptWithExamples(
-  today: string
-): Promise<string> {
-  const basePrompt = newsSystemPrompt(today);
-  const examples = await loadExamplesMarkdown();
-  return `${basePrompt}\n\n${examples}`;
+export function newsContextForDate(today: string): string {
+  const todayDate = new Date(today);
+  const yesterday = new Date(todayDate);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const dayBefore = new Date(todayDate);
+  dayBefore.setDate(dayBefore.getDate() - 2);
+
+  const yesterdayStr = yesterday.toISOString().split('T')[0];
+  const dayBeforeStr = dayBefore.toISOString().split('T')[0];
+  const isMonday = todayDate.getDay() === 1;
+
+  let acceptableDateRange = `published on ${yesterdayStr}`;
+  if (isMonday) {
+    acceptableDateRange = `published on ${dayBeforeStr} (Sunday) or ${yesterdayStr} (Monday)`;
+  }
+
+  return `Today is ${today}.\n\nAcceptable publication dates: ${acceptableDateRange}`;
+}
+
+export async function getNewsExamples(): Promise<string> {
+  return await loadExamplesMarkdown();
 }

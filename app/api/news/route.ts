@@ -13,7 +13,7 @@ import { z } from 'zod';
 import { sql } from '@/lib/db';
 import { lookupCorpus } from '@/lib/retrieval';
 import { webSearch } from '@/lib/web-search';
-import { newsSystemPrompt, newsSystemPromptWithExamples } from '@/lib/news-prompt';
+import { newsSystemPrompt, newsContextForDate, getNewsExamples } from '@/lib/news-prompt';
 import { ensureTable, getCached, setCached, cacheKey } from '@/lib/tool-cache';
 import { ensureEnglish } from '@/lib/translate';
 import {
@@ -383,8 +383,10 @@ export async function POST(req: Request) {
   const today = new Date().toISOString().slice(0, 10);
   const started = Date.now();
 
-  // Load system prompt with examples
-  const systemPromptContent = await newsSystemPromptWithExamples(today);
+  // Load prompts: only base rules in cached system, date context & examples in messages
+  const baseSystemPrompt = newsSystemPrompt();
+  const dateContext = newsContextForDate(today);
+  const examples = await getNewsExamples();
 
   // Resolve Ark News Daily show ID once per request
   let arkNewsDailyShowId: number | null = null;
@@ -397,14 +399,40 @@ export async function POST(req: Request) {
     // Fall through, tools will proceed without filtering
   }
 
+  // Build messages with date context and examples before user's actual messages
+  const contextMessages: UIMessage[] = [
+    {
+      id: 'news-context',
+      role: 'user',
+      parts: [
+        {
+          type: 'text',
+          text: `${dateContext}\n\n== Reference Examples ==\n\n${examples}`,
+        },
+      ],
+    },
+    {
+      id: 'news-acknowledge',
+      role: 'assistant',
+      parts: [
+        {
+          type: 'text',
+          text: 'I understand the date context and writing style. Ready to create the news script.',
+        },
+      ],
+    },
+  ];
+
+  const allMessages = [...contextMessages, ...normalized];
+
   const result = streamText({
     model,
     system: {
       role: 'system',
-      content: systemPromptContent,
+      content: baseSystemPrompt,
       providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
     },
-    messages: await convertToModelMessages(normalized),
+    messages: await convertToModelMessages(allMessages),
     tools: {
       fetchArticle: fetchArticleTool,
       searchCorpus: createSearchCorpusTool(arkNewsDailyShowId),
