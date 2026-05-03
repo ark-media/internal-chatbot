@@ -11,8 +11,6 @@ import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import {
   FileText,
   Loader2,
@@ -29,6 +27,7 @@ import { MODELS } from '@/components/ModelSelector';
 import { ChatComposer } from '@/components/ChatComposer';
 import { ChatErrorBanner } from '@/components/ChatErrorBanner';
 import { EmptyState } from '@/components/EmptyState';
+import { MarkdownRenderer } from '@/components/MarkdownRenderer';
 import type { NewsUIMessage, NewsSource } from '@/components/news-types';
 import { cn } from '@/lib/cn';
 import { chatFetch } from '@/lib/chat-fetch';
@@ -811,9 +810,9 @@ function NewsScriptContent({
     // Regular text with potential footnotes and markdown
     if (line.length > 0) {
       parts.push(
-        <div key={parts.length} className="my-2 leading-relaxed news-prose">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
+        <div key={parts.length}>
+          <MarkdownRenderer
+            text={line}
             components={{
               p: ({ children }) => <p className="my-2">{renderFootnotes(children, onSourceClick, sources)}</p>,
               h1: ({ children }) => <h1 className="text-xl font-bold my-3 mt-4">{renderFootnotes(children, onSourceClick, sources)}</h1>,
@@ -835,9 +834,7 @@ function NewsScriptContent({
                 </a>
               ),
             }}
-          >
-            {line}
-          </ReactMarkdown>
+          />
         </div>,
       );
     }

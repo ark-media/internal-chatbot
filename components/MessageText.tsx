@@ -7,11 +7,10 @@ import {
   type ReactElement,
   type ReactNode,
 } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import type { Source } from './chat-types';
 import { Citation } from './Citation';
 import { parseCitations } from '@/lib/citation-parser';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 type Ctx = {
   sources: Map<string, Source>;
@@ -67,8 +66,8 @@ export function MessageText({ text, sources, onOpen }: Props) {
 
   return (
     <div className="ark-prose">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+      <MarkdownRenderer
+        text={text}
         components={{
           p: ({ children }) => <p>{walk(children, ctx)}</p>,
           li: ({ children }) => <li>{walk(children, ctx)}</li>,
@@ -89,9 +88,7 @@ export function MessageText({ text, sources, onOpen }: Props) {
             </a>
           ),
         }}
-      >
-        {text}
-      </ReactMarkdown>
+      />
     </div>
   );
 }

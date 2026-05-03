@@ -11,8 +11,6 @@ import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import {
   CheckCircle2,
   Copy,
@@ -33,6 +31,7 @@ import { ChatComposer } from '@/components/ChatComposer';
 import { ChatErrorBanner } from '@/components/ChatErrorBanner';
 import { EmptyState } from '@/components/EmptyState';
 import { ArkLogo } from '@/components/ArkLogo';
+import { MarkdownRenderer } from '@/components/MarkdownRenderer';
 import type {
   PastGuestAppearancesToolOutput,
   PrepUIMessage,
@@ -593,8 +592,8 @@ function MessageRow({ message }: { message: PrepUIMessage }) {
 function PrepMarkdown({ text }: { text: string }) {
   return (
     <div className="ark-prose">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+      <MarkdownRenderer
+        text={text}
         components={{
           h1: ({ children }) => (
             <h1 className="!mt-0 !mb-4 !text-[1.05rem] !font-bold !uppercase !tracking-[0.18em] !text-white/50">
@@ -622,9 +621,7 @@ function PrepMarkdown({ text }: { text: string }) {
             </a>
           ),
         }}
-      >
-        {text}
-      </ReactMarkdown>
+      />
     </div>
   );
 }
