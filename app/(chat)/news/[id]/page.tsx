@@ -191,6 +191,10 @@ function NewsBody({
     sendMessage({ text: q, files: fileList });
     setInput('');
     setFiles([]);
+    // Reset post-generation actions when starting a new turn.
+    setDriveLink(null);
+    setDriveError(null);
+    setCopySuccess(false);
   };
 
   const extractScriptText = useCallback(() => {
@@ -321,7 +325,7 @@ function NewsBody({
               onDismiss={clearError}
             />
 
-            {messages.length > 0 && messages[messages.length - 1]?.role === 'assistant' ? (
+            {!busy && messages.length > 0 && messages[messages.length - 1]?.role === 'assistant' ? (
               <div className="mt-4 flex flex-col gap-3 border-t border-white/10 pt-4">
                 {driveLink ? (
                   <div className="flex items-center gap-2 rounded-lg bg-green-500/10 px-4 py-3 text-sm text-green-200">
