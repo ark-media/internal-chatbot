@@ -258,6 +258,46 @@ export async function purgeExpired(): Promise<number> {
   return rows.length;
 }
 
+// Delete a message and all subsequent messages (used when editing). Returns the ordinal
+// of the deleted message if found, or null if not found. The entire operation is
+// wrapped in a transaction with an advisory lock to prevent concurrent edit races.
+export async function deleteMessageAndSubsequent(
+  chatId: string,
+  messageId: string,
+): Promise<{ deletedOrdinal: number | null; deletedCount: number }> {
+  const results = await sql.transaction([
+    ADVISORY_LOCK(chatId),
+    // Get the ordinal of the message to delete
+    sql`
+      SELECT ordinal FROM chat_messages
+       WHERE chat_id = ${chatId} AND message_id = ${messageId}
+       LIMIT 1
+    `,
+  ]);
+
+  const msgRows = results[1] as unknown as Array<{ ordinal: number }>;
+  if (msgRows.length === 0) {
+    return { deletedOrdinal: null, deletedCount: 0 };
+  }
+
+  const ordinal = msgRows[0].ordinal;
+
+  // Delete the message and all messages with ordinal >= this one, then update chat
+  const deleteResults = await sql.transaction([
+    ADVISORY_LOCK(chatId),
+    sql`
+      DELETE FROM chat_messages
+       WHERE chat_id = ${chatId} AND ordinal >= ${ordinal}
+       RETURNING 1
+    `,
+    sql`UPDATE chats SET updated_at = NOW() WHERE id = ${chatId}`,
+  ]);
+
+  const deletedCount = (deleteResults[1] as unknown as Array<unknown>).length;
+
+  return { deletedOrdinal: ordinal, deletedCount };
+}
+
 // Convenience: convert StoredMessage[] back to UIMessage[] shape that useChat accepts.
 export function toUIMessages<M extends UIMessage>(stored: StoredMessage[]): M[] {
   return stored.map((m) => ({

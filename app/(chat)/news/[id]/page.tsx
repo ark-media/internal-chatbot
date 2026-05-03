@@ -20,6 +20,7 @@ import {
   ExternalLink,
   CheckCircle2,
   Copy,
+  Pencil,
 } from 'lucide-react';
 
 import { Header } from '@/components/Header';
@@ -95,24 +96,6 @@ function NewsBody({
   initialMessages: NewsUIMessage[];
 }) {
   const [selectedModel, setSelectedModel] = useState(MODELS[1].id);
-
-  const { messages, sendMessage, status, stop, error, regenerate, clearError } =
-    useChat<NewsUIMessage>({
-      id: chatId,
-      messages: initialMessages,
-      transport: new DefaultChatTransport({
-        api: '/api/news',
-        fetch: chatFetch,
-        headers: {
-          'x-model': selectedModel,
-        },
-        body: { chatId },
-      }),
-      onFinish: () => {
-        notifyChatUpdated();
-      },
-    });
-
   const [input, setInput] = useState('');
   const [files, setFiles] = useState<AttachedFile[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -124,6 +107,69 @@ function NewsBody({
   const [openSource, setOpenSource] = useState<NewsSource | null>(null);
   const [allSources, setAllSources] = useState<NewsSource[]>([]);
   const [copySuccess, setCopySuccess] = useState(false);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [showUndoToast, setShowUndoToast] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // Auto-focus input when entering edit mode
+  useEffect(() => {
+    if (editingMessageId && inputRef.current) {
+      setTimeout(() => {
+        inputRef.current?.focus();
+        inputRef.current?.setSelectionRange(inputRef.current.value.length, inputRef.current.value.length);
+      }, 0);
+    }
+  }, [editingMessageId]);
+
+  // Handle Escape key to cancel edit
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && editingMessageId) {
+        e.preventDefault();
+        setEditingMessageId(null);
+        setInput('');
+      }
+    };
+    if (editingMessageId) {
+      window.addEventListener('keydown', handleKeyDown);
+      return () => window.removeEventListener('keydown', handleKeyDown);
+    }
+  }, [editingMessageId]);
+
+  // Custom fetch that adds editingMessageId to the body if present
+  const customFetch = useCallback<typeof fetch>(
+    async (input, init) => {
+      try {
+        const body = init?.body ? JSON.parse(init.body as string) : {};
+        if (editingMessageId) {
+          body.editingMessageId = editingMessageId;
+        }
+        return chatFetch(input, { ...init, body: JSON.stringify(body) });
+      } catch (e) {
+        console.error('Failed to parse request body for edit:', e);
+        return chatFetch(input, init);
+      }
+    },
+    [editingMessageId],
+  );
+
+  const { messages, sendMessage, status, stop, error, regenerate, clearError } =
+    useChat<NewsUIMessage>({
+      id: chatId,
+      messages: initialMessages,
+      transport: new DefaultChatTransport({
+        api: '/api/news',
+        fetch: customFetch,
+        headers: {
+          'x-model': selectedModel,
+        },
+        body: { chatId },
+      }),
+      onFinish: () => {
+        notifyChatUpdated();
+        setEditingMessageId(null);
+      },
+    });
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -182,15 +228,35 @@ function NewsBody({
     setUploadError(null);
   }, []);
 
+  const handleEdit = useCallback(
+    (message: NewsUIMessage) => {
+      const textContent = message.parts
+        ?.filter((p) => p.type === 'text')
+        .map((p) => (p.type === 'text' ? p.text : ''))
+        .join('\n\n');
+      if (textContent) {
+        setInput(textContent);
+        setEditingMessageId(message.id);
+        scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+      }
+    },
+    [],
+  );
+
   const submit = (text: string) => {
     const q = text.trim();
     if ((!q && files.length === 0) || busy) return;
+    const wasEditing = editingMessageId !== null;
     const dt = new DataTransfer();
     for (const f of files) dt.items.add(f.file);
     const fileList = dt.files.length > 0 ? dt.files : undefined;
     sendMessage({ text: q, files: fileList });
     setInput('');
     setFiles([]);
+    if (wasEditing) {
+      setShowUndoToast(true);
+      setTimeout(() => setShowUndoToast(false), 3000);
+    }
     // Reset post-generation actions when starting a new turn.
     setDriveLink(null);
     setDriveError(null);
@@ -296,6 +362,8 @@ function NewsBody({
                 message={m}
                 onSourceClick={setOpenSource}
                 sources={allSources}
+                onEdit={handleEdit}
+                isEditing={editingMessageId === m.id}
               />
             ))}
 
@@ -416,6 +484,32 @@ function NewsBody({
             ) : null}
           </div>
         </main>
+
+        {/* Edit Mode Indicator */}
+        {editingMessageId ? (
+          <div className="border-t border-blue-500/20 bg-blue-500/5 px-6 py-2.5 flex items-center justify-between animate-in fade-in duration-200">
+            <div className="flex items-center gap-2">
+              <div className="h-2 w-2 rounded-full bg-blue-400 animate-pulse" />
+              <span className="text-xs font-medium text-blue-300/80">Editing • Press ESC to cancel</span>
+            </div>
+            <button
+              onClick={() => {
+                setEditingMessageId(null);
+                setInput('');
+              }}
+              className="text-xs px-2.5 py-1 rounded text-blue-300/60 hover:text-blue-300 hover:bg-blue-500/10 transition"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : null}
+
+        {/* Undo Toast */}
+        {showUndoToast ? (
+          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-blue-900/90 backdrop-blur text-blue-100 px-4 py-2.5 rounded-lg text-sm border border-blue-500/20 animate-in fade-in slide-in-from-bottom-2 duration-300 z-50">
+            ✓ Message updated
+          </div>
+        ) : null}
 
         {/* Composer */}
         <ChatComposer
@@ -582,22 +676,42 @@ function MessageRow({
   message,
   onSourceClick,
   sources,
+  onEdit,
+  isEditing,
 }: {
   message: NewsUIMessage;
   onSourceClick: (source: NewsSource) => void;
   sources: NewsSource[];
+  onEdit?: (message: NewsUIMessage) => void;
+  isEditing?: boolean;
 }) {
   if (message.role === 'user') {
     const textParts = message.parts?.filter((p) => p.type === 'text') ?? [];
     const fileParts = message.parts?.filter((p) => p.type === 'file') ?? [];
     return (
-      <div className="ark-fade-up flex justify-end">
+      <div className="ark-fade-up flex justify-end gap-2 items-start group">
+        {onEdit && (
+          <button
+            onClick={() => onEdit(message)}
+            className={cn(
+              'mt-1 p-1.5 rounded-lg transition-all opacity-0 group-hover:opacity-100 duration-200',
+              isEditing
+                ? 'bg-blue-400/20 text-blue-300 hover:bg-blue-400/30'
+                : 'hover:bg-white/10 text-white/50 hover:text-white/70',
+            )}
+            title="Edit message (or click to edit)"
+          >
+            <Pencil className="h-4 w-4" />
+          </button>
+        )}
         <div
           className={cn(
             'max-w-[82%] rounded-2xl rounded-br-md px-4 py-2.5',
             'bg-gradient-to-br from-[#3eb5f9] to-[#2a8fd6] text-[#070b22]',
             'shadow-[0_8px_22px_-10px_rgba(62,181,249,0.6)]',
             'text-[0.95rem] font-medium leading-relaxed',
+            'transition-all duration-200',
+            isEditing && 'ring-2 ring-blue-400/50 shadow-[0_8px_22px_-10px_rgba(59,130,246,0.5)]',
           )}
         >
           {textParts.map((p, i) =>

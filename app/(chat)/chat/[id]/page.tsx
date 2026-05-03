@@ -12,7 +12,7 @@ import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { Square, Sparkles, FileText, ChevronRight, Copy, CheckCircle2 } from 'lucide-react';
+import { Square, Sparkles, FileText, ChevronRight, Copy, CheckCircle2, Pencil } from 'lucide-react';
 
 import { MessageText } from '@/components/MessageText';
 import { SourcePanel } from '@/components/SourcePanel';
@@ -77,6 +77,30 @@ function ChatBody({
   initialMessages: ChatUIMessage[];
 }) {
   const [selectedModel, setSelectedModel] = useState(MODELS[1].id);
+  const [input, setInput] = useState('');
+  const [openPanel, setOpenPanel] = useState<PanelView | null>(null);
+  const [episodeCount, setEpisodeCount] = useState<number | null>(null);
+  const [copySuccess, setCopySuccess] = useState(false);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [showUndoToast, setShowUndoToast] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // Custom fetch that adds editingMessageId to the body if present
+  const customFetch = useCallback<typeof fetch>(
+    async (input, init) => {
+      try {
+        const body = init?.body ? JSON.parse(init.body as string) : {};
+        if (editingMessageId) {
+          body.editingMessageId = editingMessageId;
+        }
+        return chatFetch(input, { ...init, body: JSON.stringify(body) });
+      } catch (e) {
+        console.error('Failed to parse request body for edit:', e);
+        return chatFetch(input, init);
+      }
+    },
+    [editingMessageId],
+  );
 
   const { messages, sendMessage, status, stop, error, regenerate, clearError } =
     useChat<ChatUIMessage>({
@@ -84,7 +108,7 @@ function ChatBody({
       messages: initialMessages,
       transport: new DefaultChatTransport({
         api: '/api/chat',
-        fetch: chatFetch,
+        fetch: customFetch,
         headers: {
           'x-model': selectedModel,
         },
@@ -92,17 +116,28 @@ function ChatBody({
       }),
       onFinish: () => {
         notifyChatUpdated();
+        setEditingMessageId(null);
       },
     });
-
-  const [input, setInput] = useState('');
-  const [openPanel, setOpenPanel] = useState<PanelView | null>(null);
-  const [episodeCount, setEpisodeCount] = useState<number | null>(null);
-  const [copySuccess, setCopySuccess] = useState(false);
 
   const openSource = useCallback((source: Source, quote?: string) => {
     setOpenPanel({ view: 'source', source, quote });
   }, []);
+
+  const handleEdit = useCallback(
+    (message: ChatUIMessage) => {
+      const textContent = message.parts
+        ?.filter((p) => p.type === 'text')
+        .map((p) => (p.type === 'text' ? p.text : ''))
+        .join('\n\n');
+      if (textContent) {
+        setInput(textContent);
+        setEditingMessageId(message.id);
+        scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+      }
+    },
+    [],
+  );
 
   const extractAnswerText = useCallback(() => {
     const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
@@ -281,11 +316,41 @@ function ChatBody({
     });
   }, [messages, busy]);
 
+  // Auto-focus input when entering edit mode
+  useEffect(() => {
+    if (editingMessageId && inputRef.current) {
+      setTimeout(() => {
+        inputRef.current?.focus();
+        inputRef.current?.setSelectionRange(inputRef.current.value.length, inputRef.current.value.length);
+      }, 0);
+    }
+  }, [editingMessageId]);
+
+  // Handle Escape key to cancel edit
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && editingMessageId) {
+        e.preventDefault();
+        setEditingMessageId(null);
+        setInput('');
+      }
+    };
+    if (editingMessageId) {
+      window.addEventListener('keydown', handleKeyDown);
+      return () => window.removeEventListener('keydown', handleKeyDown);
+    }
+  }, [editingMessageId]);
+
   const submit = (text: string) => {
     const q = text.trim();
     if (!q || busy) return;
+    const wasEditing = editingMessageId !== null;
     sendMessage({ text: q });
     setInput('');
+    if (wasEditing) {
+      setShowUndoToast(true);
+      setTimeout(() => setShowUndoToast(false), 3000);
+    }
   };
 
   return (
@@ -318,6 +383,8 @@ function ChatBody({
                 sources={sources}
                 onOpen={openSource}
                 onOpenPanel={setOpenPanel}
+                onEdit={handleEdit}
+                isEditing={editingMessageId === m.id}
               />
             ))}
 
@@ -376,6 +443,32 @@ function ChatBody({
           </div>
         </main>
 
+        {/* ---------- Edit Mode Indicator ---------- */}
+        {editingMessageId ? (
+          <div className="border-t border-blue-500/20 bg-blue-500/5 px-6 py-2.5 flex items-center justify-between animate-in fade-in duration-200">
+            <div className="flex items-center gap-2">
+              <div className="h-2 w-2 rounded-full bg-blue-400 animate-pulse" />
+              <span className="text-xs font-medium text-blue-300/80">Editing • Press ESC to cancel</span>
+            </div>
+            <button
+              onClick={() => {
+                setEditingMessageId(null);
+                setInput('');
+              }}
+              className="text-xs px-2.5 py-1 rounded text-blue-300/60 hover:text-blue-300 hover:bg-blue-500/10 transition"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : null}
+
+        {/* ---------- Undo Toast ---------- */}
+        {showUndoToast ? (
+          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-blue-900/90 backdrop-blur text-blue-100 px-4 py-2.5 rounded-lg text-sm border border-blue-500/20 animate-in fade-in slide-in-from-bottom-2 duration-300 z-50">
+            ✓ Message updated
+          </div>
+        ) : null}
+
         {/* ---------- Composer ---------- */}
         <ChatComposer
           input={input}
@@ -410,9 +503,11 @@ type MsgProps = {
   sources: Map<string, Source>;
   onOpen: (s: Source, quote?: string) => void;
   onOpenPanel: (panel: PanelView) => void;
+  onEdit?: (message: ChatUIMessage) => void;
+  isEditing?: boolean;
 };
 
-function MessageRow({ message, sources, onOpen, onOpenPanel }: MsgProps) {
+function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }: MsgProps) {
   const [copyState, setCopyState] = useState<'idle' | 'success' | 'error'>('idle');
 
   const extractTextContent = useCallback((): string => {
@@ -440,13 +535,29 @@ function MessageRow({ message, sources, onOpen, onOpenPanel }: MsgProps) {
 
   if (message.role === 'user') {
     return (
-      <div className="ark-fade-up flex justify-end">
+      <div className="ark-fade-up flex justify-end gap-2 items-start group">
+        {onEdit && (
+          <button
+            onClick={() => onEdit(message as ChatUIMessage)}
+            className={cn(
+              'mt-1 p-1.5 rounded-lg transition-all opacity-0 group-hover:opacity-100 duration-200',
+              isEditing
+                ? 'bg-blue-400/20 text-blue-300 hover:bg-blue-400/30'
+                : 'hover:bg-white/10 text-white/50 hover:text-white/70',
+            )}
+            title="Edit message (or click to edit)"
+          >
+            <Pencil className="h-4 w-4" />
+          </button>
+        )}
         <div
           className={cn(
             'max-w-[82%] rounded-2xl rounded-br-md px-4 py-2.5',
             'bg-gradient-to-br from-[#3eb5f9] to-[#2a8fd6] text-[#070b22]',
             'shadow-[0_8px_22px_-10px_rgba(62,181,249,0.6)]',
             'text-[0.95rem] font-medium leading-relaxed',
+            'transition-all duration-200',
+            isEditing && 'ring-2 ring-blue-400/50 shadow-[0_8px_22px_-10px_rgba(59,130,246,0.5)]',
           )}
         >
           {message.parts.map((p, i) =>

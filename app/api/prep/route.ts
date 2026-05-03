@@ -26,6 +26,7 @@ import {
   ensureChatTables,
   persistAssistantMessage,
   persistIncomingMessages,
+  deleteMessageAndSubsequent,
 } from '@/lib/chats';
 import type { PrepUIMessage } from '@/components/prep-types';
 
@@ -287,8 +288,9 @@ export async function POST(req: Request) {
     }
   }
 
-  const body = (await req.json()) as { messages?: unknown; chatId?: string };
+  const body = (await req.json()) as { messages?: unknown; chatId?: string; editingMessageId?: string };
   const chatId = typeof body.chatId === 'string' ? body.chatId : undefined;
+  const editingMessageId = typeof body.editingMessageId === 'string' ? body.editingMessageId : undefined;
 
   const validated = await safeValidateUIMessages<UIMessage>({ messages: body.messages });
   if (!validated.success) {
@@ -305,6 +307,14 @@ export async function POST(req: Request) {
       status: 413,
       headers: { 'content-type': 'text/plain; charset=utf-8' },
     });
+  }
+
+  if (chatId && editingMessageId) {
+    try {
+      await deleteMessageAndSubsequent(chatId, editingMessageId);
+    } catch (err) {
+      console.warn(JSON.stringify({ event: 'prep.delete_for_edit_error', err: String(err) }));
+    }
   }
 
   if (chatId) {

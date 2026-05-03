@@ -30,6 +30,7 @@ import {
   ensureChatTables,
   persistAssistantMessage,
   persistIncomingMessages,
+  deleteMessageAndSubsequent,
 } from '@/lib/chats';
 
 export const runtime = 'nodejs';
@@ -520,8 +521,9 @@ export async function POST(req: Request) {
     }
   }
 
-  const body = (await req.json()) as { messages?: unknown; chatId?: string };
+  const body = (await req.json()) as { messages?: unknown; chatId?: string; editingMessageId?: string };
   const chatId = typeof body.chatId === 'string' ? body.chatId : undefined;
+  const editingMessageId = typeof body.editingMessageId === 'string' ? body.editingMessageId : undefined;
 
   const validated = await safeValidateUIMessages<UIMessage>({ messages: body.messages });
   if (!validated.success) {
@@ -531,6 +533,14 @@ export async function POST(req: Request) {
     );
   }
   const messages = validated.data;
+
+  if (chatId && editingMessageId) {
+    try {
+      await deleteMessageAndSubsequent(chatId, editingMessageId);
+    } catch (err) {
+      console.warn(JSON.stringify({ event: 'chat.delete_for_edit_error', err: String(err) }));
+    }
+  }
 
   if (chatId) {
     try {
@@ -695,6 +705,13 @@ export async function POST(req: Request) {
     })),
   };
 
+  // Filter out data-sources and other non-essential parts before sending to model.
+  // Sources are stored for UI display but excluded from the prompt to keep context lean.
+  const messagesForModel = messages.map((m) => ({
+    ...m,
+    parts: m.parts?.filter((p) => p.type !== 'data-sources') ?? [],
+  }));
+
   const result = streamText({
     model,
     system: {
@@ -702,7 +719,7 @@ export async function POST(req: Request) {
       content: system,
       providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
     },
-    messages: await convertToModelMessages(messages),
+    messages: await convertToModelMessages(messagesForModel),
     tools: shortCircuitInstruction
       ? undefined
       : {

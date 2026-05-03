@@ -28,6 +28,7 @@ import {
   ensureChatTables,
   persistAssistantMessage,
   persistIncomingMessages,
+  deleteMessageAndSubsequent,
 } from '@/lib/chats';
 import type { NewsUIMessage } from '@/components/news-types';
 
@@ -315,6 +316,118 @@ function decodeDataUrl(url: string): string | null {
   }
 }
 
+// -- Source extraction -------------------------------------------------------
+
+type ExtractedSources = Array<{
+  num: number;
+  title: string;
+  url: string;
+  date?: string;
+  flags?: string;
+}>;
+
+function extractSources(text: string): { script: string; sources: ExtractedSources } {
+  // Match the script up to "---" and then the sources section.
+  // Allow flexible whitespace around the divider for robustness.
+  const match = text.match(/^([\s\S]*?)\n\s*---+\s*\n\s*SOURCES:\s*\n([\s\S]+)$/i);
+  if (!match) {
+    console.warn(
+      JSON.stringify({
+        event: 'news.extract_sources_format_not_found',
+        textLength: text.length,
+      })
+    );
+    return { script: text, sources: [] };
+  }
+
+  const [, script, sourcesText] = match;
+  const sources: ExtractedSources = [];
+
+  // Parse lines like: "1. Title — URL — Date [FLAG: note]"
+  // Handles em-dashes in titles by identifying URLs and dates via pattern matching.
+  // Examples that now parse correctly:
+  // - "1. Reuters — Analysis — https://example.com — May 2026" (em-dash in title)
+  // - "2. BBC Report — https://bbc.com/news" (missing date)
+  // - "3. NYT: The Story — Full Text — https://nytimes.com [FLAG: blocked]" (complex title)
+  const lines = sourcesText.split('\n').filter((l) => l.trim());
+  let parseErrors = 0;
+  let parseMethod: 'strict' | 'smart' = 'strict';
+
+  for (const line of lines) {
+    // First, try strict parsing: number. Title — URL — optional(Date) optional([FLAG: ...])
+    // Require URL to start with http:// or https:// to avoid matching em-dashes in titles.
+    const strictMatch = line.match(
+      /^(\d+)\.\s+(.+?)\s+—\s+(https?:\/\/[^\s]+)(?:\s+—\s+(.+?))?(?:\s+\[FLAG:\s+(.+?)\])?$/
+    );
+    if (strictMatch) {
+      sources.push({
+        num: parseInt(strictMatch[1], 10),
+        title: strictMatch[2].trim(),
+        url: strictMatch[3].trim(),
+        date: strictMatch[4]?.trim(),
+        flags: strictMatch[5]?.trim(),
+      });
+      continue;
+    }
+
+    // Fallback: smart parsing that identifies URLs and dates by pattern.
+    // This handles em-dashes in titles by recognizing field types.
+    const numMatch = line.match(/^(\d+)\.\s+(.+)$/);
+    if (numMatch) {
+      const num = parseInt(numMatch[1], 10);
+      const rest = numMatch[2];
+      parseMethod = 'smart';
+
+      // Extract flag if present (always at the end: [FLAG: ...])
+      const flagMatch = rest.match(/\[FLAG:\s+(.+?)\]$/);
+      const flagText = flagMatch?.[1]?.trim();
+      const withoutFlag = flagMatch ? rest.slice(0, flagMatch.index).trim() : rest;
+
+      // Find URL: look for http:// or https:// followed by non-whitespace
+      const urlMatch = withoutFlag.match(/https?:\/\/[^\s]+/);
+      if (!urlMatch) {
+        parseErrors++;
+        continue;
+      }
+
+      const url = urlMatch[0];
+      const urlStartIndex = withoutFlag.indexOf(url);
+      const titlePart = withoutFlag.slice(0, urlStartIndex).trim();
+      const datePart = withoutFlag.slice(urlStartIndex + url.length).trim();
+
+      // Clean up title: remove trailing em-dash if present
+      const cleanTitle = titlePart.replace(/\s+—\s*$/, '').trim();
+
+      // Clean up date: remove leading em-dash if present
+      const cleanDate = datePart.replace(/^\s*—\s+/, '').trim() || undefined;
+
+      sources.push({
+        num,
+        title: cleanTitle,
+        url,
+        date: cleanDate,
+        flags: flagText,
+      });
+    } else {
+      parseErrors++;
+    }
+  }
+
+  if (parseErrors > 0) {
+    console.warn(
+      JSON.stringify({
+        event: 'news.extract_sources_parse_errors',
+        totalLines: lines.length,
+        parseErrors,
+        successfulParses: sources.length,
+        parseMethod,
+      })
+    );
+  }
+
+  return { script, sources };
+}
+
 // -- Route handler -----------------------------------------------------------
 
 export async function POST(req: Request) {
@@ -342,8 +455,9 @@ export async function POST(req: Request) {
     }
   }
 
-  const body = (await req.json()) as { messages?: unknown; chatId?: string };
+  const body = (await req.json()) as { messages?: unknown; chatId?: string; editingMessageId?: string };
   const chatId = typeof body.chatId === 'string' ? body.chatId : undefined;
+  const editingMessageId = typeof body.editingMessageId === 'string' ? body.editingMessageId : undefined;
 
   const validated = await safeValidateUIMessages<UIMessage>({ messages: body.messages });
   if (!validated.success) {
@@ -360,6 +474,14 @@ export async function POST(req: Request) {
       status: 413,
       headers: { 'content-type': 'text/plain; charset=utf-8' },
     });
+  }
+
+  if (chatId && editingMessageId) {
+    try {
+      await deleteMessageAndSubsequent(chatId, editingMessageId);
+    } catch (err) {
+      console.warn(JSON.stringify({ event: 'news.delete_for_edit_error', err: String(err) }));
+    }
   }
 
   if (chatId) {
@@ -423,7 +545,14 @@ export async function POST(req: Request) {
     },
   ];
 
-  const allMessages = [...contextMessages, ...normalized];
+  // Filter out data-sources before sending to model (keep only script text).
+  // This ensures sources don't bloat the context on multi-turn conversations.
+  const messagesForModel = normalized.map((m) => ({
+    ...m,
+    parts: m.parts?.filter((p) => p.type !== 'data-sources') ?? [],
+  }));
+
+  const allMessages = [...contextMessages, ...messagesForModel];
 
   const result = streamText({
     model,
@@ -469,15 +598,38 @@ export async function POST(req: Request) {
     onFinish: async ({ responseMessage }) => {
       if (!chatId) return;
       try {
+        // Extract sources from the generated script and store separately
+        const textPart = responseMessage.parts?.find((p) => p.type === 'text');
+        const responseText = (textPart as { text?: string } | undefined)?.text ?? '';
+
+        const { script, sources } = extractSources(responseText);
+
+        // Build parts: script + sources as data
+        const persistedParts: Array<{ type: string; [key: string]: unknown }> = [
+          { type: 'text', text: script },
+        ];
+        if (sources.length > 0) {
+          persistedParts.push({ type: 'data-sources', data: sources });
+        }
+
         await persistAssistantMessage({
           chatId,
           message: {
             id: responseMessage.id,
             role: responseMessage.role,
-            parts: (responseMessage.parts ?? []) as Array<{ type: string; [key: string]: unknown }>,
+            parts: persistedParts,
           },
           redactFiles: true,
         });
+
+        console.log(
+          JSON.stringify({
+            event: 'news.sources_extracted',
+            chatId,
+            sourceCount: sources.length,
+            scriptLength: script.length,
+          })
+        );
       } catch (err) {
         console.warn(JSON.stringify({ event: 'news.persist_assistant_error', err: String(err) }));
       }
