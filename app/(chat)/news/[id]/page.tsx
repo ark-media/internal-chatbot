@@ -808,12 +808,37 @@ function NewsScriptContent({
       }
     }
 
-    // Regular text with potential footnotes
+    // Regular text with potential footnotes and markdown
     if (line.length > 0) {
       parts.push(
-        <p key={parts.length} className="my-2 leading-relaxed">
-          {renderLineWithFootnotes(line, onSourceClick, sources)}
-        </p>,
+        <div key={parts.length} className="my-2 leading-relaxed news-prose">
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              p: ({ children }) => <p className="my-2">{renderFootnotes(children, onSourceClick, sources)}</p>,
+              h1: ({ children }) => <h1 className="text-xl font-bold my-3 mt-4">{renderFootnotes(children, onSourceClick, sources)}</h1>,
+              h2: ({ children }) => <h2 className="text-lg font-bold my-3 mt-4">{renderFootnotes(children, onSourceClick, sources)}</h2>,
+              h3: ({ children }) => <h3 className="text-base font-bold my-2 mt-3">{renderFootnotes(children, onSourceClick, sources)}</h3>,
+              h4: ({ children }) => <h4 className="text-sm font-bold my-2 mt-2 uppercase">{renderFootnotes(children, onSourceClick, sources)}</h4>,
+              strong: ({ children }) => <strong className="font-semibold">{renderFootnotes(children, onSourceClick, sources)}</strong>,
+              em: ({ children }) => <em className="italic">{renderFootnotes(children, onSourceClick, sources)}</em>,
+              blockquote: ({ children }) => (
+                <blockquote className="border-l-4 border-white/30 pl-4 my-3 italic text-white/80">{renderFootnotes(children, onSourceClick, sources)}</blockquote>
+              ),
+              ul: ({ children }) => <ul className="list-disc list-inside my-2">{children}</ul>,
+              ol: ({ children }) => <ol className="list-decimal list-inside my-2">{children}</ol>,
+              li: ({ children }) => <li className="my-1">{renderFootnotes(children, onSourceClick, sources)}</li>,
+              hr: () => <hr className="my-4 border-white/20" />,
+              a: ({ href, children }) => (
+                <a href={href} target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:text-cyan-300 underline">
+                  {children}
+                </a>
+              ),
+            }}
+          >
+            {line}
+          </ReactMarkdown>
+        </div>,
       );
     }
 
@@ -823,59 +848,72 @@ function NewsScriptContent({
   return <div>{parts}</div>;
 }
 
+function renderFootnotes(
+  children: React.ReactNode,
+  onSourceClick: (source: NewsSource) => void,
+  sources: NewsSource[]
+): React.ReactNode {
+  // Handle string children with superscript footnotes
+  if (typeof children === 'string') {
+    const parts: React.ReactNode[] = [];
+    let lastIndex = 0;
+    const superscriptRegex = /([⁰¹²³⁴⁵⁶⁷⁸⁹]+)/g;
+    let match;
+
+    while ((match = superscriptRegex.exec(children)) !== null) {
+      // Add text before superscript
+      if (match.index > lastIndex) {
+        parts.push(children.slice(lastIndex, match.index));
+      }
+      // Convert superscript to number
+      const superscriptMap: Record<string, string> = {
+        '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4',
+        '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9',
+      };
+      let numberStr = '';
+      for (const char of match[0]) {
+        numberStr += superscriptMap[char] || '';
+      }
+      const sourceNum = parseInt(numberStr);
+      const source = sources.find((s) => s.number === sourceNum);
+
+      // Add styled superscript
+      parts.push(
+        <button
+          key={parts.length}
+          onClick={() => source && onSourceClick(source)}
+          disabled={!source}
+          className="inline-flex items-center ml-0.5 bg-transparent border-none padding-0"
+        >
+          <sup className={cn(
+            'text-cyan-300 font-semibold',
+            source ? 'cursor-pointer hover:text-cyan-100' : 'opacity-60 cursor-default'
+          )}>
+            {match[0]}
+          </sup>
+        </button>,
+      );
+      lastIndex = match.index + match[0].length;
+    }
+
+    // Add remaining text
+    if (lastIndex < children.length) {
+      parts.push(children.slice(lastIndex));
+    }
+
+    return parts.length > 0 ? parts : children;
+  }
+
+  // For non-string children (arrays, elements), just return as is
+  return children;
+}
+
 function renderLineWithFootnotes(
   text: string,
   onSourceClick: (source: NewsSource) => void,
   sources: NewsSource[]
 ): React.ReactNode {
-  // Replace superscript numbers with styled spans
-  const parts: React.ReactNode[] = [];
-  let lastIndex = 0;
-  const superscriptRegex = /([⁰¹²³⁴⁵⁶⁷⁸⁹]+)/g;
-  let match;
-
-  while ((match = superscriptRegex.exec(text)) !== null) {
-    // Add text before superscript
-    if (match.index > lastIndex) {
-      parts.push(text.slice(lastIndex, match.index));
-    }
-    // Convert superscript to number
-    const superscriptMap: Record<string, string> = {
-      '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4',
-      '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9',
-    };
-    let numberStr = '';
-    for (const char of match[0]) {
-      numberStr += superscriptMap[char] || '';
-    }
-    const sourceNum = parseInt(numberStr);
-    const source = sources.find((s) => s.number === sourceNum);
-
-    // Add styled superscript
-    parts.push(
-      <button
-        key={parts.length}
-        onClick={() => source && onSourceClick(source)}
-        disabled={!source}
-        className="inline-flex items-center ml-0.5 bg-transparent border-none padding-0"
-      >
-        <sup className={cn(
-          'text-cyan-300 font-semibold',
-          source ? 'cursor-pointer hover:text-cyan-100' : 'opacity-60 cursor-default'
-        )}>
-          {match[0]}
-        </sup>
-      </button>,
-    );
-    lastIndex = match.index + match[0].length;
-  }
-
-  // Add remaining text
-  if (lastIndex < text.length) {
-    parts.push(text.slice(lastIndex));
-  }
-
-  return parts.length > 0 ? parts : text;
+  return renderFootnotes(text, onSourceClick, sources);
 }
 
 
