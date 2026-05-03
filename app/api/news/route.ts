@@ -13,7 +13,7 @@ import { z } from 'zod';
 import { sql } from '@/lib/db';
 import { lookupCorpus } from '@/lib/retrieval';
 import { webSearch } from '@/lib/web-search';
-import { newsSystemPrompt } from '@/lib/news-prompt';
+import { newsSystemPrompt, newsSystemPromptWithExamples } from '@/lib/news-prompt';
 import { ensureTable, getCached, setCached, cacheKey } from '@/lib/tool-cache';
 import { ensureEnglish } from '@/lib/translate';
 import {
@@ -383,6 +383,9 @@ export async function POST(req: Request) {
   const today = new Date().toISOString().slice(0, 10);
   const started = Date.now();
 
+  // Load system prompt with examples
+  const systemPromptContent = await newsSystemPromptWithExamples(today);
+
   // Resolve Ark News Daily show ID once per request
   let arkNewsDailyShowId: number | null = null;
   try {
@@ -398,7 +401,7 @@ export async function POST(req: Request) {
     model,
     system: {
       role: 'system',
-      content: newsSystemPrompt(today),
+      content: systemPromptContent,
       providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
     },
     messages: await convertToModelMessages(normalized),
