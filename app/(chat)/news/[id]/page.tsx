@@ -516,21 +516,15 @@ function NewsBody({
             </button>
           </header>
           <div className="relative flex-1 overflow-y-auto px-5 py-5">
-            <p className="text-[0.92rem] leading-[1.7] text-white/85">
-              {openSource.url}
-            </p>
-          </div>
-          <footer className="relative border-t border-white/10 px-5 py-3">
             <a
               href={openSource.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 rounded-lg bg-[#3eb5f9]/10 px-3 py-1.5 text-sm font-medium text-[#79cdfc] transition hover:bg-[#3eb5f9]/20 hover:text-white"
+              className="text-[0.92rem] leading-[1.7] text-cyan-400 hover:text-cyan-300 underline break-all transition"
             >
-              Open link
-              <ExternalLink className="h-3.5 w-3.5" />
+              {openSource.url}
             </a>
-          </footer>
+          </div>
         </aside>
       ) : null}
     </div>
