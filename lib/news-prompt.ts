@@ -348,7 +348,14 @@ If any item fails, fix it before returning. The goal is a polished, ready-to-rec
 - Leaking tool calls or reasoning into the script. The user sees only the script.`;
 }
 
-export async function loadExamplesMarkdown(): Promise<string> {
+let cachedExamples: string | null = null;
+
+async function loadExamplesMarkdown(): Promise<string> {
+  // Return cached copy if available
+  if (cachedExamples !== null) {
+    return cachedExamples;
+  }
+
   try {
     const fs = await import("fs").then((m) => m.promises);
     const path = await import("path");
@@ -357,9 +364,11 @@ export async function loadExamplesMarkdown(): Promise<string> {
       "lib",
       "news-examples.md"
     );
-    return await fs.readFile(examplesPath, "utf-8");
+    cachedExamples = await fs.readFile(examplesPath, "utf-8");
+    return cachedExamples;
   } catch (error) {
     console.error("Failed to load examples markdown:", error);
+    cachedExamples = "";
     return "";
   }
 }
