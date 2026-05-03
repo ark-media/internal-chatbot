@@ -690,20 +690,6 @@ function MessageRow({
     const fileParts = message.parts?.filter((p) => p.type === 'file') ?? [];
     return (
       <div className="ark-fade-up flex justify-end gap-2 items-start group">
-        {onEdit && (
-          <button
-            onClick={() => onEdit(message)}
-            className={cn(
-              'mt-1 p-1.5 rounded-lg transition-all opacity-0 group-hover:opacity-100 duration-200',
-              isEditing
-                ? 'bg-blue-400/20 text-blue-300 hover:bg-blue-400/30'
-                : 'hover:bg-white/10 text-white/50 hover:text-white/70',
-            )}
-            title="Edit message (or click to edit)"
-          >
-            <Pencil className="h-4 w-4" />
-          </button>
-        )}
         <div
           className={cn(
             'max-w-[82%] rounded-2xl rounded-br-md px-4 py-2.5',
@@ -731,6 +717,20 @@ function MessageRow({
             </div>
           ) : null}
         </div>
+        {onEdit && (
+          <button
+            onClick={() => onEdit(message)}
+            className={cn(
+              'mt-1 p-1.5 rounded-lg transition-all opacity-0 group-hover:opacity-100 duration-200',
+              isEditing
+                ? 'bg-blue-400/20 text-blue-300 hover:bg-blue-400/30'
+                : 'hover:bg-white/10 text-white/50 hover:text-white/70',
+            )}
+            title="Edit message (or click to edit)"
+          >
+            <Pencil className="h-4 w-4" />
+          </button>
+        )}
       </div>
     );
   }
