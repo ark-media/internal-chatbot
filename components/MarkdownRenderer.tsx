@@ -31,6 +31,22 @@ const defaultComponents: Partial<Components> = {
       {children}
     </a>
   ),
+  table: ({ children }) => (
+    <div className="my-4 overflow-x-auto">
+      <table className="w-full border-collapse border border-white/30">{children}</table>
+    </div>
+  ),
+  thead: ({ children }) => (
+    <thead className="bg-white/10 border-b border-white/30">{children}</thead>
+  ),
+  tbody: ({ children }) => <tbody>{children}</tbody>,
+  tr: ({ children }) => <tr className="border-b border-white/20 hover:bg-white/5">{children}</tr>,
+  th: ({ children }) => (
+    <th className="px-4 py-2 text-left font-semibold border-r border-white/20 last:border-r-0">{children}</th>
+  ),
+  td: ({ children }) => (
+    <td className="px-4 py-2 border-r border-white/20 last:border-r-0">{children}</td>
+  ),
 };
 
 export function MarkdownRenderer({ text, components = {}, className = '' }: Props) {
