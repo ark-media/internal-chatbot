@@ -9,7 +9,6 @@ import {
 } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
-import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import {
   FileText,
@@ -39,8 +38,6 @@ import {
   MAX_TOTAL_BYTES,
   formatBytes,
 } from '@/lib/prep-limits';
-
-const AMBER_500 = '#f59e0b';
 
 const EXAMPLE_PROMPTS = [
   'Outline: Lead — Trump signals end to Iran War. B Block — New Middle East realignment. C Block — Passover under bombardment. Sources: WSJ, CBS, Times of Israel',
@@ -342,7 +339,7 @@ function NewsBody({
 
         {/* Message list */}
         <main ref={scrollRef} className="relative flex-1 overflow-y-auto">
-          <div className={cn('mx-auto flex w-full max-w-3xl flex-col gap-7 px-6 py-10', messages.length === 0 && 'min-h-full')}>
+          <div className={cn('flex w-full flex-col gap-7 px-5 py-10', messages.length === 0 && 'min-h-full')}>
             {messages.length === 0 ? (
               <EmptyState
                 title="Ark news"
@@ -395,69 +392,71 @@ function NewsBody({
 
             {!busy && messages.length > 0 && messages[messages.length - 1]?.role === 'assistant' ? (
               <div className="mt-4 flex flex-col gap-3 border-t border-white/10 pt-4">
-                {driveLink ? (
-                  <div className="flex items-center gap-2 rounded-lg bg-green-500/10 px-4 py-3 text-sm text-green-200">
-                    <CheckCircle2 className="h-4 w-4" />
-                    <span>Saved to Drive</span>
-                    <a
-                      href={driveLink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="ml-auto inline-flex items-center gap-1 rounded px-2 py-0.5 text-green-300 transition hover:bg-white/10"
+                <div className="flex flex-wrap items-center gap-2">
+                  {driveLink ? (
+                    <div className="inline-flex items-center gap-2 rounded-lg bg-green-500/10 px-4 py-2.5 text-sm text-green-200">
+                      <CheckCircle2 className="h-4 w-4" />
+                      <span>Saved to Drive</span>
+                      <a
+                        href={driveLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-green-300 transition hover:bg-white/10"
+                      >
+                        Open
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    </div>
+                  ) : driveError ? (
+                    <div className="rounded-lg bg-red-500/10 px-4 py-2.5 text-sm text-red-200">
+                      {driveError}
+                    </div>
+                  ) : (
+                    <button
+                      onClick={saveScriptToDrive}
+                      disabled={driveLoading || driveSaveInProgress || !messages.length}
+                      className={cn(
+                        'inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
+                        'bg-blue-500/20 text-blue-200 transition hover:bg-blue-500/30',
+                        'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-blue-500/20',
+                      )}
                     >
-                      Open
-                      <ExternalLink className="h-3 w-3" />
-                    </a>
-                  </div>
-                ) : driveError ? (
-                  <div className="rounded-lg bg-red-500/10 px-4 py-3 text-sm text-red-200">
-                    {driveError}
-                  </div>
-                ) : (
+                      {driveLoading ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Uploading…
+                        </>
+                      ) : (
+                        <>
+                          <HardDriveUpload className="h-4 w-4" />
+                          Save to Drive
+                        </>
+                      )}
+                    </button>
+                  )}
+
                   <button
-                    onClick={saveScriptToDrive}
-                    disabled={driveLoading || driveSaveInProgress || !messages.length}
+                    onClick={copyScriptToClipboard}
+                    disabled={!messages.length}
                     className={cn(
-                      'flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
-                      'bg-blue-500/20 text-blue-200 transition hover:bg-blue-500/30',
-                      'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-blue-500/20',
+                      'inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
+                      'bg-emerald-500/20 text-emerald-200 transition hover:bg-emerald-500/30',
+                      'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-emerald-500/20',
                     )}
                   >
-                    {driveLoading ? (
+                    {copySuccess ? (
                       <>
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Uploading…
+                        <CheckCircle2 className="h-4 w-4" />
+                        Copied!
                       </>
                     ) : (
                       <>
-                        <HardDriveUpload className="h-4 w-4" />
-                        Save to Drive
+                        <Copy className="h-4 w-4" />
+                        Copy to Clipboard
                       </>
                     )}
                   </button>
-                )}
-
-                <button
-                  onClick={copyScriptToClipboard}
-                  disabled={!messages.length}
-                  className={cn(
-                    'flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
-                    'bg-emerald-500/20 text-emerald-200 transition hover:bg-emerald-500/30',
-                    'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-emerald-500/20',
-                  )}
-                >
-                  {copySuccess ? (
-                    <>
-                      <CheckCircle2 className="h-4 w-4" />
-                      Copied!
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-4 w-4" />
-                      Copy to Clipboard
-                    </>
-                  )}
-                </button>
+                </div>
 
                 <div className="mt-2">
                   <div className="text-xs font-medium uppercase tracking-[0.2em] text-white/40 mb-2">
@@ -758,7 +757,7 @@ function MessageContent({
       return <NewsMarkdown key={i} text={part.text} onSourceClick={onSourceClick} sources={sources} />;
     }
     if (part.type === 'tool-fetchArticle') {
-      const state = (part as any).state;
+      const state = (part as { state?: string }).state;
       if (state === 'input-streaming' || state === 'input-available') {
         return <ToolCallChip key={i} name="Fetching article…" status="in-flight" />;
       }
@@ -767,7 +766,7 @@ function MessageContent({
       }
     }
     if (part.type === 'tool-searchCorpus') {
-      const state = (part as any).state;
+      const state = (part as { state?: string }).state;
       if (state === 'input-streaming' || state === 'input-available') {
         return <ToolCallChip key={i} name="Loading style examples…" status="in-flight" />;
       }
@@ -776,7 +775,7 @@ function MessageContent({
       }
     }
     if (part.type === 'tool-webSearch') {
-      const state = (part as any).state;
+      const state = (part as { state?: string }).state;
       if (state === 'input-streaming' || state === 'input-available') {
         return <ToolCallChip key={i} name="Searching the web…" status="in-flight" />;
       }
@@ -1016,15 +1015,6 @@ function renderFootnotes(
   // For non-string children (arrays, elements), just return as is
   return children;
 }
-
-function renderLineWithFootnotes(
-  text: string,
-  onSourceClick: (source: NewsSource) => void,
-  sources: NewsSource[]
-): React.ReactNode {
-  return renderFootnotes(text, onSourceClick, sources);
-}
-
 
 function TypingDots() {
   return (

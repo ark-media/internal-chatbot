@@ -11,6 +11,7 @@ import {
 } from 'ai';
 import { z } from 'zod';
 
+import { getContextWindow } from '@/lib/models';
 import {
   countGuestAppearancesOnShow,
   getDossier,
@@ -24,7 +25,7 @@ import { sql } from '@/lib/db';
 import { shows } from '@/lib/knowledge-base';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { routeQuery, type RoutedQuery } from '@/lib/router';
-import type { ChatUIMessage, PreloadedSources } from '@/components/chat-types';
+import type { ChatUIMessage, PreloadedSources, UsageData } from '@/components/chat-types';
 import { ensureTable, getCached, setCached, cacheKey } from '@/lib/tool-cache';
 import {
   ensureChatTables,
@@ -712,6 +713,8 @@ export async function POST(req: Request) {
     parts: m.parts?.filter((p) => p.type !== 'data-sources') ?? [],
   }));
 
+  let capturedUsage: { inputTokens?: number; outputTokens?: number; cachedInputTokens?: number } | null = null;
+
   const result = streamText({
     model,
     system: {
@@ -731,6 +734,7 @@ export async function POST(req: Request) {
     stopWhen: stepCountIs(8),
     temperature: 0.2,
     onFinish: ({ text, usage, finishReason, steps }) => {
+      capturedUsage = usage;
       const allToolCalls = steps.flatMap((s) => s.toolCalls ?? []);
       const allToolResults = steps.flatMap((s) => s.toolResults ?? []);
       const toolChunkCount = allToolResults.reduce((sum, r) => {
@@ -809,6 +813,20 @@ export async function POST(req: Request) {
       );
     },
     onFinish: async ({ responseMessage }) => {
+      // Attach usage data to the message metadata
+      if (capturedUsage) {
+        if (!responseMessage.metadata) {
+          responseMessage.metadata = {};
+        }
+        const contextWindow = getContextWindow(model);
+        (responseMessage.metadata as { usage?: UsageData }).usage = {
+          inputTokens: capturedUsage.inputTokens ?? 0,
+          outputTokens: capturedUsage.outputTokens ?? 0,
+          cachedInputTokens: capturedUsage.cachedInputTokens ?? 0,
+          contextWindow,
+        };
+      }
+
       if (!chatId) return;
       try {
         await persistAssistantMessage({

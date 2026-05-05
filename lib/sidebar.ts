@@ -1,4 +1,4 @@
-export type Surface = 'archive' | 'prep' | 'news';
+export type Surface = 'archive' | 'prep' | 'news' | 'scripts';
 
 export const SURFACES: ReadonlyArray<{
   key: Surface;
@@ -9,13 +9,33 @@ export const SURFACES: ReadonlyArray<{
   { key: 'archive', label: 'Archive', href: '/', chatHrefBase: '/chat' },
   { key: 'prep', label: 'Prep', href: '/prep', chatHrefBase: '/prep' },
   { key: 'news', label: 'News', href: '/news', chatHrefBase: '/news' },
+  {
+    key: 'scripts',
+    label: 'Scripts',
+    href: '/news/orchestrator',
+    chatHrefBase: '/news/orchestrator',
+  },
 ];
 
 export function detectSurface(pathname: string | null): Surface {
   if (!pathname) return 'archive';
+  // Scripts must come before /news since its path is a prefix of /news.
+  if (pathname.startsWith('/news/orchestrator')) return 'scripts';
   if (pathname.startsWith('/prep')) return 'prep';
   if (pathname.startsWith('/news')) return 'news';
   return 'archive';
+}
+
+// Sidebar list/delete go to different APIs depending on surface. Orchestrator
+// runs live in their own table, not the chats table.
+export function listEndpoint(surface: Surface): string {
+  if (surface === 'scripts') return '/api/news/orchestrator';
+  return `/api/chats?surface=${surface}`;
+}
+
+export function deleteEndpoint(surface: Surface, chatId: string): string {
+  if (surface === 'scripts') return `/api/news/orchestrator/${chatId}`;
+  return `/api/chats/${chatId}?confirm=1`;
 }
 
 export function activeChatId(

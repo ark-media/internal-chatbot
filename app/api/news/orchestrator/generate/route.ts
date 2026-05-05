@@ -2,12 +2,15 @@ import { z } from 'zod';
 
 import { getNewsExamples } from '@/lib/news-prompt';
 import { reflectLoop } from '@/lib/orchestrator/reflect';
-import { craftScript } from '@/lib/orchestrator/script-craft';
+import { buildCachedSystemContent, craftScript } from '@/lib/orchestrator/script-craft';
 import {
   ensureOrchestratorTables,
   loadRun,
   saveRun,
+  saveRunIfStage,
 } from '@/lib/orchestrator/state';
+import { deriveApprovedTopics } from '@/lib/orchestrator/types';
+import { loadStyleProfile } from '@/lib/orchestrator/style-memory';
 import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
@@ -49,43 +52,84 @@ export async function POST(req: Request) {
 
   const run = await loadRun(body.chatId);
   if (!run) return Response.json({ error: 'run_not_found' }, { status: 404 });
-  if (!run.distill || run.stage !== 'checkpoint') {
+  if (!run.distill) {
+    return Response.json({ error: 'no_topics', stage: run.stage }, { status: 409 });
+  }
+  // Allow regenerate from `complete`. Reject only stages where topics aren't
+  // ready (gathering) or where another generate is mid-flight (crafting).
+  if (run.stage !== 'checkpoint' && run.stage !== 'complete') {
     return Response.json({ error: 'wrong_stage', stage: run.stage }, { status: 409 });
   }
 
-  const approvedTopics = body.approvedTopicIndices
+  // Filter and validate the approved indices first so we fail fast before
+  // claiming the lease. Drop indices that are out of range or point to a
+  // topic with zero attached articles.
+  const validatedIndices = body.approvedTopicIndices
     .filter((i) => i < run.distill!.topics.length)
-    .map((i) => run.distill!.topics[i]);
+    .filter((i) => run.distill!.topics[i].articles.length > 0);
+  const approvedTopics = deriveApprovedTopics(run.distill.topics, validatedIndices);
 
   if (approvedTopics.length === 0) {
-    return Response.json({ error: 'no_topics_approved' }, { status: 400 });
+    return Response.json(
+      { error: 'no_topics_approved', detail: 'Approved topics must have at least one source attached.' },
+      { status: 400 },
+    );
   }
 
   const started = Date.now();
 
-  await saveRun({ ...run, stage: 'crafting', approvedTopics, updatedAt: new Date().toISOString() });
+  // Atomic CAS on stage. Without this, two concurrent /generate calls would
+  // both observe stage='complete' and both flip to 'crafting' — wasting a
+  // model call and racing on the final saveRun.
+  const claimed = await saveRunIfStage(
+    {
+      ...run,
+      stage: 'crafting',
+      approvedTopics,
+      approvedTopicIndices: validatedIndices,
+      updatedAt: new Date().toISOString(),
+    },
+    ['checkpoint', 'complete'],
+  );
+  if (!claimed) {
+    return Response.json(
+      { error: 'wrong_stage', detail: 'Another generate call is already in progress for this run.' },
+      { status: 409 },
+    );
+  }
 
   try {
-    const exampleScripts = await getNewsExamples();
-
-    const initialScript = await craftScript({
+    const [exampleScripts, styleProfile] = await Promise.all([
+      getNewsExamples(),
+      loadStyleProfile(),
+    ]);
+    const cachedSystemContent = buildCachedSystemContent({
       topics: approvedTopics,
       exampleScripts,
       today: run.today,
+      styleProfile: styleProfile.text,
     });
+
+    const initialScript = await craftScript({ cachedSystemContent });
 
     const outcome = await reflectLoop({
       initialScript,
       approvedTopics,
       exampleScripts,
-      today: run.today,
+      cachedSystemContent,
+      styleProfile: styleProfile.text,
     });
 
     await saveRun({
       ...run,
       stage: 'complete',
       approvedTopics,
+      approvedTopicIndices: validatedIndices,
       finalScript: outcome.finalScript,
+      // Regenerate wipes the refine history — the prior versions belonged
+      // to a different generation and would be misleading to keep.
+      scriptVersions: [],
+      refineHistory: [],
       iterations: outcome.iterations,
       updatedAt: new Date().toISOString(),
     });
@@ -107,10 +151,15 @@ export async function POST(req: Request) {
       iterations: outcome.iterations,
     });
   } catch (err) {
+    // If regenerating from a completed run, keep stage='complete' so the
+    // prior script stays visible — only first-time generate failures should
+    // park the run in 'error'.
+    const keepComplete = run.stage === 'complete' && run.finalScript !== null;
     await saveRun({
       ...run,
-      stage: 'error',
+      stage: keepComplete ? 'complete' : 'error',
       approvedTopics,
+      approvedTopicIndices: validatedIndices,
       errorMessage: String(err).slice(0, 500),
       updatedAt: new Date().toISOString(),
     });
@@ -118,7 +167,10 @@ export async function POST(req: Request) {
       JSON.stringify({ event: 'orchestrator.generate.error', err: String(err) }),
     );
     return Response.json(
-      { stage: 'error', errorMessage: String(err).slice(0, 500) },
+      {
+        stage: keepComplete ? 'complete' : 'error',
+        errorMessage: String(err).slice(0, 500),
+      },
       { status: 500 },
     );
   }

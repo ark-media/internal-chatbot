@@ -17,14 +17,14 @@ if (typeof global.DataTransfer === 'undefined') {
       },
     };
 
-    get files() {
+    get files(): FileList {
       // Create a FileList-like object
       const fileArray = this.items._files;
       return Object.defineProperty(fileArray, 'length', {
         value: fileArray.length,
-      }) as any;
+      }) as unknown as FileList;
     }
   }
 
-  global.DataTransfer = DataTransferPolyfill as any;
+  global.DataTransfer = DataTransferPolyfill as unknown as typeof DataTransfer;
 }

@@ -15,8 +15,10 @@ import {
 import {
   SURFACES,
   activeChatId,
+  deleteEndpoint,
   detectSurface,
   formatRelative,
+  listEndpoint,
   type Surface,
 } from '@/lib/sidebar';
 
@@ -45,7 +47,7 @@ export function ChatSidebar() {
 
   const refresh = useCallback(async (surface: Surface) => {
     try {
-      const res = await fetch(`/api/chats?surface=${surface}`, { cache: 'no-store' });
+      const res = await fetch(listEndpoint(surface), { cache: 'no-store' });
       if (!res.ok) return;
       const data = (await res.json()) as { chats?: ChatSummary[] };
       setChats(data.chats ?? []);
@@ -84,7 +86,7 @@ export function ChatSidebar() {
         router.push(home);
       }
       setChats((prev) => prev.filter((c) => c.id !== chatId));
-      fetch(`/api/chats/${chatId}?confirm=1`, { method: 'DELETE' })
+      fetch(deleteEndpoint(viewSurface, chatId), { method: 'DELETE' })
         .catch(() => {
           refresh(viewSurface);
         })
@@ -130,9 +132,9 @@ export function ChatSidebar() {
 
       <div className="flex gap-1 px-3 pb-3 text-[0.72rem]">
         {SURFACES.map((s) => (
-          <button
+          <Link
             key={s.key}
-            type="button"
+            href={s.href}
             onClick={() => setViewSurface(s.key)}
             className={cn(
               'rounded-md px-2 py-1 transition',
@@ -142,7 +144,7 @@ export function ChatSidebar() {
             )}
           >
             {s.label}
-          </button>
+          </Link>
         ))}
       </div>
 

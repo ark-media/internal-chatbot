@@ -1,4 +1,35 @@
-export function newsSystemPrompt(): string {
+const CHAT_TOOLS_AND_VALIDATION = `== Tools ==
+
+- **fetchArticle** — takes a URL and returns the article text, title, date, and source. Call this for every article link the user provides. Use Tavily Extract under the hood, which handles paywalls and JavaScript-heavy sites. If a URL is from X/Twitter, Tavily will handle it with extract_depth set to advanced. Sources in Hebrew are automatically translated to English. **Extract the publication date from the result and include it in your SOURCES list.** If fetchArticle returns {ok: false}, note the reason (paywall, blocked, etc.) and FLAG the claim that relied on that source. If the date is null or unavailable, flag this in the sources as [FLAG: publication date unavailable].
+- **searchCorpus** — searches the Ark News Daily transcript archive for prior scripts. Call this ONCE at the start to load 1–2 prior scripts as style examples. Do NOT call it repeatedly. Use the results to anchor your voice and pacing.
+
+Call both tools in parallel on the first turn, then write the script. Do not call tools multiple times.
+
+**Before using any article in the script, validate its publication date against the acceptable range above.** The user will provide timezone context in their notes (e.g., "Monday 27th April Israel time"). If the article falls outside the acceptable window, either:
+- Do NOT use it. Find a fresher source via webSearch.
+- If no fresher source exists and the article is essential, flag it for editor review with [FLAG: article outside acceptable publication window — editor approval required].
+
+Publication dates are validated internally but do NOT appear in the final script. The script flows naturally without timestamp references.`;
+
+const ORCHESTRATOR_SOURCE_HANDLING = `== Sources ==
+
+Sources are pre-curated and supplied below the topic list. Each source has been read by an upstream editor agent that has already produced a focused summary and pulled verbatim quotes — work directly from those, do not ask to fetch or search anything. You have no tools available; do not announce that you will fetch sources or search a corpus, and do not write any preamble before the script.
+
+Style examples from prior episodes are also supplied directly in this prompt under "Reference Examples". Match that voice and pacing without trying to retrieve more.
+
+**Publication-date validation:** Each source is tagged with its publication date. Articles outside the acceptable window are marked \`[outside acceptable date window]\`; do not use them unless they are essential, and if you do, attach \`[FLAG: article outside acceptable publication window — editor approval required]\`. Articles tagged \`[fetch error: ...]\` should be cited only if their summary is still strong enough to support the claim. Publication dates are validated internally and do NOT appear in the final script.`;
+
+export type NewsPromptMode = 'chat' | 'orchestrator';
+
+export function newsSystemPrompt(mode: NewsPromptMode = 'chat'): string {
+  // The orchestrator path supplies pre-curated sources directly in the user
+  // prompt; it has no tools wired up. The chat path uses fetchArticle and
+  // searchCorpus tools. The two prompts only differ in the trailing source-
+  // handling section.
+  const sourceHandling =
+    mode === 'orchestrator'
+      ? ORCHESTRATOR_SOURCE_HANDLING
+      : CHAT_TOOLS_AND_VALIDATION;
   return `You are the script-generation assistant for Ark News Daily, a 6–10 minute daily news briefing hosted by Deborah Pardes.
 
 This show reports on what happened the morning after. You are writing a script for broadcast the morning after news breaks. **Only include articles published on the previous day.** For Monday episodes, include articles from the weekend (Saturday–Sunday) and Monday morning.
@@ -262,18 +293,7 @@ FLAGS:
 7. **Validate publication dates internally.** Check every article's publication date against the acceptable window the user provides. Do not use articles outside that window without flagging for editor review.
 8. **No stale news.** This is a "morning after" show reporting on what happened the previous day (in the user's timezone). Only include articles published within the acceptable window. Reject articles older than that window unless the editor explicitly approves.
 
-== Tools ==
-
-- **fetchArticle** — takes a URL and returns the article text, title, date, and source. Call this for every article link the user provides. Use Tavily Extract under the hood, which handles paywalls and JavaScript-heavy sites. If a URL is from X/Twitter, Tavily will handle it with extract_depth set to advanced. Sources in Hebrew are automatically translated to English. **Extract the publication date from the result and include it in your SOURCES list.** If fetchArticle returns {ok: false}, note the reason (paywall, blocked, etc.) and FLAG the claim that relied on that source. If the date is null or unavailable, flag this in the sources as [FLAG: publication date unavailable].
-- **searchCorpus** — searches the Ark News Daily transcript archive for prior scripts. Call this ONCE at the start to load 1–2 prior scripts as style examples. Do NOT call it repeatedly. Use the results to anchor your voice and pacing.
-
-Call both tools in parallel on the first turn, then write the script. Do not call tools multiple times.
-
-**Before using any article in the script, validate its publication date against the acceptable range above.** The user will provide timezone context in their notes (e.g., "Monday 27th April Israel time"). If the article falls outside the acceptable window, either:
-- Do NOT use it. Find a fresher source via webSearch.
-- If no fresher source exists and the article is essential, flag it for editor review with [FLAG: article outside acceptable publication window — editor approval required].
-
-Publication dates are validated internally but do NOT appear in the final script. The script flows naturally without timestamp references.
+${sourceHandling}
 
 == Primary News Sources ==
 
@@ -355,19 +375,27 @@ async function loadExamplesMarkdown(): Promise<string> {
 }
 
 export function newsContextForDate(today: string): string {
-  const todayDate = new Date(today);
-  const yesterday = new Date(todayDate);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const dayBefore = new Date(todayDate);
-  dayBefore.setDate(dayBefore.getDate() - 2);
+  // Treat the YYYY-MM-DD as a UTC calendar date so getUTCDay() matches the
+  // writer's calendar regardless of the runtime's local zone. Same logic as
+  // `lib/orchestrator/source-gathering.ts#parseLocalDate` — keep them in
+  // sync if the date semantics ever change.
+  const [y, m, d] = today.split('-').map(Number);
+  const todayDate = new Date(Date.UTC(y, m - 1, d));
+  const offset = (delta: number): string => {
+    const x = new Date(todayDate);
+    x.setUTCDate(x.getUTCDate() + delta);
+    return x.toISOString().slice(0, 10);
+  };
+  const yesterdayStr = offset(-1);
+  const dayBeforeStr = offset(-2);
+  const isMonday = todayDate.getUTCDay() === 1;
 
-  const yesterdayStr = yesterday.toISOString().split('T')[0];
-  const dayBeforeStr = dayBefore.toISOString().split('T')[0];
-  const isMonday = todayDate.getDay() === 1;
-
+  // Ark News Daily reports on the morning after. The system prompt says
+  // Monday episodes cover the full weekend (Saturday + Sunday) plus Monday
+  // morning, so accept all three. Other weekdays accept yesterday only.
   let acceptableDateRange = `published on ${yesterdayStr}`;
   if (isMonday) {
-    acceptableDateRange = `published on ${dayBeforeStr} (Sunday) or ${yesterdayStr} (Monday)`;
+    acceptableDateRange = `published on ${dayBeforeStr} (Saturday), ${yesterdayStr} (Sunday), or ${today} (Monday)`;
   }
 
   return `Today is ${today}.\n\nAcceptable publication dates: ${acceptableDateRange}`;

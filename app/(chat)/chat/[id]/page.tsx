@@ -6,22 +6,21 @@ import {
   useMemo,
   useRef,
   useState,
-  type ReactNode,
 } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
-import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { Square, Sparkles, FileText, ChevronRight, Copy, CheckCircle2, Pencil } from 'lucide-react';
 
 import { MessageText } from '@/components/MessageText';
 import { SourcePanel } from '@/components/SourcePanel';
-import { MODELS } from '@/components/ModelSelector';
+import { MODELS, getContextWindow } from '@/components/ModelSelector';
 import { ChatComposer } from '@/components/ChatComposer';
 import { ChatErrorBanner } from '@/components/ChatErrorBanner';
 import { Header } from '@/components/Header';
 import { EmptyState } from '@/components/EmptyState';
 import { ArkLogo } from '@/components/ArkLogo';
+import { TokenUsageIndicator } from '@/components/TokenUsageIndicator';
 import type {
   ChatUIMessage,
   CountGuestAppearancesToolOutput,
@@ -30,6 +29,7 @@ import type {
   PanelView,
   Source,
   TopGuestsToolOutput,
+  UsageData,
 } from '@/components/chat-types';
 import { cn } from '@/lib/cn';
 import { chatFetch } from '@/lib/chat-fetch';
@@ -316,6 +316,33 @@ function ChatBody({
     });
   }, [messages, busy]);
 
+  // Cumulative token usage is a pure projection of assistant-message metadata,
+  // so derive it instead of mirroring it into state via an effect.
+  const cumulativeUsage = useMemo<UsageData | null>(() => {
+    let totalInput = 0;
+    let totalOutput = 0;
+    let totalCached = 0;
+
+    for (const msg of messages) {
+      if (msg.role === 'assistant' && msg.metadata) {
+        const usage = (msg.metadata as { usage?: UsageData }).usage;
+        if (usage) {
+          totalInput += usage.inputTokens;
+          totalOutput += usage.outputTokens;
+          totalCached += usage.cachedInputTokens;
+        }
+      }
+    }
+
+    if (totalInput === 0 && totalOutput === 0) return null;
+    return {
+      inputTokens: totalInput,
+      outputTokens: totalOutput,
+      cachedInputTokens: totalCached,
+      contextWindow: getContextWindow(selectedModel),
+    };
+  }, [messages, selectedModel]);
+
   // Auto-focus input when entering edit mode
   useEffect(() => {
     if (editingMessageId && inputRef.current) {
@@ -363,7 +390,7 @@ function ChatBody({
           ref={scrollRef}
           className="relative flex-1 overflow-y-auto"
         >
-          <div className={cn('mx-auto flex w-full max-w-3xl flex-col gap-7 px-6 py-10', messages.length === 0 && 'min-h-full')}>
+          <div className={cn('flex w-full flex-col gap-7 px-5 py-10', messages.length === 0 && 'min-h-full')}>
             {messages.length === 0 ? (
               <EmptyState
                 title="Ask the"
@@ -389,28 +416,33 @@ function ChatBody({
             ))}
 
             {messages.some((m) => m.role === 'assistant') && !busy ? (
-              <div className="flex gap-2 pl-12">
-                <button
-                  onClick={copyToClipboard}
-                  disabled={!messages.some((m) => m.role === 'assistant')}
-                  className={cn(
-                    'flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
-                    'bg-emerald-500/20 text-emerald-200 transition hover:bg-emerald-500/30',
-                    'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-emerald-500/20',
-                  )}
-                >
-                  {copySuccess ? (
-                    <>
-                      <CheckCircle2 className="h-4 w-4" />
-                      Copied!
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-4 w-4" />
-                      Copy Answer
-                    </>
-                  )}
-                </button>
+              <div className="flex flex-col gap-3 pl-12">
+                <div className="flex gap-2">
+                  <button
+                    onClick={copyToClipboard}
+                    disabled={!messages.some((m) => m.role === 'assistant')}
+                    className={cn(
+                      'flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
+                      'bg-emerald-500/20 text-emerald-200 transition hover:bg-emerald-500/30',
+                      'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-emerald-500/20',
+                    )}
+                  >
+                    {copySuccess ? (
+                      <>
+                        <CheckCircle2 className="h-4 w-4" />
+                        Copied!
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="h-4 w-4" />
+                        Copy Answer
+                      </>
+                    )}
+                  </button>
+                </div>
+                {cumulativeUsage && (
+                  <TokenUsageIndicator usage={cumulativeUsage} />
+                )}
               </div>
             ) : null}
 

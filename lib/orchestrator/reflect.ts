@@ -5,7 +5,6 @@ import { z } from 'zod';
 
 import { craftScript } from './script-craft';
 import type {
-  Article,
   ReviewResult,
   Script,
   TopicWithSources,
@@ -63,8 +62,9 @@ async function reviewScriptWithOpus(opts: {
   script: Script;
   exampleScripts: string;
   approvedTopics: TopicWithSources[];
+  styleProfile?: string;
 }): Promise<ReviewResult> {
-  const { script, exampleScripts, approvedTopics } = opts;
+  const { script, exampleScripts, approvedTopics, styleProfile } = opts;
   const checklist = await loadEditorialChecklist();
 
   const sourceList = approvedTopics
@@ -72,15 +72,29 @@ async function reviewScriptWithOpus(opts: {
     .map((a) => `- ${a.source} — ${a.title} (${a.publicationDate ?? 'unknown'})${a.isFlagged ? ' [outside-window]' : ''}: ${a.url}`)
     .join('\n');
 
-  const prompt = `EDITORIAL CHECKLIST:
+  // Style notes are injected here too (not just in script-craft) so the
+  // reviewer doesn't flag deliberate writer preferences as soft problems.
+  // Without this, Opus could mark e.g. short-sentence cadence as "structural
+  // imbalance" and trigger refines that the writer has already rejected.
+  const styleBlock =
+    styleProfile && styleProfile.trim().length > 0
+      ? `\n\nWRITER STYLE PREFERENCES (treat as ground truth — do not flag as problems):\n\n${styleProfile.trim()}`
+      : '';
+
+  // Checklist and examples are constant across reflect iterations — bake them
+  // into the cached system block so iterations 2 and 3 hit the prompt cache
+  // (Opus tokens are the expensive ones in this pipeline).
+  const systemContent = `${ADVISOR_SYSTEM}
+
+EDITORIAL CHECKLIST:
 
 ${checklist}
 
 GOLD-STANDARD EXAMPLES (match this register):
 
-${exampleScripts.slice(0, 12000)}
+${truncateAtParagraph(exampleScripts, EXAMPLE_TRUNCATE_CHARS)}${styleBlock}`;
 
-APPROVED SOURCES (every superscript citation in the script should map to one of these):
+  const prompt = `APPROVED SOURCES (every superscript citation in the script should map to one of these):
 
 ${sourceList}
 
@@ -95,7 +109,7 @@ Review the script. Return a JSON object with: problems (array of {type, issue, d
     schema: reviewSchema,
     system: {
       role: 'system',
-      content: ADVISOR_SYSTEM,
+      content: systemContent,
       providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
     },
     prompt,
@@ -124,14 +138,33 @@ export type ReflectOutcome = {
 
 const MAX_ITERATIONS = 3;
 
+// Soft cap on the examples block in the reviewer's cached system. ~12k chars
+// is roughly ~3k tokens; bigger than this and the reviewer's prompt-cache
+// payoff starts to shrink. Truncated at the nearest preceding paragraph
+// boundary by `truncateAtParagraph` so we don't cut mid-sentence.
+const EXAMPLE_TRUNCATE_CHARS = 12000;
+
+// Truncate `text` to at most `limit` characters at a paragraph boundary
+// (double-newline). Falls back to a single-newline cut, then a hard slice,
+// so the function always returns ≤ `limit` chars. Exported for tests.
+export function truncateAtParagraph(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  const head = text.slice(0, limit);
+  const para = head.lastIndexOf('\n\n');
+  if (para > limit * 0.6) return head.slice(0, para);
+  const line = head.lastIndexOf('\n');
+  if (line > limit * 0.6) return head.slice(0, line);
+  return head;
+}
+
 export async function reflectLoop(opts: {
   initialScript: Script;
   approvedTopics: TopicWithSources[];
-  additionalArticles?: Article[];
   exampleScripts: string;
-  today: string;
+  cachedSystemContent: string;
+  styleProfile?: string;
 }): Promise<ReflectOutcome> {
-  const { initialScript, approvedTopics, additionalArticles = [], exampleScripts, today } = opts;
+  const { initialScript, approvedTopics, exampleScripts, cachedSystemContent, styleProfile } = opts;
 
   let script = initialScript;
   const history: ReflectOutcome['history'] = [];
@@ -139,7 +172,7 @@ export async function reflectLoop(opts: {
   for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     let review: ReviewResult;
     try {
-      review = await reviewScriptWithOpus({ script, exampleScripts, approvedTopics });
+      review = await reviewScriptWithOpus({ script, exampleScripts, approvedTopics, styleProfile });
     } catch (err) {
       // Spec: if Opus call fails, fall back to Sonnet's own judgment and exit.
       console.warn(JSON.stringify({ event: 'orchestrator.reflect.opus_error', err: String(err) }));
@@ -158,10 +191,7 @@ export async function reflectLoop(opts: {
 
     try {
       script = await craftScript({
-        topics: approvedTopics,
-        additionalArticles,
-        exampleScripts,
-        today,
+        cachedSystemContent,
         corrections: review.corrections,
         previousScript: script.fullText,
       });

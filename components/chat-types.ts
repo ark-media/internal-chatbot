@@ -118,7 +118,17 @@ export type PreloadedSources = {
   turns: NonNullable<DossierToolOutput['turns']>;
 };
 
-export type ChatUIMessage = UIMessage<unknown, { preloaded: PreloadedSources }>;
+export type UsageData = {
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+  contextWindow: number; // total available tokens
+};
+
+export type ChatUIMessage = UIMessage<
+  unknown,
+  { preloaded: PreloadedSources; usage?: UsageData }
+>;
 
 export type CountGuestAppearancesToolOutput = {
   speakerName?: string;

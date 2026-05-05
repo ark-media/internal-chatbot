@@ -9,7 +9,6 @@ import {
 } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
-import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import {
   CheckCircle2,
@@ -339,7 +338,7 @@ function PrepBody({
 
         {/* ---------- Message list ---------- */}
         <main ref={scrollRef} className="relative flex-1 overflow-y-auto">
-          <div className={cn('mx-auto flex w-full max-w-3xl flex-col gap-7 px-6 py-10', messages.length === 0 && 'min-h-full')}>
+          <div className={cn('flex w-full flex-col gap-7 px-5 py-10', messages.length === 0 && 'min-h-full')}>
             {messages.length === 0 ? (
               <EmptyState
                 title="Prep the"
@@ -406,9 +405,9 @@ function PrepBody({
             />
 
             {!busy && messages.length > 0 && messages[messages.length - 1]?.role === 'assistant' ? (
-              <div className="mt-4 flex flex-col gap-3 border-t border-white/10 pt-4">
+              <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-white/10 pt-4">
                 {driveLink ? (
-                  <div className="flex items-center gap-2 rounded-lg bg-green-500/10 px-4 py-3 text-sm text-green-200">
+                  <div className="inline-flex items-center gap-2 rounded-lg bg-green-500/10 px-4 py-2.5 text-sm text-green-200">
                     <CheckCircle2 className="h-4 w-4" />
                     <span>
                       Saved to Drive
@@ -422,14 +421,14 @@ function PrepBody({
                       href={driveLink}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="ml-auto inline-flex items-center gap-1 rounded px-2 py-0.5 text-green-300 transition hover:bg-white/10"
+                      className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-green-300 transition hover:bg-white/10"
                     >
                       Open
                       <ExternalLink className="h-3 w-3" />
                     </a>
                   </div>
                 ) : driveError ? (
-                  <div className="rounded-lg bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                  <div className="rounded-lg bg-red-500/10 px-4 py-2.5 text-sm text-red-200">
                     {driveError}
                   </div>
                 ) : (
@@ -437,7 +436,7 @@ function PrepBody({
                     onClick={saveQuestionsToDrive}
                     disabled={driveLoading || driveSaveInProgress}
                     className={cn(
-                      'flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
+                      'inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
                       'bg-blue-500/20 text-blue-200 transition hover:bg-blue-500/30',
                       'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-blue-500/20',
                     )}
@@ -459,7 +458,7 @@ function PrepBody({
                 <button
                   onClick={copyQuestionsToClipboard}
                   className={cn(
-                    'flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
+                    'inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
                     'bg-emerald-500/20 text-emerald-200 transition hover:bg-emerald-500/30',
                     'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-emerald-500/20',
                   )}

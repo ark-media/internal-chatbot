@@ -58,7 +58,7 @@ async function uploadDocToFolder(
       requestBody: fileMetadata,
       media,
       fields: 'id, webViewLink',
-    } as any);
+    });
 
     const fileId = response.data.id || '';
     const webViewLink = response.data.webViewLink || '';

@@ -100,7 +100,7 @@ export default async function TranscriptPage({ params, searchParams }: Props) {
       <Header variant="archive" />
 
       <main className="relative flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-3xl px-6 py-10">
+        <div className="w-full px-5 py-10">
           <header className="mb-8 border-b border-white/[0.06] pb-6">
             <Link
               href="/"

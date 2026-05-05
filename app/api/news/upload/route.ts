@@ -9,8 +9,6 @@ const uploadRequestSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format'),
 });
 
-type UploadRequest = z.infer<typeof uploadRequestSchema>;
-
 export async function POST(request: Request) {
   try {
     const body = await request.json();

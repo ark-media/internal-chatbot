@@ -54,7 +54,14 @@ export function SourcePanel({ panel, onClose, onChange }: Props) {
       ) : panel.view === 'guest_episodes' ? (
         <GuestEpisodesBody panel={panel} onClose={onClose} />
       ) : (
-        <TranscriptBody panel={panel} onClose={onClose} onChange={onChange} />
+        <TranscriptBody
+          // Force a fresh component instance per target so state (data,
+          // error, didScroll) starts empty without resetting inside an effect.
+          key={`${panel.episode_id}:${panel.turnId ?? ''}:${panel.chunkId ?? ''}`}
+          panel={panel}
+          onClose={onClose}
+          onChange={onChange}
+        />
       )}
     </aside>
   );
@@ -298,14 +305,10 @@ function TranscriptBody({
   const scrollRef = useRef<HTMLDivElement>(null);
   const didScrollRef = useRef(false);
 
-  // Refetch whenever the targeted episode/turn/chunk changes — re-clicking a
-  // different citation must replace the loaded transcript, not stick on the
-  // first one.
+  // The parent remounts this component when episode/turn/chunk change
+  // (via `key`), so state always starts empty here — no in-effect reset needed.
   useEffect(() => {
     let cancelled = false;
-    setData(null);
-    setError(null);
-    didScrollRef.current = false;
 
     const params = new URLSearchParams();
     if (panel.turnId != null) params.set('turn', String(panel.turnId));

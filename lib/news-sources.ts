@@ -58,3 +58,76 @@ export const newsSources = {
     'Foreign Affairs',
   ],
 };
+
+// Hostnames mapped to outlets above. Suffix-matched, so subdomains
+// (news.walla.co.il, www.haaretz.com) are covered automatically.
+const approvedHostnames = [
+  'timesofisrael.com',
+  'wsj.com',
+  'nytimes.com',
+  'apnews.com',
+  'ap.org',
+  'reuters.com',
+  'jpost.com',
+  'i24news.tv',
+  'haaretz.com',
+  'haaretz.co.il',
+  'aljazeera.com',
+  'aljazeera.net',
+  'semafor.com',
+  'bloomberg.com',
+  'ynet.co.il',
+  'ynetnews.com',
+  'israelhayom.co.il',
+  'israelhayom.com',
+  'kan.org.il',
+  'maariv.co.il',
+  'now14.co.il',
+  'calcalist.co.il',
+  'walla.co.il',
+  'mako.co.il',
+  'n12.co.il',
+  'globes.co.il',
+  '13tv.co.il',
+  'reshet13.co.il',
+  'fdd.org',
+  'thefp.com',
+  'jiss.org.il',
+  'inss.org.il',
+  'jinsa.org',
+  'misgavins.org',
+  'israel-alma.org',
+  'tabletmag.com',
+  'commentary.org',
+  'theatlantic.com',
+  'foreignaffairs.com',
+];
+
+const approvedXHandles = new Set(
+  newsSources.xAccounts.map((a) => a.handle.replace(/^@/, '').toLowerCase()),
+);
+
+export function isApprovedSource(url: string): boolean {
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { return false; }
+  const host = parsed.hostname.toLowerCase();
+
+  // X/Twitter: only approve canonical tweet URLs of the form
+  // /{handle}/status/{id} from listed handles. This rejects route-style
+  // paths (`x.com/i/...`, `x.com/intent/...`, `x.com/search/...`) where the
+  // first segment isn't a real handle, and rejects bare profile URLs that
+  // don't carry a citable post.
+  const isTwitterHost =
+    host === 'twitter.com' || host === 'x.com' ||
+    host.endsWith('.twitter.com') || host.endsWith('.x.com');
+  if (isTwitterHost) {
+    const segs = parsed.pathname.split('/').filter(Boolean);
+    if (segs.length < 3 || segs[1].toLowerCase() !== 'status') return false;
+    const handle = segs[0].toLowerCase();
+    return approvedXHandles.has(handle);
+  }
+
+  return approvedHostnames.some((allowed) =>
+    host === allowed || host.endsWith(`.${allowed}`),
+  );
+}

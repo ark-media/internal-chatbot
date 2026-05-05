@@ -2,23 +2,76 @@ import { z } from 'zod';
 
 import { getNewsExamples } from '@/lib/news-prompt';
 import { distillTopics } from '@/lib/orchestrator/distill';
-import { gatherSources } from '@/lib/orchestrator/source-gathering';
+import {
+  extractUrlToArticle,
+  gatherSources,
+} from '@/lib/orchestrator/source-gathering';
 import {
   ensureOrchestratorTables,
   loadRun,
   saveRun,
 } from '@/lib/orchestrator/state';
-import type { OrchestratorRun } from '@/lib/orchestrator/types';
+import type {
+  Article,
+  OrchestratorRun,
+  RatedArticle,
+  TopicWithSources,
+} from '@/lib/orchestrator/types';
 import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
 
-const bodySchema = z.object({
+const baseSchema = {
   chatId: z.string().min(1),
   today: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   timezone: z.string().min(1).default('America/New_York'),
-});
+};
+
+const bodySchema = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('discover'), ...baseSchema }),
+  z.object({
+    mode: z.literal('urls'),
+    urls: z.array(z.string().url()).min(1).max(20),
+    ...baseSchema,
+  }),
+  z.object({
+    mode: z.literal('topics'),
+    topics: z
+      .array(
+        z.object({
+          topic: z.string().min(1).max(200),
+          description: z.string().min(1).max(500),
+        }),
+      )
+      .min(1)
+      .max(4),
+    autoGather: z.boolean().default(true),
+    ...baseSchema,
+  }),
+]);
+
+function newRun(
+  chatId: string,
+  today: string,
+  timezone: string,
+): OrchestratorRun {
+  return {
+    chatId,
+    stage: 'gathering',
+    today,
+    timezone,
+    articles: [],
+    distill: null,
+    approvedTopics: null,
+    finalScript: null,
+    scriptVersions: [],
+    refineHistory: [],
+    iterations: 0,
+    errorMessage: null,
+    updatedAt: new Date().toISOString(),
+  };
+}
 
 export async function POST(req: Request) {
   await ensureOrchestratorTables();
@@ -51,25 +104,130 @@ export async function POST(req: Request) {
 
   const { chatId, today, timezone } = body;
   const started = Date.now();
-
-  // If a run already exists for this chat, allow re-running but reset state.
-  // The orchestrator is intentionally single-shot per chat for now.
-  const initial: OrchestratorRun = {
-    chatId,
-    stage: 'gathering',
-    today,
-    timezone,
-    articles: [],
-    distill: null,
-    approvedTopics: null,
-    finalScript: null,
-    iterations: 0,
-    errorMessage: null,
-    updatedAt: new Date().toISOString(),
-  };
+  const initial = newRun(chatId, today, timezone);
   await saveRun(initial);
 
   try {
+    if (body.mode === 'urls') {
+      const articles = await Promise.all(
+        body.urls.map((u) => extractUrlToArticle(u, today)),
+      );
+      const usable = articles.filter((a) => a.content.length > 0);
+      if (usable.length === 0) {
+        const errored: OrchestratorRun = {
+          ...initial,
+          stage: 'error',
+          errorMessage:
+            'Could not extract any of the supplied URLs. Check the links and try again.',
+          updatedAt: new Date().toISOString(),
+        };
+        await saveRun(errored);
+        return Response.json(
+          { stage: 'error', errorMessage: errored.errorMessage },
+          { status: 200 },
+        );
+      }
+      const exampleScripts = await getNewsExamples();
+      const distill = await distillTopics(usable, exampleScripts);
+      const run: OrchestratorRun = {
+        ...initial,
+        stage: 'checkpoint',
+        articles,
+        distill,
+        updatedAt: new Date().toISOString(),
+      };
+      await saveRun(run);
+      console.log(
+        JSON.stringify({
+          event: 'orchestrator.start.complete',
+          mode: 'urls',
+          chatId,
+          ms: Date.now() - started,
+          articleCount: articles.length,
+          topicCount: distill.topics.length,
+        }),
+      );
+      return Response.json({
+        stage: 'checkpoint',
+        distill,
+        articleCount: articles.length,
+      });
+    }
+
+    if (body.mode === 'topics') {
+      // Optionally auto-gather sources per topic in parallel. Each call is a
+      // separate Gemini search constrained by topic name/description.
+      const gathered = body.autoGather
+        ? await Promise.all(
+            body.topics.map((t) =>
+              gatherSources({
+                today,
+                timezone,
+                extraGuidance: `Specifically find articles on this topic: "${t.topic}". ${t.description}`,
+                maxArticles: 6,
+              }).catch((err) => {
+                console.warn(
+                  JSON.stringify({
+                    event: 'orchestrator.start.gather_topic_error',
+                    topic: t.topic,
+                    err: String(err),
+                  }),
+                );
+                return [] as Article[];
+              }),
+            ),
+          )
+        : body.topics.map(() => [] as Article[]);
+
+      const allArticles: Article[] = [];
+      const seen = new Set<string>();
+      const topics: TopicWithSources[] = body.topics.map((t, i) => {
+        const fresh = gathered[i].filter((a) => {
+          if (seen.has(a.url)) return false;
+          seen.add(a.url);
+          allArticles.push(a);
+          return true;
+        });
+        const articles: RatedArticle[] = fresh.map((article) => ({
+          article,
+          relevance: 60,
+          credibility: 60,
+          completeness: 60,
+          avgScore: 60,
+          provenance: 'refetched',
+        }));
+        return { topic: t.topic, description: t.description, articles };
+      });
+      const distill = {
+        topics,
+        rationale: 'Topics supplied by the writer.',
+      };
+      const run: OrchestratorRun = {
+        ...initial,
+        stage: 'checkpoint',
+        articles: allArticles,
+        distill,
+        updatedAt: new Date().toISOString(),
+      };
+      await saveRun(run);
+      console.log(
+        JSON.stringify({
+          event: 'orchestrator.start.complete',
+          mode: 'topics',
+          chatId,
+          ms: Date.now() - started,
+          topicCount: topics.length,
+          articleCount: allArticles.length,
+        }),
+      );
+      return Response.json({
+        stage: 'checkpoint',
+        distill,
+        articleCount: allArticles.length,
+      });
+    }
+
+    // mode === 'discover' (the original flow)
     const [articles, exampleScripts] = await Promise.all([
       gatherSources({ today, timezone }),
       getNewsExamples(),
@@ -104,6 +262,7 @@ export async function POST(req: Request) {
     console.log(
       JSON.stringify({
         event: 'orchestrator.start.complete',
+        mode: 'discover',
         chatId,
         ms: Date.now() - started,
         articleCount: articles.length,

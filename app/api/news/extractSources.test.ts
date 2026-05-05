@@ -7,8 +7,9 @@
 // - Flags with special characters
 // - Complex titles with multiple em-dashes
 //
-// Run with: npx ts-node app/api/news/extractSources.test.ts
 // Before deploying changes to news/route.ts extractSources(), verify tests still pass.
+
+import { describe, expect, it } from 'vitest';
 
 type ExtractedSources = Array<{
   num: number;
@@ -79,106 +80,85 @@ function extractSources(text: string): { script: string; sources: ExtractedSourc
   return { script, sources };
 }
 
-// Test cases
-const testCases = [
-  {
-    name: 'Standard format (strict parse)',
-    input: `Some script text
+describe('extractSources', () => {
+  it('parses standard format with all fields (strict parse)', () => {
+    const input = `Some script text
 
 ---
 
 SOURCES:
 
-1. Reuters Report — https://reuters.com/article — May 2026`,
-    expectedTitle: 'Reuters Report',
-    expectedUrl: 'https://reuters.com/article',
-    expectedDate: 'May 2026',
-  },
-  {
-    name: 'Em-dash in title (smart parse)',
-    input: `Script here
+1. Reuters Report — https://reuters.com/article — May 2026`;
+    const { sources } = extractSources(input);
+    expect(sources[0]).toMatchObject({
+      title: 'Reuters Report',
+      url: 'https://reuters.com/article',
+      date: 'May 2026',
+    });
+  });
+
+  it('handles em-dash in title (smart parse)', () => {
+    const input = `Script here
 
 ---
 
 SOURCES:
 
-1. Reuters — Analysis — https://reuters.com/news — May 2026`,
-    expectedTitle: 'Reuters — Analysis',
-    expectedUrl: 'https://reuters.com/news',
-    expectedDate: 'May 2026',
-  },
-  {
-    name: 'Missing date (smart parse)',
-    input: `Script
+1. Reuters — Analysis — https://reuters.com/news — May 2026`;
+    const { sources } = extractSources(input);
+    expect(sources[0]).toMatchObject({
+      title: 'Reuters — Analysis',
+      url: 'https://reuters.com/news',
+      date: 'May 2026',
+    });
+  });
+
+  it('handles missing date (smart parse)', () => {
+    const input = `Script
 
 ---
 
 SOURCES:
 
-1. BBC Report — https://bbc.com/story`,
-    expectedTitle: 'BBC Report',
-    expectedUrl: 'https://bbc.com/story',
-    expectedDate: undefined,
-  },
-  {
-    name: 'With flag (smart parse)',
-    input: `Script
+1. BBC Report — https://bbc.com/story`;
+    const { sources } = extractSources(input);
+    expect(sources[0]).toMatchObject({
+      title: 'BBC Report',
+      url: 'https://bbc.com/story',
+    });
+    expect(sources[0].date).toBeUndefined();
+  });
+
+  it('parses flag with em-dashes in title (smart parse)', () => {
+    const input = `Script
 
 ---
 
 SOURCES:
 
-1. NYT — Full Story — https://nytimes.com/news — April 2026 [FLAG: paywall blocked]`,
-    expectedTitle: 'NYT — Full Story',
-    expectedUrl: 'https://nytimes.com/news',
-    expectedDate: 'April 2026',
-    expectedFlags: 'paywall blocked',
-  },
-  {
-    name: 'Complex title with multiple em-dashes (smart parse)',
-    input: `Script
+1. NYT — Full Story — https://nytimes.com/news — April 2026 [FLAG: paywall blocked]`;
+    const { sources } = extractSources(input);
+    expect(sources[0]).toMatchObject({
+      title: 'NYT — Full Story',
+      url: 'https://nytimes.com/news',
+      date: 'April 2026',
+      flags: 'paywall blocked',
+    });
+  });
+
+  it('parses complex title with multiple em-dashes (smart parse)', () => {
+    const input = `Script
 
 ---
 
 SOURCES:
 
-1. The Guardian — Breaking News — UK Politics — https://theguardian.com/uk-news — May 1 2026`,
-    expectedTitle: 'The Guardian — Breaking News — UK Politics',
-    expectedUrl: 'https://theguardian.com/uk-news',
-    expectedDate: 'May 1 2026',
-  },
-];
-
-let passed = 0;
-let failed = 0;
-
-for (const test of testCases) {
-  const { script, sources } = extractSources(test.input);
-  const source = sources[0];
-
-  if (!source) {
-    console.log(`❌ ${test.name}: No sources extracted`);
-    failed++;
-    continue;
-  }
-
-  const titleOk = source.title === test.expectedTitle;
-  const urlOk = source.url === test.expectedUrl;
-  const dateOk = source.date === test.expectedDate;
-  const flagsOk = !test.expectedFlags || source.flags === test.expectedFlags;
-
-  if (titleOk && urlOk && dateOk && flagsOk) {
-    console.log(`✅ ${test.name}`);
-    passed++;
-  } else {
-    console.log(`❌ ${test.name}`);
-    if (!titleOk) console.log(`   Title: got "${source.title}", expected "${test.expectedTitle}"`);
-    if (!urlOk) console.log(`   URL: got "${source.url}", expected "${test.expectedUrl}"`);
-    if (!dateOk) console.log(`   Date: got "${source.date}", expected "${test.expectedDate}"`);
-    if (!flagsOk) console.log(`   Flags: got "${source.flags}", expected "${test.expectedFlags}"`);
-    failed++;
-  }
-}
-
-console.log(`\n${passed}/${testCases.length} tests passed`);
-process.exit(failed > 0 ? 1 : 0);
+1. The Guardian — Breaking News — UK Politics — https://theguardian.com/uk-news — May 1 2026`;
+    const { sources } = extractSources(input);
+    expect(sources[0]).toMatchObject({
+      title: 'The Guardian — Breaking News — UK Politics',
+      url: 'https://theguardian.com/uk-news',
+      date: 'May 1 2026',
+    });
+  });
+});

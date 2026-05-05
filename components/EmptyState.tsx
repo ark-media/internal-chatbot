@@ -2,7 +2,6 @@
 
 import { ArkLogo } from '@/components/ArkLogo';
 import { ExamplePrompts } from '@/components/ExamplePrompts';
-import { cn } from '@/lib/cn';
 
 type EmptyStateProps = {
   title: string;

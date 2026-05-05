@@ -66,9 +66,9 @@ export function ChatComposer({
   return (
     <form
       onSubmit={handleFormSubmit}
-      className="relative z-10 border-t border-white/[0.06] bg-gradient-to-b from-transparent to-[#070b22]/60 px-6 py-4 backdrop-blur-md"
+      className="relative z-10 border-t border-white/[0.06] bg-gradient-to-b from-transparent to-[#070b22]/60 px-5 py-4 backdrop-blur-md"
     >
-      <div className="mx-auto max-w-3xl">
+      <div className="mx-auto max-w-7xl">
         {attachments}
         {/* items-end keeps the model selector + send button pinned to the
             textarea baseline as it auto-grows, instead of drifting upward. */}

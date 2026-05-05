@@ -50,16 +50,18 @@ beforeEach(() => {
   mockSql.transaction.mockImplementation(defaultTransactionImpl);
 });
 
+type TestPart = { type: string; [key: string]: unknown };
+
 describe('redactFileParts', () => {
   it('drops url and data from file parts but keeps filename + mediaType', () => {
-    const out = redactFileParts([
+    const out = redactFileParts<TestPart>([
       {
         type: 'file',
         filename: 'doc.pdf',
         mediaType: 'application/pdf',
         url: 'data:application/pdf;base64,JVBERi0xLjQK...',
         data: 'JVBERi0xLjQK',
-      } as any,
+      },
     ]);
     expect(out).toEqual([
       { type: 'file', filename: 'doc.pdf', mediaType: 'application/pdf' },
@@ -69,16 +71,20 @@ describe('redactFileParts', () => {
   });
 
   it('passes through non-file parts unchanged', () => {
-    const text = { type: 'text', text: 'hello' };
-    const tool = { type: 'tool-lookupCorpus', state: 'output-available', output: { x: 1 } };
-    const out = redactFileParts([text, tool] as any);
+    const text: TestPart = { type: 'text', text: 'hello' };
+    const tool: TestPart = {
+      type: 'tool-lookupCorpus',
+      state: 'output-available',
+      output: { x: 1 },
+    };
+    const out = redactFileParts<TestPart>([text, tool]);
     expect(out).toEqual([text, tool]);
   });
 
   it('handles file parts with missing optional fields', () => {
-    const out = redactFileParts([
-      { type: 'file', url: 'data:...' } as any,
-      { type: 'file', filename: 'just-name' } as any,
+    const out = redactFileParts<TestPart>([
+      { type: 'file', url: 'data:...' },
+      { type: 'file', filename: 'just-name' },
     ]);
     expect(out).toEqual([{ type: 'file' }, { type: 'file', filename: 'just-name' }]);
   });

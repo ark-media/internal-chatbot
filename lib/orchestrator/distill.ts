@@ -19,6 +19,17 @@ const distillSchema = z.object({
               relevance: z.number().int().min(0).max(100),
               credibility: z.number().int().min(0).max(100),
               completeness: z.number().int().min(0).max(100),
+              summary: z
+                .string()
+                .describe(
+                  '2–4 sentence summary of what this article contributes to this topic — the key facts, actors, numbers, and dates the script writer needs. No quoted material here.',
+                ),
+              keyQuotes: z
+                .array(z.string())
+                .max(5)
+                .describe(
+                  'Up to 5 verbatim quotes from the article that the script writer could plausibly use as soundbites or attributed claims. Copy the source text exactly; do not paraphrase. Empty array if no quotable material.',
+                ),
             }),
           )
           .describe('One rating per article in articleIndices, same length and order'),
@@ -41,14 +52,21 @@ Rate every (article, topic) pair on three axes 0–100:
 - credibility: is the outlet reputable for this kind of coverage? Mainstream wires and the major Israeli/US/Hebrew outlets score high; tabloids and unverified accounts score low.
 - completeness: does the article add new info, or just repeat earlier coverage?
 
+For every (article, topic) pair, also produce:
+- summary: 2–4 sentences capturing what this article contributes to the topic — facts, actors, numbers, dates. The script writer will rely on this instead of re-reading the source, so be precise. Don't editorialize.
+- keyQuotes: up to 5 verbatim quotes from the article (copy exactly — do not paraphrase). Pick lines that are quotable on air or that lock in attribution for a contested claim. Empty array if the article has no useful quotable material.
+
 Return the top 3 topics ordered by newsworthiness (primary), source quality (secondary), completeness (tertiary). Return fewer than 3 only if the source pool genuinely doesn't support it.`;
 
 function buildArticleSummary(articles: Article[]): string {
+  // Distill is now also responsible for summarising and pulling verbatim quotes,
+  // so it needs enough source text to do that — not just enough to recognise
+  // the topic. 3500 chars covers most articles' lead + a few middle paragraphs.
   return articles
     .map((a, i) => {
       const flag = a.isFlagged ? ' [outside-window]' : '';
       const err = a.fetchError ? ' [fetch-failed]' : '';
-      const excerpt = a.content.slice(0, 1200).replace(/\s+/g, ' ').trim();
+      const excerpt = a.content.slice(0, 3500).replace(/\s+/g, ' ').trim();
       return `[${i}] ${a.source} — ${a.title} (${a.publicationDate ?? 'no date'})${flag}${err}\n${excerpt}`;
     })
     .join('\n\n');
@@ -70,7 +88,7 @@ Articles to organize (indexed):
 
 ${buildArticleSummary(articles)}
 
-Select up to 3 topics. For each topic, list which article indices belong, and rate every (article, topic) pair.`;
+Select up to 3 topics. For each topic, list which article indices belong, and for every (article, topic) pair return a rating, a 2–4 sentence summary, and up to 5 verbatim quotes pulled from the excerpt above. The script writer will work only from your summaries and quotes — not from the original article text — so make sure each summary is self-contained and each quote is copied exactly.`;
 
   const { object } = await generateObject({
     model: 'anthropic/claude-sonnet-4-6',
@@ -88,18 +106,20 @@ Select up to 3 topics. For each topic, list which article indices belong, and ra
     const ratingByIdx = new Map(t.ratings.map((r) => [r.articleIndex, r]));
     const rated: RatedArticle[] = t.articleIndices
       .filter((idx) => idx >= 0 && idx < articles.length)
-      .map((idx) => {
+      .flatMap((idx): RatedArticle[] => {
         const r = ratingByIdx.get(idx);
-        const relevance = r?.relevance ?? 0;
-        const credibility = r?.credibility ?? 0;
-        const completeness = r?.completeness ?? 0;
-        return {
+        // Drop articles the model listed but didn't rate — defaulting to zeros
+        // would silently rank them last, which masks the schema mismatch.
+        if (!r) return [];
+        return [{
           article: articles[idx],
-          relevance,
-          credibility,
-          completeness,
-          avgScore: Math.round((relevance + credibility + completeness) / 3),
-        };
+          relevance: r.relevance,
+          credibility: r.credibility,
+          completeness: r.completeness,
+          avgScore: Math.round((r.relevance + r.credibility + r.completeness) / 3),
+          summary: r.summary,
+          keyQuotes: r.keyQuotes,
+        }];
       })
       .sort((a, b) => b.avgScore - a.avgScore);
 

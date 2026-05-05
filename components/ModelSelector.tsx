@@ -3,44 +3,9 @@
 import { useRef, useState, useEffect } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { MODELS, getContextWindow } from '@/lib/models';
 
-export const MODELS = [
-  {
-    id: 'anthropic/claude-haiku-4-5',
-    name: 'Claude Haiku',
-    description: 'Fast and lightweight. Best for quick answers.',
-  },
-  {
-    id: 'anthropic/claude-sonnet-4-6',
-    name: 'Claude Sonnet',
-    description: 'Balanced speed and intelligence. Recommended.',
-  },
-  {
-    id: 'anthropic/claude-opus-4-7',
-    name: 'Claude Opus',
-    description: 'Most capable. Best for complex reasoning.',
-  },
-  {
-    id: 'openai/gpt-4o',
-    name: 'GPT-4o',
-    description: 'OpenAI\'s latest. Excellent all-around performance.',
-  },
-  {
-    id: 'openai/gpt-4-turbo',
-    name: 'GPT-4 Turbo',
-    description: 'High capability with lower latency.',
-  },
-  {
-    id: 'google/gemini-2.0-flash',
-    name: 'Gemini 2.0 Flash',
-    description: 'Google\'s fast and efficient model.',
-  },
-  {
-    id: 'google/gemini-1.5-pro',
-    name: 'Gemini 1.5 Pro',
-    description: 'Google\'s most capable model for complex tasks.',
-  },
-];
+export { MODELS, getContextWindow };
 
 type ModelSelectorProps = {
   selectedModel: string;
