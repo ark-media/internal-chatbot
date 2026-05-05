@@ -1,6 +1,8 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 
 import { ensureChatTables, purgeExpired } from '@/lib/chats';
+import { sql } from '@/lib/db';
+import { ensureOrchestratorTables } from '@/lib/orchestrator/state';
 
 export const runtime = 'nodejs';
 
@@ -33,9 +35,19 @@ async function run(req: Request) {
     return new Response('Unauthorized', { status: 401 });
   }
   await ensureChatTables();
+  await ensureOrchestratorTables();
   const deleted = await purgeExpired();
-  console.log(JSON.stringify({ event: 'chats.purge', deleted }));
-  return Response.json({ deleted });
+  const orchPurged = (await sql`
+    DELETE FROM orchestrator_runs WHERE expires_at < NOW() RETURNING chat_id
+  `) as unknown as Array<{ chat_id: string }>;
+  console.log(
+    JSON.stringify({
+      event: 'chats.purge',
+      deleted,
+      orchestratorRunsPurged: orchPurged.length,
+    }),
+  );
+  return Response.json({ deleted, orchestratorRunsPurged: orchPurged.length });
 }
 
 // Vercel Cron defaults to GET; allow POST too for manual triggering.

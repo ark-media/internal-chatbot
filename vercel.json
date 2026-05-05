@@ -2,6 +2,15 @@
   "functions": {
     "app/api/news/route.ts": {
       "maxDuration": 300
+    },
+    "app/api/news/orchestrator/start/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/news/orchestrator/refetch/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/news/orchestrator/generate/route.ts": {
+      "maxDuration": 300
     }
   },
   "crons": [
