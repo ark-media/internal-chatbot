@@ -40,8 +40,8 @@ const bodySchema = z.discriminatedUnion('mode', [
     topics: z
       .array(
         z.object({
-          topic: z.string().min(1).max(200),
-          description: z.string().min(1).max(500),
+          topic: z.string().min(1).max(500),
+          description: z.string().min(1).max(2000),
         }),
       )
       .min(1)

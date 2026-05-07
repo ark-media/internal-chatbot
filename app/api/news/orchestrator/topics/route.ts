@@ -24,16 +24,16 @@ const bodySchema = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('add'),
     chatId: z.string().min(1),
-    topic: z.string().min(1).max(200),
-    description: z.string().min(1).max(500),
+    topic: z.string().min(1).max(500),
+    description: z.string().min(1).max(2000),
     autoGather: z.boolean().default(false),
   }),
   z.object({
     action: z.literal('update'),
     chatId: z.string().min(1),
     topicIndex: z.number().int().min(0),
-    topic: z.string().min(1).max(200).optional(),
-    description: z.string().min(1).max(500).optional(),
+    topic: z.string().min(1).max(500).optional(),
+    description: z.string().min(1).max(2000).optional(),
   }),
   z.object({
     action: z.literal('delete'),
