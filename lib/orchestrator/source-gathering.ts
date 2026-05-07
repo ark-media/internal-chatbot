@@ -97,6 +97,82 @@ async function extractArticle(url: string): Promise<ExtractResult> {
   }
 }
 
+// -- URL verification + recovery --------------------------------------------
+// Gemini occasionally writes URLs from its own understanding rather than the
+// actual search result — e.g. normalizing `with-u-s` → `with-us` or drifting
+// the path date by a day. We HEAD-check every candidate; on a 404 we ask
+// Tavily Search to find the real URL on the same domain by title.
+
+const VERIFY_TIMEOUT_MS = 5000;
+// Jaccard similarity threshold (lowercased word-tokens, length > 3) above
+// which a recovered article is accepted as the same story. ~0.4 keeps real
+// matches with paraphrased headlines and rejects unrelated same-domain
+// articles that happen to mention shared keywords.
+const TITLE_SIMILARITY_THRESHOLD = 0.4;
+
+async function headStatus(url: string): Promise<number> {
+  try {
+    const r = await fetch(url, {
+      method: 'HEAD',
+      redirect: 'follow',
+      signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
+    });
+    return r.status;
+  } catch {
+    return 0;
+  }
+}
+
+async function searchByTitle(
+  title: string,
+  domain: string,
+): Promise<{ url: string; title: string } | null> {
+  const apiKey = process.env.TAVILY_API_KEY;
+  if (!apiKey) return null;
+  try {
+    const resp = await fetch('https://api.tavily.com/search', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        api_key: apiKey,
+        query: title,
+        include_domains: [domain],
+        max_results: 3,
+      }),
+      signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
+    });
+    if (!resp.ok) return null;
+    const data = (await resp.json()) as {
+      results?: Array<{ url?: string; title?: string }>;
+    };
+    const top = data.results?.[0];
+    if (!top || typeof top.url !== 'string') return null;
+    return {
+      url: top.url,
+      title: typeof top.title === 'string' ? top.title : '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function titleSimilarity(a: string, b: string): number {
+  const tokenize = (s: string): Set<string> =>
+    new Set(
+      s
+        .toLowerCase()
+        .replace(/[^\p{Letter}\p{Number}\s]/gu, ' ')
+        .split(/\s+/)
+        .filter((w) => w.length > 3),
+    );
+  const ta = tokenize(a);
+  const tb = tokenize(b);
+  if (ta.size === 0 || tb.size === 0) return 0;
+  let intersection = 0;
+  for (const t of ta) if (tb.has(t)) intersection++;
+  return intersection / (ta.size + tb.size - intersection);
+}
+
 // -- Gemini google search discovery ------------------------------------------
 
 type Candidate = {
@@ -182,9 +258,48 @@ async function discoverCandidates(
     model: 'google/gemini-2.5-flash',
     tools: { google_search: googleSearchTool },
     prompt,
-    temperature: 0.2,
+    // 0 to discourage URL paraphrasing — the model still hallucinates
+    // sometimes, which is why we verify each candidate URL below.
+    temperature: 0,
   });
   return parseCandidates(text);
+}
+
+// Exported for testing. The Candidate type is file-local; tests pass a plain
+// object with the same shape.
+export async function verifyOrRecover(c: Candidate): Promise<Candidate | null> {
+  const status = await headStatus(c.url);
+  // Treat only a definitive 404 as a hallucinated URL. 405 (HEAD not allowed),
+  // network errors (status 0), and 5xx responses fall through to extract,
+  // which has its own retry/timeout semantics and a structured failure path.
+  if (status !== 404) return c;
+
+  let domain: string;
+  try {
+    domain = new URL(c.url).hostname;
+  } catch {
+    return null;
+  }
+
+  const recovered = await searchByTitle(c.title, domain);
+  if (!recovered || recovered.url === c.url) {
+    console.warn(`[gatherSources] dropping unrecoverable 404: ${c.url}`);
+    return null;
+  }
+
+  // Sanity-check: searches constrained to a domain still surface unrelated
+  // articles that happen to share keywords with the title. Drop low-similarity
+  // recoveries to avoid citing the wrong article under a valid URL.
+  const similarity = titleSimilarity(c.title, recovered.title);
+  if (similarity < TITLE_SIMILARITY_THRESHOLD) {
+    console.warn(
+      `[gatherSources] dropping low-similarity recovery (${similarity.toFixed(2)}): ${c.url} -> ${recovered.url}`,
+    );
+    return null;
+  }
+
+  console.warn(`[gatherSources] URL recovered: ${c.url} -> ${recovered.url}`);
+  return { ...c, url: recovered.url };
 }
 
 // -- Public API --------------------------------------------------------------
@@ -249,20 +364,27 @@ export async function gatherSources(opts: {
     if (deduped.length >= maxArticles) break;
   }
 
+  // Verify URLs (and recover hallucinated ones) before paying for Tavily
+  // extract. Dedupe again in case recovery collapses two candidates to the
+  // same canonical URL.
+  const verifiedSeen = new Set<string>();
+  const verified: Candidate[] = [];
+  for (const c of await Promise.all(deduped.map(verifyOrRecover))) {
+    if (!c || verifiedSeen.has(c.url)) continue;
+    verifiedSeen.add(c.url);
+    verified.push(c);
+  }
+
   const extracted = await Promise.all(
-    deduped.map(async (c): Promise<Article> => {
+    verified.map(async (c): Promise<Article | null> => {
       const result = await extractArticle(c.url);
       const isFlagged = !inAcceptableRange(today, c.publicationDate);
       if (!result.ok) {
-        return {
-          title: c.title,
-          url: c.url,
-          publicationDate: c.publicationDate,
-          source: c.source,
-          content: '',
-          isFlagged,
-          fetchError: result.note,
-        };
+        // Backstop: even after URL verification, Tavily can fail (paywall,
+        // bot block, transient). Drop rather than letting the writer cite a
+        // source we couldn't read.
+        console.warn(`[gatherSources] extract failed; dropping: ${c.url} — ${result.note}`);
+        return null;
       }
       return {
         title: result.title || c.title,
@@ -275,5 +397,5 @@ export async function gatherSources(opts: {
     }),
   );
 
-  return extracted;
+  return extracted.filter((a): a is Article => a !== null);
 }

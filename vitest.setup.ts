@@ -1,6 +1,14 @@
 import { vi } from 'vitest';
 import '@testing-library/jest-dom';
 
+// Stub DB URL so modules that transitively import `lib/db.ts` (which throws
+// at load when DATABASE_URL is missing) can be loaded under test. `neon()`
+// doesn't open a connection until a query runs, so a placeholder is safe;
+// tests that exercise DB calls should mock those explicitly.
+if (!process.env.DATABASE_URL) {
+  process.env.DATABASE_URL = 'postgresql://test:test@localhost:5432/test';
+}
+
 // Mock scrollTo which is not implemented in jsdom
 Element.prototype.scrollTo = vi.fn();
 
