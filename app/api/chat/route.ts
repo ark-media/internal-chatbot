@@ -768,13 +768,14 @@ export async function POST(req: Request) {
         )
       : '');
 
-  // Split the system into a cached static block (baseSystemPrompt) and an uncached
-  // dynamic block (retrieved chunks / dossier). The cacheControl breakpoint sits at
-  // the end of baseSystemPrompt, so it becomes a stable prefix reused across every
-  // conversation and turn. The dynamic block sits past the breakpoint and is
-  // re-tokenised on each request — that's fine, the win is that the (much larger)
-  // base instructions get cache reads instead of the previous cache-write-every-time.
-  // Short-circuit instructions are tiny (~10 tokens) so caching is not worthwhile there.
+  // Two cache breakpoints: one after the base prompt (stable across all chat
+  // requests) and a second after the dynamic block (stable across the
+  // multi-step tool loop within a single chat turn, where the model may call
+  // lookupCorpus / getDossier / topGuests several times). Without the second
+  // breakpoint, the chunks + bookended dossier get re-tokenised on every tool
+  // step. The dynamic block is unique per query so it doesn't cache across
+  // conversations, but it's read repeatedly within one. Short-circuit
+  // instructions are tiny (~10 tokens) so caching is not worthwhile there.
   const cachedBaseSystem = {
     role: 'system' as const,
     content: baseSystemPrompt,
@@ -783,7 +784,14 @@ export async function POST(req: Request) {
   const system = shortCircuitInstruction
     ? shortCircuitInstruction
     : dynamicContent
-      ? [cachedBaseSystem, { role: 'system' as const, content: dynamicContent }]
+      ? [
+          cachedBaseSystem,
+          {
+            role: 'system' as const,
+            content: dynamicContent,
+            providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
+          },
+        ]
       : cachedBaseSystem;
 
   // Post-build backstop: fires if the /4 heuristic underestimates token count

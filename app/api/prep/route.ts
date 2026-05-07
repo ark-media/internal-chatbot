@@ -601,7 +601,13 @@ export async function POST(req: Request) {
     preMs = Date.now() - preStart;
   }
 
-  const baseSystem = {
+  // Two cache breakpoints: one after the base prompt (stable across all prep
+  // requests) and a second after the evidence block (stable across the
+  // multi-step tool loop within a single first-turn prep request). Without the
+  // second breakpoint, the bookended dossier (~13–18K tokens for high-volume
+  // guests) gets re-tokenised on every tool step. Follow-up turns inherit only
+  // the base-prompt cache; evidenceBlocks is only built on the first user turn.
+  const cachedBaseSystem = {
     role: 'system' as const,
     content: prepSystemPrompt(today),
     providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
@@ -609,13 +615,14 @@ export async function POST(req: Request) {
   const system =
     evidenceBlocks.length > 0
       ? [
-          baseSystem,
+          cachedBaseSystem,
           {
             role: 'system' as const,
             content: evidenceBlocks.join('\n\n'),
+            providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
           },
         ]
-      : baseSystem;
+      : cachedBaseSystem;
 
   const result = streamText({
     model,
