@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { getNewsExamples } from '@/lib/news-prompt';
-import { reflectLoop } from '@/lib/orchestrator/reflect';
+import { buildReviewerSystemContent, reflectLoop } from '@/lib/orchestrator/reflect';
 import { buildCachedSystemContent, craftScript } from '@/lib/orchestrator/script-craft';
 import {
   ensureOrchestratorTables,
@@ -110,14 +110,22 @@ export async function POST(req: Request) {
       styleProfile: styleProfile.text,
     });
 
-    const initialScript = await craftScript({ cachedSystemContent });
+    // Reviewer content build reads the editorial checklist from disk on cold
+    // start; warm calls are cached. Run it in parallel with the writer so the
+    // cold-start read overlaps with the Sonnet draft instead of serializing.
+    const [cachedReviewerSystemContent, initialScript] = await Promise.all([
+      buildReviewerSystemContent({
+        exampleScripts,
+        styleProfile: styleProfile.text,
+      }),
+      craftScript({ cachedSystemContent }),
+    ]);
 
     const outcome = await reflectLoop({
       initialScript,
       approvedTopics,
-      exampleScripts,
       cachedSystemContent,
-      styleProfile: styleProfile.text,
+      cachedReviewerSystemContent,
     });
 
     await saveRun({

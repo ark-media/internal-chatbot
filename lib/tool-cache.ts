@@ -37,10 +37,10 @@ export async function getCached<T>(key: CacheKey, ttlHours: number = 24): Promis
       LIMIT 1
     `;
     if (rows.length > 0) {
-      return JSON.parse(rows[0].result as string) as T;
+      return rows[0].result as T;
     }
   } catch (err) {
-    console.error(`Cache miss for key ${key}:`, err);
+    console.error(`Cache read failed for key ${key}:`, err);
   }
   return null;
 }

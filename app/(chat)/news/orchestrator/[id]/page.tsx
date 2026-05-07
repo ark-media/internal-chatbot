@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useParams } from 'next/navigation';
 import {
   Loader2,
@@ -142,6 +142,7 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
   const [busy, setBusy] = useState<
     null | 'start' | 'refetch' | 'generate' | 'topics' | 'attach'
   >(null);
+  const generateInFlightRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [today, setToday] = useState<string>(todayISO());
   const [rejectedTopics, setRejectedTopics] = useState<Set<number>>(new Set());
@@ -292,18 +293,18 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
   );
 
   const generate = useCallback(async () => {
-    if (!run?.distill) return;
-    setBusy('generate');
-    setError(null);
+    if (!run?.distill || generateInFlightRef.current) return;
     const indices = run.distill.topics
       .map((_, i) => i)
       .filter((i) => !rejectedTopics.has(i))
       .filter((i) => run.distill!.topics[i].articles.length > 0);
     if (indices.length === 0) {
       setError('Approve at least one topic with sources before generating.');
-      setBusy(null);
       return;
     }
+    generateInFlightRef.current = true;
+    setBusy('generate');
+    setError(null);
     try {
       const res = await fetch('/api/news/orchestrator/generate', {
         method: 'POST',
@@ -321,6 +322,7 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
     } catch (err) {
       setError(String(err).slice(0, 300));
     } finally {
+      generateInFlightRef.current = false;
       setBusy(null);
     }
   }, [chatId, run, rejectedTopics, refresh]);
@@ -1210,6 +1212,7 @@ function ScriptView({
   const [driveError, setDriveError] = useState<string | null>(null);
   const [instruction, setInstruction] = useState('');
   const [refineBusy, setRefineBusy] = useState(false);
+  const refineInFlightRef = useRef(false);
   const [undoBusy, setUndoBusy] = useState(false);
   const [refineError, setRefineError] = useState<string | null>(null);
   const [learnBusy, setLearnBusy] = useState(false);
@@ -1278,7 +1281,8 @@ function ScriptView({
 
   const refine = useCallback(async () => {
     const trimmed = instruction.trim();
-    if (!trimmed || refineBusy || learnBusy || undoBusy) return;
+    if (!trimmed || refineBusy || learnBusy || undoBusy || refineInFlightRef.current) return;
+    refineInFlightRef.current = true;
     setRefineBusy(true);
     setRefineError(null);
     setDriveLink(null);
@@ -1298,6 +1302,7 @@ function ScriptView({
     } catch (err) {
       setRefineError(String(err).slice(0, 200));
     } finally {
+      refineInFlightRef.current = false;
       setRefineBusy(false);
     }
   }, [chatId, instruction, refineBusy, learnBusy, undoBusy, onScriptUpdated]);

@@ -57,6 +57,10 @@ export type DossierPage = {
   turns: DossierTurn[];
   totalCount: number;
   hasMore: boolean;
+  // Non-null only when bookend mode was used AND a middle gap exists
+  // (totalCount > 2*bookendHalf). headCount + tailCount === turns.length.
+  // Sequential mode and fully-loaded bookend results both report null.
+  bookend: { headCount: number; tailCount: number } | null;
 };
 
 export type DossierOptions = {
@@ -65,6 +69,11 @@ export type DossierOptions = {
   topic?: string;
   limit?: number;
   offset?: number;
+  // When set, return the first N + last N turns chronologically in a single
+  // query (ignores limit/offset). Used by the chat pre-load so recent material
+  // is always represented for high-volume guests; the model paginates the
+  // middle gap via the dossier tool with offset.
+  bookendHalf?: number;
 };
 
 export type SpeakerSummary = {
@@ -364,9 +373,33 @@ type DossierRow = {
   text: string;
 };
 
+function rowToDossierTurn(r: DossierRow): DossierTurn {
+  return {
+    turnId: r.turn_id,
+    turnIndex: r.turn_index,
+    episodeId: r.episode_id,
+    episodeTitle: r.episode_title,
+    showId: r.show_id,
+    showName: r.show_name,
+    date: r.date,
+    driveUrl: r.drive_url,
+    section: r.section,
+    speakerId: r.speaker_id,
+    speakerName: r.speaker_name,
+    text: r.text,
+  };
+}
+
 export async function getDossier(opts: DossierOptions): Promise<DossierPage> {
   const limit = Math.min(opts.limit ?? 100, 500);
   const offset = Math.max(opts.offset ?? 0, 0);
+  const bookendHalf = opts.bookendHalf != null ? Math.max(1, Math.min(opts.bookendHalf, 250)) : null;
+  // Bookend mode runs its own CTE that ignores limit/offset; reject the
+  // combination explicitly so a future caller passing both gets a clear
+  // error instead of silently dropped pagination.
+  if (bookendHalf !== null && (opts.limit != null || opts.offset != null)) {
+    throw new Error('getDossier: bookendHalf is mutually exclusive with limit/offset');
+  }
   const f = opts.filters ?? {};
 
   const showIds = f.showIds?.length ? f.showIds : null;
@@ -375,6 +408,56 @@ export async function getDossier(opts: DossierOptions): Promise<DossierPage> {
   const since = f.since ?? null;
   const until = f.until ?? null;
   const topic = opts.topic?.trim() || null;
+
+  // Bookend mode: single CTE that selects first N + last N chronologically.
+  // When totalCount <= 2N, the WHERE clause matches every row (rn <= N OR
+  // rn > total-N covers everything), so small dossiers naturally fall through
+  // to "complete dossier" without a special case.
+  //
+  // Cost: ROW_NUMBER + COUNT(*) OVER force the planner to materialize the full
+  // filtered rowset before slicing. Fine for typical guests (50–300 turns);
+  // not appropriate for hosts (10K+ turns). Callers should restrict bookend
+  // mode to non-host speakers.
+  if (bookendHalf !== null) {
+    const rows = (await sql`
+      WITH ordered AS (
+        SELECT t.turn_id, t.turn_index, t.episode_id, t.section, t.text, t.speaker_id,
+               e.title AS episode_title, e.date::text AS date, e.drive_url,
+               sh.show_id, sh.name AS show_name,
+               sp.canonical_name AS speaker_name,
+               ROW_NUMBER() OVER (ORDER BY e.date ASC NULLS LAST, t.episode_id, t.turn_index) AS rn,
+               (COUNT(*) OVER ())::int AS total_cnt
+          FROM turns t
+          JOIN episodes e ON e.episode_id = t.episode_id
+          JOIN shows sh ON sh.show_id = e.show_id
+          JOIN speakers sp ON sp.speaker_id = t.speaker_id
+         WHERE t.speaker_id = ${opts.speakerId}
+           AND (${showIds}::int[] IS NULL OR sh.show_id = ANY(${showIds}::int[]))
+           AND (${showGroupIds}::int[] IS NULL OR sh.group_id = ANY(${showGroupIds}::int[]))
+           AND (${episodeIds}::text[] IS NULL OR t.episode_id = ANY(${episodeIds}::text[]))
+           AND (${since}::date IS NULL OR e.date >= ${since}::date)
+           AND (${until}::date IS NULL OR e.date <= ${until}::date)
+           AND (${topic}::text IS NULL OR t.tsv @@ websearch_to_tsquery('english', ${topic}::text))
+      )
+      SELECT * FROM ordered
+       WHERE rn <= ${bookendHalf} OR rn > total_cnt - ${bookendHalf}
+    ORDER BY rn
+    `) as unknown as Array<DossierRow & { total_cnt: number }>;
+
+    const totalCount = rows[0]?.total_cnt ?? 0;
+    // The WHERE clause `rn <= N OR rn > total - N` returns all rows when
+    // total <= 2N (the two predicates fully cover the range). Bookend split
+    // is only meaningful when a real middle gap exists.
+    const hasMiddleGap = totalCount > 2 * bookendHalf;
+    return {
+      turns: rows.map(rowToDossierTurn),
+      totalCount,
+      hasMore: rows.length < totalCount,
+      bookend: hasMiddleGap
+        ? { headCount: bookendHalf, tailCount: bookendHalf }
+        : null,
+    };
+  }
 
   const countRows = (await sql`
     SELECT COUNT(*)::int AS c
@@ -392,7 +475,7 @@ export async function getDossier(opts: DossierOptions): Promise<DossierPage> {
   const totalCount = countRows[0]?.c ?? 0;
 
   if (totalCount === 0) {
-    return { turns: [], totalCount: 0, hasMore: false };
+    return { turns: [], totalCount: 0, hasMore: false, bookend: null };
   }
 
   const rows = (await sql`
@@ -416,23 +499,32 @@ export async function getDossier(opts: DossierOptions): Promise<DossierPage> {
   `) as unknown as DossierRow[];
 
   return {
-    turns: rows.map((r) => ({
-      turnId: r.turn_id,
-      turnIndex: r.turn_index,
-      episodeId: r.episode_id,
-      episodeTitle: r.episode_title,
-      showId: r.show_id,
-      showName: r.show_name,
-      date: r.date,
-      driveUrl: r.drive_url,
-      section: r.section,
-      speakerId: r.speaker_id,
-      speakerName: r.speaker_name,
-      text: r.text,
-    })),
+    turns: rows.map(rowToDossierTurn),
     totalCount,
     hasMore: offset + rows.length < totalCount,
+    bookend: null,
   };
+}
+
+// Round-robin merge of ranked chunk lists from N parallel subqueries. Iterates
+// rank-first (rank 0 of subq 0, rank 0 of subq 1, …, rank 1 of subq 0, …) so
+// each subquery's top hit gets a slot before any subquery's runner-ups.
+// Dedupes by chunkId across subqueries; ties on first-occurrence keep their
+// original subquery's slot. Used by the chat preload merge.
+export function roundRobinMergeChunks(
+  results: RetrievedChunk[][],
+  limit: number,
+): RetrievedChunk[] {
+  const merged = new Map<number, RetrievedChunk>();
+  const maxLen = Math.max(0, ...results.map((r) => r.length));
+  for (let i = 0; i < maxLen && merged.size < limit; i++) {
+    for (const arr of results) {
+      if (merged.size >= limit) break;
+      const c = arr[i];
+      if (c && !merged.has(c.chunkId)) merged.set(c.chunkId, c);
+    }
+  }
+  return Array.from(merged.values());
 }
 
 // -- listSpeakers: disambiguation helper -------------------------------------

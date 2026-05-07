@@ -42,6 +42,9 @@ export function ChatComposer({
 }: ChatComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // Synchronous guard: prevents a second submission firing before React has
+  // re-rendered with busy=true (e.g. two rapid Enter presses, or Enter+click).
+  const submittingRef = useRef(false);
 
   // Auto-grow up to 200px so multi-line drafting feels natural on every
   // surface. Replaces the older fixed-40px + overflow-hidden behavior that
@@ -54,8 +57,24 @@ export function ChatComposer({
   }, [input]);
 
   const trySubmit = () => {
-    if (busy || !canSubmit) return;
-    onSubmit();
+    if (busy || !canSubmit || submittingRef.current) return;
+    submittingRef.current = true;
+    // try/finally ensures the microtask is scheduled even if onSubmit throws
+    // synchronously; otherwise the ref would stay true and wedge the composer.
+    try {
+      onSubmit();
+    } finally {
+      // Clear on the next microtask. Two rapid keypresses always fall in
+      // separate event-loop tasks, and microtasks drain before the next task,
+      // so the ref only blocks re-entry within the *current* task. The next
+      // user input is then gated by the busy prop — assuming the parent has
+      // re-rendered with busy=true by then; concurrent React typically has,
+      // but there's no hard guarantee. If the parent never flips busy at all
+      // (sync no-op, error before fetch, etc.) we recover instead of wedging.
+      queueMicrotask(() => {
+        submittingRef.current = false;
+      });
+    }
   };
 
   const handleFormSubmit = (e: FormEvent) => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { truncateAtParagraph } from './reflect';
+import { buildReviewerSystemContent, truncateAtParagraph } from './reflect';
 
 describe('truncateAtParagraph', () => {
   it('returns the input unchanged when shorter than the limit', () => {
@@ -33,5 +33,46 @@ describe('truncateAtParagraph', () => {
     const text = 'a'.repeat(200) + '\n\n' + 'b'.repeat(200);
     const result = truncateAtParagraph(text, 150);
     expect(result.length).toBeLessThanOrEqual(150);
+  });
+});
+
+describe('buildReviewerSystemContent', () => {
+  // Cache hit-rate on Opus calls depends on byte-stable output across
+  // reflect iterations — these tests guard the determinism contract.
+  const exampleScripts = 'EXAMPLE A\n\nEXAMPLE B';
+
+  it('produces byte-identical output for identical inputs', async () => {
+    const a = await buildReviewerSystemContent({
+      exampleScripts,
+      styleProfile: 'short sentences; active voice',
+    });
+    const b = await buildReviewerSystemContent({
+      exampleScripts,
+      styleProfile: 'short sentences; active voice',
+    });
+    expect(a).toBe(b);
+  });
+
+  it('omits the style block when styleProfile is empty, whitespace, or undefined', async () => {
+    const undef = await buildReviewerSystemContent({ exampleScripts });
+    const empty = await buildReviewerSystemContent({ exampleScripts, styleProfile: '' });
+    const whitespace = await buildReviewerSystemContent({
+      exampleScripts,
+      styleProfile: '   \n  ',
+    });
+    expect(undef).not.toContain('WRITER STYLE PREFERENCES');
+    expect(empty).not.toContain('WRITER STYLE PREFERENCES');
+    expect(whitespace).not.toContain('WRITER STYLE PREFERENCES');
+    expect(undef).toBe(empty);
+    expect(undef).toBe(whitespace);
+  });
+
+  it('includes the style block when styleProfile has content', async () => {
+    const result = await buildReviewerSystemContent({
+      exampleScripts,
+      styleProfile: 'short sentences',
+    });
+    expect(result).toContain('WRITER STYLE PREFERENCES');
+    expect(result).toContain('short sentences');
   });
 });

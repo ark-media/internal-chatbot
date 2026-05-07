@@ -10,8 +10,15 @@ import {
 } from 'ai';
 import { z } from 'zod';
 
-import { lookupCorpus, listSpeakers, getDossier } from '@/lib/retrieval';
+import {
+  lookupCorpus,
+  listSpeakers,
+  getDossier,
+  type DossierTurn,
+} from '@/lib/retrieval';
 import { webSearch } from '@/lib/web-search';
+import { extractArticles, type ExtractedArticle } from '@/lib/url-fetch';
+import { extractPrepContext } from '@/lib/prep-extract';
 import { prepSystemPrompt } from '@/lib/prep-prompt';
 import { ensureTable, getCached, setCached, cacheKey } from '@/lib/tool-cache';
 import {
@@ -103,11 +110,20 @@ const searchCorpusTool = tool({
 
 const pastGuestAppearancesTool = tool({
   description:
-    "List all past Ark Media episodes where a named person has spoken. Returns a chronological dossier of their turns (first 50). Useful for 'what has this guest said on our shows before?' — review before prepping follow-up or second appearances.",
+    "List past Ark Media episodes where a named person has spoken. Returns a chronological dossier of their turns. Pass `topic` to narrow to turns matching a topic (full-text search) — strongly recommended for high-volume guests like Nadav Eyal where the unfiltered first 50 are mostly off-topic. Useful for 'what has this guest said on our shows before about X?'.",
   inputSchema: z.object({
     guestName: z.string().describe('Full name of the guest.'),
+    topic: z
+      .string()
+      .optional()
+      .describe(
+        'Optional 2–6 keyword full-text filter, e.g. "Iran nuclear Hormuz". Drops stopwords. Omit only when you want the unfiltered chronological dossier.',
+      ),
   }),
   execute: async (input) => {
+    // Resolve the speaker first so the cache key can include episodeCount —
+    // any newly ingested episode for that speaker auto-invalidates the entry,
+    // independent of TTL. listSpeakers is a small indexed lookup.
     const matches = await listSpeakers({
       nameLike: input.guestName,
       includeUnreviewed: false,
@@ -117,13 +133,27 @@ const pastGuestAppearancesTool = tool({
       return { found: false, note: `No speaker matching "${input.guestName}" in the corpus. This is likely a first-time guest.` };
     }
     const best = matches[0];
-    const page = await getDossier({ speakerId: best.speakerId, limit: 50 });
-    return {
+
+    const key = cacheKey('prep-past-guest', {
+      speakerId: best.speakerId,
+      topic: input.topic ?? null,
+      ec: best.episodeCount,
+    });
+    const cached = await getCached(key, 24);
+    if (cached) return cached;
+
+    const page = await getDossier({
+      speakerId: best.speakerId,
+      topic: input.topic,
+      limit: 50,
+    });
+    const response = {
       found: true,
       speakerName: best.canonicalName,
       totalTurns: page.totalCount,
       episodeCount: best.episodeCount,
       shows: best.shows,
+      topic: input.topic ?? null,
       turns: page.turns.slice(0, 30).map((t) => ({
         id: t.turnId,
         episode_title: t.episodeTitle,
@@ -132,6 +162,8 @@ const pastGuestAppearancesTool = tool({
         excerpt: t.text.slice(0, 400),
       })),
     };
+    await setCached(key, response);
+    return response;
   },
 });
 
@@ -174,6 +206,171 @@ const webSearchTool = tool({
     return response;
   },
 });
+
+// -- Pre-retrieval helpers ---------------------------------------------------
+
+// Cap on guests pre-loaded from a single prep prompt. Beyond this we trust the
+// model to call pastGuestAppearances itself. Each pre-loaded dossier costs
+// ~one DB round-trip + a few thousand tokens of context, so 4 is a comfortable
+// ceiling for typical prep prompts (which name 1–2 guests).
+const PREP_MAX_PRELOADED_GUESTS = 4;
+// Bookend half-size per guest dossier. With topic filter applied, FTS
+// already narrows the row set; this cap keeps the worst case bounded.
+const PREP_DOSSIER_BOOKEND_HALF = 12;
+
+function firstUserText(messages: UIMessage[]): string {
+  for (const m of messages) {
+    if (m.role !== 'user') continue;
+    for (const p of m.parts ?? []) {
+      if (p.type === 'text') return p.text;
+    }
+  }
+  return '';
+}
+
+function escapeAttr(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function buildDossierEvidenceBlock(
+  speakerName: string,
+  speakerId: number,
+  turns: DossierTurn[],
+  totalCount: number,
+  topic: string | null,
+): string {
+  if (turns.length === 0) {
+    const topicNote = topic ? ` matching topic "${topic}"` : '';
+    return `<dossier speaker="${escapeAttr(speakerName)}" speaker_id="${speakerId}">\nNo past turns${topicNote} found in the corpus. Either this is a first-time guest on this topic, or extraction missed the right speaker — call pastGuestAppearances if you need broader history.\n</dossier>`;
+  }
+
+  const dates = turns.map((t) => t.date).filter((d): d is string => Boolean(d));
+  const dateRange =
+    dates.length > 0 ? `${dates[0]} → ${dates[dates.length - 1]}` : 'unknown';
+  const topicNote = topic
+    ? `Filtered by topic: "${topic}".`
+    : 'Unfiltered (oldest + newest sample).';
+  const moreNote =
+    totalCount > turns.length
+      ? `Showing ${turns.length} of ${totalCount} matching turns (oldest + newest). Call pastGuestAppearances for more.`
+      : `Complete dossier (${turns.length} turns).`;
+
+  const body = turns
+    .map(
+      (t) =>
+        `<dossier_turn id="${t.turnId}" date="${t.date ?? 'unknown'}" show="${escapeAttr(t.showName)}" episode="${escapeAttr(t.episodeTitle)}">\n${t.speakerName}: ${t.text}\n</dossier_turn>`,
+    )
+    .join('\n\n');
+
+  return `<dossier speaker="${escapeAttr(speakerName)}" speaker_id="${speakerId}" date_range="${dateRange}">\n${topicNote} ${moreNote}\n\n${body}\n</dossier>`;
+}
+
+function buildLinkedArticleBlock(article: ExtractedArticle): string {
+  const titleAttr = article.title ? ` title="${escapeAttr(article.title)}"` : '';
+  return `<linked_article url="${escapeAttr(article.url)}"${titleAttr}>\n${article.content}\n</linked_article>`;
+}
+
+type ResolvedGuest = {
+  inputName: string;
+  speakerId: number;
+  canonicalName: string;
+  episodeCount: number;
+};
+
+async function resolveGuestNames(names: string[]): Promise<ResolvedGuest[]> {
+  const resolved = await Promise.all(
+    names.map(async (name) => {
+      const matches = await listSpeakers({
+        nameLike: name,
+        includeUnreviewed: false,
+        limit: 3,
+      });
+      if (matches.length === 0) return null;
+      const exact = matches.find(
+        (m) => m.canonicalName.toLowerCase() === name.toLowerCase(),
+      );
+      const pick = exact ?? matches[0];
+      return {
+        inputName: name,
+        speakerId: pick.speakerId,
+        canonicalName: pick.canonicalName,
+        episodeCount: pick.episodeCount,
+      };
+    }),
+  );
+  // Dedupe by speakerId — the user might say "Nadav" and "Eyal" separately.
+  const seen = new Set<number>();
+  const out: ResolvedGuest[] = [];
+  for (const r of resolved) {
+    if (!r || seen.has(r.speakerId)) continue;
+    seen.add(r.speakerId);
+    out.push(r);
+  }
+  return out;
+}
+
+async function loadGuestDossier(
+  guest: ResolvedGuest,
+  topic: string | null,
+): Promise<{ turns: DossierTurn[]; totalCount: number }> {
+  const cKey = cacheKey('prep-preload-dossier', {
+    speakerId: guest.speakerId,
+    topic,
+    half: PREP_DOSSIER_BOOKEND_HALF,
+    // Bump key whenever a new episode for this speaker has been ingested, so a
+    // newly transcribed appearance shows up in the dossier without waiting on
+    // the TTL.
+    ec: guest.episodeCount,
+  });
+  const cached = await getCached<{ turns: DossierTurn[]; totalCount: number }>(
+    cKey,
+    6,
+  );
+  if (cached) return cached;
+  try {
+    const page = await getDossier({
+      speakerId: guest.speakerId,
+      topic: topic ?? undefined,
+      bookendHalf: PREP_DOSSIER_BOOKEND_HALF,
+    });
+    const result = { turns: page.turns, totalCount: page.totalCount };
+    await setCached(cKey, result);
+    return result;
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: 'prep.preload_dossier_error',
+        speakerId: guest.speakerId,
+        err: String(err),
+      }),
+    );
+    return { turns: [], totalCount: 0 };
+  }
+}
+
+async function loadLinkedArticles(
+  urls: string[],
+): Promise<ExtractedArticle[]> {
+  if (urls.length === 0) return [];
+  const cKey = cacheKey('prep-preload-articles', { urls: [...urls].sort() });
+  const cached = await getCached<ExtractedArticle[]>(cKey, 24);
+  if (cached) return cached;
+  const resp = await extractArticles(urls);
+  if (resp.failed.length > 0) {
+    console.warn(
+      JSON.stringify({
+        event: 'prep.article_fetch_failed',
+        failures: resp.failed,
+      }),
+    );
+  }
+  await setCached(cKey, resp.ok);
+  return resp.ok;
+}
 
 // -- File handling -----------------------------------------------------------
 //
@@ -338,13 +535,91 @@ export async function POST(req: Request) {
   const today = new Date().toISOString().slice(0, 10);
   const started = Date.now();
 
+  // Pre-retrieval: only on the first user turn, fan out to load guest dossiers
+  // and linked articles in parallel, then inject as <dossier>/<linked_article>
+  // blocks below the cached base prompt. Subsequent turns inherit the cached
+  // base + cumulative messages and rely on tools for any additional evidence.
+  const isFirstUserTurn = messages.filter((m) => m.role === 'user').length === 1;
+  const userText = firstUserText(messages);
+  const evidenceBlocks: string[] = [];
+  let preMs = 0;
+  let preSummary: {
+    guests: number;
+    resolved: number;
+    topic: string | null;
+    urls: number;
+    articlesOk: number;
+  } | null = null;
+
+  if (isFirstUserTurn && userText.trim().length > 0) {
+    const preStart = Date.now();
+    try {
+      const extracted = await extractPrepContext(userText, today);
+      const limitedGuests = extracted.guests.slice(0, PREP_MAX_PRELOADED_GUESTS);
+
+      const [resolvedGuests, articles] = await Promise.all([
+        resolveGuestNames(limitedGuests),
+        loadLinkedArticles(extracted.urls),
+      ]);
+
+      const dossiers = await Promise.all(
+        resolvedGuests.map((g) =>
+          loadGuestDossier(g, extracted.topic).then((page) => ({
+            guest: g,
+            ...page,
+          })),
+        ),
+      );
+
+      for (const d of dossiers) {
+        evidenceBlocks.push(
+          buildDossierEvidenceBlock(
+            d.guest.canonicalName,
+            d.guest.speakerId,
+            d.turns,
+            d.totalCount,
+            extracted.topic,
+          ),
+        );
+      }
+      for (const article of articles) {
+        evidenceBlocks.push(buildLinkedArticleBlock(article));
+      }
+
+      preSummary = {
+        guests: extracted.guests.length,
+        resolved: resolvedGuests.length,
+        topic: extracted.topic,
+        urls: extracted.urls.length,
+        articlesOk: articles.length,
+      };
+    } catch (err) {
+      console.warn(
+        JSON.stringify({ event: 'prep.preretrieval_error', err: String(err) }),
+      );
+    }
+    preMs = Date.now() - preStart;
+  }
+
+  const baseSystem = {
+    role: 'system' as const,
+    content: prepSystemPrompt(today),
+    providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
+  };
+  const system =
+    evidenceBlocks.length > 0
+      ? [
+          baseSystem,
+          {
+            role: 'system' as const,
+            content: evidenceBlocks.join('\n\n'),
+          },
+        ]
+      : baseSystem;
+
   const result = streamText({
     model,
-    system: {
-      role: 'system',
-      content: prepSystemPrompt(today),
-      providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
-    },
+    system,
     messages: await convertToModelMessages(normalized),
     tools: {
       searchCorpus: searchCorpusTool,
@@ -361,6 +636,8 @@ export async function POST(req: Request) {
           ms: Date.now() - started,
           finishReason,
           toolCalls: toolCalls.map((t) => t.toolName),
+          preMs,
+          preSummary,
           inputTokens: usage?.inputTokens,
           outputTokens: usage?.outputTokens,
           cachedInputTokens: usage?.cachedInputTokens,

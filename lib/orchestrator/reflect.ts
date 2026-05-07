@@ -60,39 +60,15 @@ Corrections must be specific and directly implementable. Don't say "improve voic
 
 async function reviewScriptWithOpus(opts: {
   script: Script;
-  exampleScripts: string;
+  reviewerSystemContent: string;
   approvedTopics: TopicWithSources[];
-  styleProfile?: string;
 }): Promise<ReviewResult> {
-  const { script, exampleScripts, approvedTopics, styleProfile } = opts;
-  const checklist = await loadEditorialChecklist();
+  const { script, reviewerSystemContent, approvedTopics } = opts;
 
   const sourceList = approvedTopics
     .flatMap((t) => t.articles.map((r) => r.article))
     .map((a) => `- ${a.source} — ${a.title} (${a.publicationDate ?? 'unknown'})${a.isFlagged ? ' [outside-window]' : ''}: ${a.url}`)
     .join('\n');
-
-  // Style notes are injected here too (not just in script-craft) so the
-  // reviewer doesn't flag deliberate writer preferences as soft problems.
-  // Without this, Opus could mark e.g. short-sentence cadence as "structural
-  // imbalance" and trigger refines that the writer has already rejected.
-  const styleBlock =
-    styleProfile && styleProfile.trim().length > 0
-      ? `\n\nWRITER STYLE PREFERENCES (treat as ground truth — do not flag as problems):\n\n${styleProfile.trim()}`
-      : '';
-
-  // Checklist and examples are constant across reflect iterations — bake them
-  // into the cached system block so iterations 2 and 3 hit the prompt cache
-  // (Opus tokens are the expensive ones in this pipeline).
-  const systemContent = `${ADVISOR_SYSTEM}
-
-EDITORIAL CHECKLIST:
-
-${checklist}
-
-GOLD-STANDARD EXAMPLES (match this register):
-
-${truncateAtParagraph(exampleScripts, EXAMPLE_TRUNCATE_CHARS)}${styleBlock}`;
 
   const prompt = `APPROVED SOURCES (every superscript citation in the script should map to one of these):
 
@@ -109,7 +85,7 @@ Review the script. Return a JSON object with: problems (array of {type, issue, d
     schema: reviewSchema,
     system: {
       role: 'system',
-      content: systemContent,
+      content: reviewerSystemContent,
       providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
     },
     prompt,
@@ -125,16 +101,6 @@ Review the script. Return a JSON object with: problems (array of {type, issue, d
     corrections: object.corrections,
   };
 }
-
-export type ReflectOutcome = {
-  finalScript: Script;
-  iterations: number;
-  history: Array<{
-    iteration: number;
-    decision: 'loop' | 'exit';
-    problemCount: number;
-  }>;
-};
 
 const MAX_ITERATIONS = 3;
 
@@ -157,14 +123,48 @@ export function truncateAtParagraph(text: string, limit: number): string {
   return head;
 }
 
+// Pre-build the Opus reviewer's system content once per generate run.
+// Content is identical across all reflect iterations (checklist + examples +
+// style are stable), so building it once guarantees a single cache write and
+// cache reads on every subsequent Opus call in the loop.
+export async function buildReviewerSystemContent(opts: {
+  exampleScripts: string;
+  styleProfile?: string;
+}): Promise<string> {
+  const { exampleScripts, styleProfile } = opts;
+  const checklist = await loadEditorialChecklist();
+  const styleBlock =
+    styleProfile && styleProfile.trim().length > 0
+      ? `\n\nWRITER STYLE PREFERENCES (treat as ground truth — do not flag as problems):\n\n${styleProfile.trim()}`
+      : '';
+  return `${ADVISOR_SYSTEM}
+
+EDITORIAL CHECKLIST:
+
+${checklist}
+
+GOLD-STANDARD EXAMPLES (match this register):
+
+${truncateAtParagraph(exampleScripts, EXAMPLE_TRUNCATE_CHARS)}${styleBlock}`;
+}
+
+export type ReflectOutcome = {
+  finalScript: Script;
+  iterations: number;
+  history: Array<{
+    iteration: number;
+    decision: 'loop' | 'exit';
+    problemCount: number;
+  }>;
+};
+
 export async function reflectLoop(opts: {
   initialScript: Script;
   approvedTopics: TopicWithSources[];
-  exampleScripts: string;
   cachedSystemContent: string;
-  styleProfile?: string;
+  cachedReviewerSystemContent: string;
 }): Promise<ReflectOutcome> {
-  const { initialScript, approvedTopics, exampleScripts, cachedSystemContent, styleProfile } = opts;
+  const { initialScript, approvedTopics, cachedSystemContent, cachedReviewerSystemContent } = opts;
 
   let script = initialScript;
   const history: ReflectOutcome['history'] = [];
@@ -172,7 +172,7 @@ export async function reflectLoop(opts: {
   for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     let review: ReviewResult;
     try {
-      review = await reviewScriptWithOpus({ script, exampleScripts, approvedTopics, styleProfile });
+      review = await reviewScriptWithOpus({ script, reviewerSystemContent: cachedReviewerSystemContent, approvedTopics });
     } catch (err) {
       // Spec: if Opus call fails, fall back to Sonnet's own judgment and exit.
       console.warn(JSON.stringify({ event: 'orchestrator.reflect.opus_error', err: String(err) }));
