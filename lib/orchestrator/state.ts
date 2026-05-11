@@ -81,7 +81,7 @@ export async function saveRunIfStage(
            today = ${run.today},
            timezone = ${run.timezone},
            state = ${stateJson}::jsonb,
-           updated_at = NOW(),
+           updated_at = date_trunc('milliseconds', NOW()),
            expires_at = NOW() + INTERVAL '7 days'
      WHERE chat_id = ${run.chatId}
        AND stage = ANY(${requiredStages}::text[])
@@ -105,7 +105,7 @@ export async function saveRunIfUnchanged(
            today = ${run.today},
            timezone = ${run.timezone},
            state = ${stateJson}::jsonb,
-           updated_at = NOW(),
+           updated_at = date_trunc('milliseconds', NOW()),
            expires_at = NOW() + INTERVAL '7 days'
      WHERE chat_id = ${run.chatId}
        AND updated_at = ${expectedUpdatedAt}::timestamptz
