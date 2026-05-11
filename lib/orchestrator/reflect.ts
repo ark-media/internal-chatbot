@@ -58,7 +58,13 @@ Decision rule:
 
 Corrections must be specific and directly implementable. Don't say "improve voice" — quote the offending text and suggest exact replacement language. Don't invent new content; the corrections should preserve every factual claim already cited.`;
 
-async function reviewScriptWithOpus(opts: {
+// Cap on the reviewer's output. The schema is structured (≤N problems +
+// corrections), so unbounded generation just produces verbose `detail` and
+// `suggestedFix` fields — one observed run cost $0.39 mostly from 12k output
+// tokens. 2000 tokens covers a thorough review at normal verbosity.
+const REVIEWER_MAX_OUTPUT_TOKENS = 2000;
+
+async function reviewScript(opts: {
   script: Script;
   reviewerSystemContent: string;
   approvedTopics: TopicWithSources[];
@@ -81,7 +87,7 @@ ${script.fullText}
 Review the script. Return a JSON object with: problems (array of {type, issue, detail}), decision ("loop" or "exit"), corrections (array of {blockOrSection, problem, suggestedFix}). Apply the decision rule strictly: <3 distinct problems → exit, ≥3 → loop.`;
 
   const { object } = await generateObject({
-    model: 'anthropic/claude-opus-4-7',
+    model: 'anthropic/claude-sonnet-4-6',
     schema: reviewSchema,
     system: {
       role: 'system',
@@ -90,6 +96,7 @@ Review the script. Return a JSON object with: problems (array of {type, issue, d
     },
     prompt,
     temperature: 0.1,
+    maxOutputTokens: REVIEWER_MAX_OUTPUT_TOKENS,
   });
 
   // Defensive: enforce the decision rule in code rather than trusting the model.
@@ -104,11 +111,13 @@ Review the script. Return a JSON object with: problems (array of {type, issue, d
 
 const MAX_ITERATIONS = 3;
 
-// Soft cap on the examples block in the reviewer's cached system. ~12k chars
-// is roughly ~3k tokens; bigger than this and the reviewer's prompt-cache
-// payoff starts to shrink. Truncated at the nearest preceding paragraph
-// boundary by `truncateAtParagraph` so we don't cut mid-sentence.
-const EXAMPLE_TRUNCATE_CHARS = 12000;
+// Soft cap on the examples block in the reviewer's cached system. The
+// reviewer judges against the editorial checklist + source list; examples
+// only set tone reference, so a smaller slice still does the job. 6k chars
+// (~1.5k tokens) keeps the cached system lean. Truncated at the nearest
+// preceding paragraph boundary by `truncateAtParagraph` so we don't cut
+// mid-sentence.
+const EXAMPLE_TRUNCATE_CHARS = 6000;
 
 // Truncate `text` to at most `limit` characters at a paragraph boundary
 // (double-newline). Falls back to a single-newline cut, then a hard slice,
@@ -123,10 +132,10 @@ export function truncateAtParagraph(text: string, limit: number): string {
   return head;
 }
 
-// Pre-build the Opus reviewer's system content once per generate run.
-// Content is identical across all reflect iterations (checklist + examples +
-// style are stable), so building it once guarantees a single cache write and
-// cache reads on every subsequent Opus call in the loop.
+// Pre-build the reviewer's system content once per generate run. Content is
+// identical across all reflect iterations (checklist + examples + style are
+// stable), so building it once guarantees a single cache write and cache
+// reads on every subsequent reviewer call in the loop.
 export async function buildReviewerSystemContent(opts: {
   exampleScripts: string;
   styleProfile?: string;
@@ -172,10 +181,11 @@ export async function reflectLoop(opts: {
   for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     let review: ReviewResult;
     try {
-      review = await reviewScriptWithOpus({ script, reviewerSystemContent: cachedReviewerSystemContent, approvedTopics });
+      review = await reviewScript({ script, reviewerSystemContent: cachedReviewerSystemContent, approvedTopics });
     } catch (err) {
-      // Spec: if Opus call fails, fall back to Sonnet's own judgment and exit.
-      console.warn(JSON.stringify({ event: 'orchestrator.reflect.opus_error', err: String(err) }));
+      // If the reviewer call fails, fall back to the writer's own judgment
+      // and exit the loop with the latest draft.
+      console.warn(JSON.stringify({ event: 'orchestrator.reflect.reviewer_error', err: String(err) }));
       return { finalScript: script, iterations: iteration, history };
     }
 

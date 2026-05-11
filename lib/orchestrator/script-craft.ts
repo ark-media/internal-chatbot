@@ -8,6 +8,18 @@ import type {
   TopicWithSources,
 } from './types';
 
+// Soft cap on quotes per article surfaced to the writer. Distill's stage-2
+// pass (Sonnet) already returns at most 5 quotes ranked by relevance; this
+// is a defensive ceiling in case an upstream caller hands the writer
+// pre-built RatedArticles with longer quote lists.
+const MAX_QUOTES_PER_ARTICLE = 5;
+
+// Char cap on the raw-excerpt fallback used for articles that bypass distill
+// (e.g. /refetch). 1500 chars ≈ 250 words — enough for a lead + nut graf
+// so the writer has something to work with, but small enough that one
+// late-added article doesn't blow up the cached system block.
+const FALLBACK_EXCERPT_CHARS = 1500;
+
 function buildSourceBlock(topics: TopicWithSources[], extras: Article[]): string {
   const lines: string[] = [];
   topics.forEach((t, ti) => {
@@ -25,13 +37,14 @@ function buildSourceBlock(topics: TopicWithSources[], extras: Article[]): string
       // added via /refetch).
       let body: string;
       if (rated.summary && rated.summary.length > 0) {
+        const quotes = (rated.keyQuotes ?? []).slice(0, MAX_QUOTES_PER_ARTICLE);
         const quotesBlock =
-          rated.keyQuotes && rated.keyQuotes.length > 0
-            ? `\n\nQuotes (verbatim):\n${rated.keyQuotes.map((q) => `- "${q}"`).join('\n')}`
+          quotes.length > 0
+            ? `\n\nQuotes (verbatim):\n${quotes.map((q) => `- "${q}"`).join('\n')}`
             : '';
         body = `Summary: ${rated.summary}${quotesBlock}`;
       } else {
-        body = `Excerpt:\n${a.content.slice(0, 2000)}`;
+        body = `Excerpt:\n${a.content.slice(0, FALLBACK_EXCERPT_CHARS)}`;
       }
 
       lines.push(`${header}\n\n${body}`);
@@ -43,7 +56,7 @@ function buildSourceBlock(topics: TopicWithSources[], extras: Article[]): string
     lines.push('# Additional articles supplied by writer');
     extras.forEach((a) => {
       lines.push(
-        `## ${a.source} — ${a.title}\nURL: ${a.url}\nDate: ${a.publicationDate ?? 'unknown'}\n\nExcerpt:\n${a.content.slice(0, 2000)}`,
+        `## ${a.source} — ${a.title}\nURL: ${a.url}\nDate: ${a.publicationDate ?? 'unknown'}\n\nExcerpt:\n${a.content.slice(0, FALLBACK_EXCERPT_CHARS)}`,
       );
       lines.push('');
     });
@@ -80,7 +93,7 @@ const REFINE_INSTRUCTIONS = (corrections: ReviewCorrection[]) =>
 //
 // `styleProfile` is the distilled writer-preference text from
 // `lib/orchestrator/style-memory`. It's also passed into the reflect/review
-// agent (see `reflect.ts#reviewScriptWithOpus`) so the reviewer treats the
+// agent (see `reflect.ts#reviewScript`) so the reviewer treats the
 // same preferences as ground truth and doesn't oscillate against the writer.
 export function buildCachedSystemContent(opts: {
   topics: TopicWithSources[];

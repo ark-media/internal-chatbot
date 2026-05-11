@@ -3,7 +3,10 @@ import { z } from 'zod';
 
 import type { Article, DistillResult, RatedArticle, TopicWithSources } from './types';
 
-const distillSchema = z.object({
+// Stage 1 schema (Haiku): topic grouping + scoring + summaries.
+// Quotes are pulled in Stage 2 by Sonnet because verbatim copying is Haiku's
+// known weak spot and on-air attribution requires exact source text.
+const stage1Schema = z.object({
   topics: z
     .array(
       z.object({
@@ -24,12 +27,6 @@ const distillSchema = z.object({
                 .describe(
                   '2–4 sentence summary of what this article contributes to this topic — the key facts, actors, numbers, and dates the script writer needs. No quoted material here.',
                 ),
-              keyQuotes: z
-                .array(z.string())
-                .max(5)
-                .describe(
-                  'Up to 5 verbatim quotes from the article that the script writer could plausibly use as soundbites or attributed claims. Copy the source text exactly; do not paraphrase. Empty array if no quotable material.',
-                ),
             }),
           )
           .describe('One rating per article in articleIndices, same length and order'),
@@ -39,7 +36,24 @@ const distillSchema = z.object({
   rationale: z.string().describe('1–3 sentences on why these topics were chosen over alternatives'),
 });
 
-const SYSTEM_PROMPT = `You are the news editor for *Ark News Daily*, a 6–10 minute daily briefing on Israel, Jews, and the Middle East. You group raw articles into newsworthy topics and rate sources.
+// Stage 2 schema (Sonnet): verbatim quote extraction for selected articles.
+const stage2Schema = z.object({
+  articleQuotes: z
+    .array(
+      z.object({
+        articleIndex: z.number().int().min(0),
+        quotes: z
+          .array(z.string())
+          .max(5)
+          .describe(
+            'Up to 5 verbatim quotes from this article. Copy the source text exactly — do not paraphrase, smooth, or normalise punctuation. Empty array if no quotable material.',
+          ),
+      }),
+    )
+    .describe('One entry per selected article. Articles not present in input must be omitted.'),
+});
+
+const STAGE1_SYSTEM_PROMPT = `You are the news editor for *Ark News Daily*, a 6–10 minute daily briefing on Israel, Jews, and the Middle East. You group raw articles into newsworthy topics and rate sources.
 
 Your selection principles (from the show's editorial guidance):
 - Pick stories with broader significance — new developments, policy shifts, direct impact on the audience.
@@ -52,22 +66,50 @@ Rate every (article, topic) pair on three axes 0–100:
 - credibility: is the outlet reputable for this kind of coverage? Mainstream wires and the major Israeli/US/Hebrew outlets score high; tabloids and unverified accounts score low.
 - completeness: does the article add new info, or just repeat earlier coverage?
 
-For every (article, topic) pair, also produce:
-- summary: 2–4 sentences capturing what this article contributes to the topic — facts, actors, numbers, dates. The script writer will rely on this instead of re-reading the source, so be precise. Don't editorialize.
-- keyQuotes: up to 5 verbatim quotes from the article (copy exactly — do not paraphrase). Pick lines that are quotable on air or that lock in attribution for a contested claim. Empty array if the article has no useful quotable material.
+For every (article, topic) pair, also produce a summary: 2–4 sentences capturing what this article contributes to the topic — facts, actors, numbers, dates. The script writer will rely on this instead of re-reading the source, so be precise. Don't editorialize. No quoted material here — verbatim quotes are extracted in a separate downstream pass.
 
 Return the top 3 topics ordered by newsworthiness (primary), source quality (secondary), completeness (tertiary). Return fewer than 3 only if the source pool genuinely doesn't support it.`;
 
-function buildArticleSummary(articles: Article[]): string {
-  // Distill is now also responsible for summarising and pulling verbatim quotes,
-  // so it needs enough source text to do that — not just enough to recognise
-  // the topic. 3500 chars covers most articles' lead + a few middle paragraphs.
+const STAGE2_SYSTEM_PROMPT = `You extract quotable soundbites from news articles for a daily broadcast script. The quotes you return will be attributed and read on air, so verbatim fidelity is critical.
+
+Rules:
+- Copy quotes EXACTLY from the source text. Do not paraphrase, smooth wording, normalise punctuation, or correct typos.
+- Pick lines that are quotable on air or that lock in attribution for a contested claim — direct quotations from named sources are best; tight factual sentences are also acceptable.
+- Up to 5 quotes per article. Empty array if the article has no useful quotable material — do not pad.
+- If the source has no embedded quotations, you may return short factual sentences copied verbatim, but never invent or recombine wording.`;
+
+// Stage 1 article excerpt cap. Haiku is doing classification + summarisation;
+// 2000 chars ≈ 350 words covers the lead + nut graf of most news stories.
+const STAGE1_ARTICLE_EXCERPT_CHARS = 2000;
+
+// Stage 2 article excerpt cap. Sonnet runs only on the ~10–15 selected
+// articles, so we can afford richer source text. 6000 chars covers the lead
+// plus several body paragraphs where the strongest quotes from interviews,
+// op-eds, and analysis pieces tend to live.
+const STAGE2_ARTICLE_EXCERPT_CHARS = 6000;
+
+// Cap on the tone-reference excerpt of prior scripts included in the cached
+// stage-1 system. The full examples file is ~25k chars; 8000 chars carries
+// enough register and pacing for the model to recognise the show's voice.
+const EXAMPLES_CHARS = 8000;
+
+function buildStage1Articles(articles: Article[]): string {
   return articles
     .map((a, i) => {
       const flag = a.isFlagged ? ' [outside-window]' : '';
       const err = a.fetchError ? ' [fetch-failed]' : '';
-      const excerpt = a.content.slice(0, 3500).replace(/\s+/g, ' ').trim();
+      const excerpt = a.content.slice(0, STAGE1_ARTICLE_EXCERPT_CHARS).replace(/\s+/g, ' ').trim();
       return `[${i}] ${a.source} — ${a.title} (${a.publicationDate ?? 'no date'})${flag}${err}\n${excerpt}`;
+    })
+    .join('\n\n');
+}
+
+function buildStage2Articles(articles: Article[], indices: number[]): string {
+  return indices
+    .map((idx) => {
+      const a = articles[idx];
+      const excerpt = a.content.slice(0, STAGE2_ARTICLE_EXCERPT_CHARS).replace(/\s+/g, ' ').trim();
+      return `[${idx}] ${a.source} — ${a.title}\n${excerpt}`;
     })
     .join('\n\n');
 }
@@ -80,29 +122,79 @@ export async function distillTopics(
     return { topics: [], rationale: 'No articles available to distill.' };
   }
 
-  const prompt = `Tone reference (recent Ark News Daily scripts — match this register when judging newsworthiness):
+  // Stage 1 (Haiku): topic grouping + scoring + summaries on all candidates.
+  // The system block (system prompt + tone reference) is stable across runs
+  // and cached so consecutive runs in a session hit the prompt cache instead
+  // of re-paying full input price for ~8k tokens of examples.
+  const stage1CachedSystem = `${STAGE1_SYSTEM_PROMPT}
 
-${exampleScripts.slice(0, 8000)}
+Tone reference (recent Ark News Daily scripts — match this register when judging newsworthiness):
 
-Articles to organize (indexed):
+${exampleScripts.slice(0, EXAMPLES_CHARS)}`;
 
-${buildArticleSummary(articles)}
+  const stage1Prompt = `Articles to organize (indexed):
 
-Select up to 3 topics. For each topic, list which article indices belong, and for every (article, topic) pair return a rating, a 2–4 sentence summary, and up to 5 verbatim quotes pulled from the excerpt above. The script writer will work only from your summaries and quotes — not from the original article text — so make sure each summary is self-contained and each quote is copied exactly.`;
+${buildStage1Articles(articles)}
 
-  const { object } = await generateObject({
-    model: 'anthropic/claude-sonnet-4-6',
-    schema: distillSchema,
+Select up to 3 topics. For each topic, list which article indices belong, and for every (article, topic) pair return a rating and a 2–4 sentence summary.`;
+
+  const { object: stage1 } = await generateObject({
+    model: 'anthropic/claude-haiku-4-5',
+    schema: stage1Schema,
     system: {
       role: 'system',
-      content: SYSTEM_PROMPT,
+      content: stage1CachedSystem,
       providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
     },
-    prompt,
+    prompt: stage1Prompt,
     temperature: 0.2,
   });
 
-  const topics: TopicWithSources[] = object.topics.slice(0, 3).map((t) => {
+  // Stage 2 (Sonnet): verbatim quote extraction on the deduped selected set.
+  // Running quotes through Sonnet protects on-air accuracy; running it on
+  // only the selected articles (not all candidates) keeps total cost below
+  // a single-pass Sonnet call.
+  const selectedIndices = Array.from(
+    new Set(
+      stage1.topics
+        .flatMap((t) => t.articleIndices)
+        .filter((idx) => idx >= 0 && idx < articles.length),
+    ),
+  );
+
+  const quotesByIndex = new Map<number, string[]>();
+  if (selectedIndices.length > 0) {
+    try {
+      const { object: stage2 } = await generateObject({
+        model: 'anthropic/claude-sonnet-4-6',
+        schema: stage2Schema,
+        system: {
+          role: 'system',
+          content: STAGE2_SYSTEM_PROMPT,
+          providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
+        },
+        prompt: `Articles selected for the script:
+
+${buildStage2Articles(articles, selectedIndices)}
+
+For each article above, pull up to 5 verbatim quotes the script writer could use as soundbites or attributed claims. Copy the source text exactly. Return an empty quotes array if an article has no quotable material.`,
+        temperature: 0,
+      });
+      for (const aq of stage2.articleQuotes) {
+        if (aq.articleIndex >= 0 && aq.articleIndex < articles.length) {
+          quotesByIndex.set(aq.articleIndex, aq.quotes);
+        }
+      }
+    } catch (err) {
+      // Quote-extraction failure shouldn't block the script — the writer can
+      // still work from summaries. Log so the gap is visible in observability.
+      console.warn(
+        JSON.stringify({ event: 'orchestrator.distill.quote_stage_error', err: String(err) }),
+      );
+    }
+  }
+
+  const topics: TopicWithSources[] = stage1.topics.slice(0, 3).map((t) => {
     const ratingByIdx = new Map(t.ratings.map((r) => [r.articleIndex, r]));
     const rated: RatedArticle[] = t.articleIndices
       .filter((idx) => idx >= 0 && idx < articles.length)
@@ -118,7 +210,7 @@ Select up to 3 topics. For each topic, list which article indices belong, and fo
           completeness: r.completeness,
           avgScore: Math.round((r.relevance + r.credibility + r.completeness) / 3),
           summary: r.summary,
-          keyQuotes: r.keyQuotes,
+          keyQuotes: quotesByIndex.get(idx) ?? [],
         }];
       })
       .sort((a, b) => b.avgScore - a.avgScore);
@@ -130,5 +222,5 @@ Select up to 3 topics. For each topic, list which article indices belong, and fo
     };
   });
 
-  return { topics, rationale: object.rationale };
+  return { topics, rationale: stage1.rationale };
 }
