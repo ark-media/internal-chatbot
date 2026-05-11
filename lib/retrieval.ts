@@ -297,9 +297,14 @@ export async function lookupCorpus(
   );
   const reranked = await rerank(opts.query, docs, finalK);
 
-  const top = reranked.map(({ index, relevance_score }) =>
-    toRetrievedChunk(ranked[index].row, relevance_score),
-  );
+  // Voyage normally returns indices in [0, docs.length); guard so a malformed
+  // response can't crash the entire route on `ranked[index].row` access.
+  const top: RetrievedChunk[] = [];
+  for (const { index, relevance_score } of reranked) {
+    const r = ranked[index];
+    if (!r) continue;
+    top.push(toRetrievedChunk(r.row, relevance_score));
+  }
 
   if (opts.expandNeighbors === false || top.length === 0) return top;
 

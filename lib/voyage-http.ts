@@ -22,8 +22,15 @@ export async function embedQuery(text: string): Promise<number[]> {
   if (!res.ok) {
     throw new Error(`voyage embed ${res.status}: ${await res.text()}`);
   }
-  const json = await res.json();
-  return json.data[0].embedding;
+  const json = (await res.json()) as { data?: Array<{ embedding?: number[] }> };
+  const embedding = json.data?.[0]?.embedding;
+  if (!embedding) {
+    // 200 with an empty / malformed payload happens during Voyage degradation.
+    // Surface a useful message instead of the generic "cannot read property of
+    // undefined" the caller would otherwise see.
+    throw new Error('voyage embed: missing embedding in response');
+  }
+  return embedding;
 }
 
 export type RerankResult = { index: number; relevance_score: number };

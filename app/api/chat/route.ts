@@ -860,6 +860,9 @@ export async function POST(req: Request) {
         },
     stopWhen: stepCountIs(8),
     temperature: 0.2,
+    // Propagate client disconnect / Stop button into the provider call so
+    // the LLM stops generating instead of burning tokens to completion.
+    abortSignal: req.signal,
     onFinish: ({ text, usage, finishReason, steps }) => {
       capturedUsage = usage;
       const allToolCalls = steps.flatMap((s) => s.toolCalls ?? []);

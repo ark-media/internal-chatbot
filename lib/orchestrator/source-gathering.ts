@@ -157,13 +157,21 @@ async function searchByTitle(
 }
 
 function titleSimilarity(a: string, b: string): number {
+  // Stopwords (the / and / etc.) are filtered out, but keep short high-signal
+  // tokens — "IDF", "UN", "war", "Gaza" — that previously fell under a
+  // length-> 3 filter and made short headlines score artificially low.
+  const STOPWORDS = new Set([
+    'the', 'and', 'for', 'with', 'from', 'this', 'that',
+    'are', 'was', 'were', 'has', 'have', 'had', 'but',
+    'not', 'you', 'your', 'his', 'her', 'its', 'our',
+  ]);
   const tokenize = (s: string): Set<string> =>
     new Set(
       s
         .toLowerCase()
         .replace(/[^\p{Letter}\p{Number}\s]/gu, ' ')
         .split(/\s+/)
-        .filter((w) => w.length > 3),
+        .filter((w) => w.length >= 2 && !STOPWORDS.has(w)),
     );
   const ta = tokenize(a);
   const tb = tokenize(b);
@@ -366,10 +374,17 @@ export async function gatherSources(opts: {
 
   // Verify URLs (and recover hallucinated ones) before paying for Tavily
   // extract. Dedupe again in case recovery collapses two candidates to the
-  // same canonical URL.
+  // same canonical URL. allSettled so one verifyOrRecover throw can't
+  // collapse the entire run to zero articles.
   const verifiedSeen = new Set<string>();
   const verified: Candidate[] = [];
-  for (const c of await Promise.all(deduped.map(verifyOrRecover))) {
+  const settled = await Promise.allSettled(deduped.map(verifyOrRecover));
+  for (const s of settled) {
+    if (s.status === 'rejected') {
+      console.warn(`[gatherSources] verify threw, skipping: ${String(s.reason)}`);
+      continue;
+    }
+    const c = s.value;
     if (!c || verifiedSeen.has(c.url)) continue;
     verifiedSeen.add(c.url);
     verified.push(c);

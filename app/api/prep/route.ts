@@ -635,6 +635,9 @@ export async function POST(req: Request) {
     },
     stopWhen: stepCountIs(6),
     temperature: 0.5,
+    // Propagate client disconnect / Stop into the provider call so the model
+    // stops generating instead of burning tokens to completion.
+    abortSignal: req.signal,
     onFinish: ({ usage, finishReason, steps }) => {
       const toolCalls = steps.flatMap((s) => s.toolCalls ?? []);
       console.log(
