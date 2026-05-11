@@ -181,14 +181,17 @@ function PrepBody({
 
   const onPickFiles = useCallback(
     (e: ChangeEvent<HTMLInputElement>) => {
-      const picked = e.target.files;
+      // Snapshot FileList into an array before clearing the input — FileList is
+      // a live collection tied to the input element, so reading it after
+      // setting value='' yields zero entries and the PDF never makes it to state.
+      const picked = e.target.files ? Array.from(e.target.files) : [];
       e.target.value = '';
-      if (!picked) return;
+      if (picked.length === 0) return;
       const accepted: AttachedFile[] = [];
       const rejected: string[] = [];
       let total = files.reduce((n, f) => n + f.file.size, 0);
       for (let i = 0; i < picked.length; i++) {
-        const f = picked.item(i);
+        const f = picked[i];
         if (!f) continue;
         if (files.length + accepted.length >= MAX_FILES) {
           rejected.push(`too many files (max ${MAX_FILES})`);
