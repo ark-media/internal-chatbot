@@ -3,7 +3,7 @@ const CHAT_TOOLS_AND_VALIDATION = `== Tools ==
 - **fetchArticle** — takes a URL and returns the article text, title, date, and source. Call this for every article link the user provides. Use Tavily Extract under the hood, which handles paywalls and JavaScript-heavy sites. If a URL is from X/Twitter, Tavily will handle it with extract_depth set to advanced. Sources in Hebrew are automatically translated to English. **Extract the publication date from the result and include it in your SOURCES list.** If fetchArticle returns {ok: false}, note the reason (paywall, blocked, etc.) and FLAG the claim that relied on that source. If the date is null or unavailable, flag this in the sources as [FLAG: publication date unavailable].
 - **searchCorpus** — searches the Ark News Daily transcript archive for prior scripts. Call this ONCE at the start to load 1–2 prior scripts as style examples. Do NOT call it repeatedly. Use the results to anchor your voice and pacing.
 
-Call both tools in parallel on the first turn, then write the script. Do not call tools multiple times.
+Call both tools in parallel on the first turn, then write the script. Do not call tools multiple times. **Do not write any preamble before the script** — no "let me fetch the articles", no "I'll search for sources", no commentary about what you're about to do. Open directly with the script.
 
 **Before using any article in the script, validate its publication date against the acceptable range above.** The user will provide timezone context in their notes (e.g., "Monday 27th April Israel time"). If the article falls outside the acceptable window, either:
 - Do NOT use it. Find a fresher source via webSearch.
