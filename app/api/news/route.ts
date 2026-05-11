@@ -327,10 +327,15 @@ type ExtractedSources = Array<{
 }>;
 
 function extractSources(text: string): { script: string; sources: ExtractedSources } {
-  // Match the script up to "---" and then the sources section.
-  // Allow flexible whitespace around the divider for robustness.
-  const match = text.match(/^([\s\S]*?)\n\s*---+\s*\n\s*SOURCES:\s*\n([\s\S]+)$/i);
-  if (!match) {
+  // Find the SOURCES heading at the start of a line. Tolerate:
+  //   - any divider before it (---, ***, ___, or none),
+  //   - heading variants (SOURCES, Sources, "Sources:", "## Sources"),
+  //   - smart quotes / extra punctuation around the colon.
+  // A strict prior regex required `\n---\nSOURCES:\n` exactly and silently
+  // returned zero sources whenever the model drifted, persisting scripts
+  // with empty source lists.
+  const headingMatch = text.match(/(^|\n)[#\s>*]*sources\b[\s:．·.\-—]*\n/i);
+  if (!headingMatch || headingMatch.index === undefined) {
     console.warn(
       JSON.stringify({
         event: 'news.extract_sources_format_not_found',
@@ -340,7 +345,14 @@ function extractSources(text: string): { script: string; sources: ExtractedSourc
     return { script: text, sources: [] };
   }
 
-  const [, script, sourcesText] = match;
+  // Trim any trailing divider (---, ***, ___) or whitespace from the
+  // script body so it doesn't end with the separator.
+  const scriptEnd = headingMatch.index + (headingMatch[1] === '\n' ? 1 : 0);
+  const script = text
+    .slice(0, scriptEnd)
+    .replace(/\n[\s>*#]*[-*_]{3,}\s*$/, '')
+    .replace(/\s+$/, '');
+  const sourcesText = text.slice(headingMatch.index + headingMatch[0].length);
   const sources: ExtractedSources = [];
 
   // Parse lines like: "1. Title — URL — Date [FLAG: note]"
@@ -569,6 +581,9 @@ export async function POST(req: Request) {
     },
     stopWhen: stepCountIs(8),
     temperature: 0.3,
+    // Propagate client disconnect / Stop into the provider call so the model
+    // stops generating instead of burning tokens to completion.
+    abortSignal: req.signal,
     onFinish: ({ usage, finishReason, steps }) => {
       const toolCalls = steps.flatMap((s) => s.toolCalls ?? []);
       console.log(
@@ -598,9 +613,14 @@ export async function POST(req: Request) {
     onFinish: async ({ responseMessage }) => {
       if (!chatId) return;
       try {
-        // Extract sources from the generated script and store separately
-        const textPart = responseMessage.parts?.find((p) => p.type === 'text');
-        const responseText = (textPart as { text?: string } | undefined)?.text ?? '';
+        // Concatenate every text segment — the model often emits text both
+        // before and after tool calls (fetchArticle / searchCorpus / webSearch),
+        // and `.find` would drop everything after the first segment, leaving
+        // the persisted script truncated and the source list empty.
+        const responseText = (responseMessage.parts ?? [])
+          .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+          .map((p) => p.text)
+          .join('');
 
         const { script, sources } = extractSources(responseText);
 
