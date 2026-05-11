@@ -49,15 +49,18 @@ export async function saveRun(run: OrchestratorRun): Promise<void> {
   // Bump expires_at on every save so a long-iterating run doesn't drop out
   // of the list view (which filters WHERE expires_at > NOW()) just because
   // it was first created 7+ days ago.
+  // updated_at is truncated to ms so it round-trips through JS Date /
+  // ISO strings without precision loss — saveRunIfUnchanged's optimistic
+  // CAS depends on the loaded value matching the stored value exactly.
   await sql`
-    INSERT INTO orchestrator_runs (chat_id, stage, today, timezone, state)
-    VALUES (${run.chatId}, ${run.stage}, ${run.today}, ${run.timezone}, ${stateJson}::jsonb)
+    INSERT INTO orchestrator_runs (chat_id, stage, today, timezone, state, updated_at)
+    VALUES (${run.chatId}, ${run.stage}, ${run.today}, ${run.timezone}, ${stateJson}::jsonb, date_trunc('milliseconds', NOW()))
     ON CONFLICT (chat_id) DO UPDATE
       SET stage = EXCLUDED.stage,
           today = EXCLUDED.today,
           timezone = EXCLUDED.timezone,
           state = EXCLUDED.state,
-          updated_at = NOW(),
+          updated_at = date_trunc('milliseconds', NOW()),
           expires_at = NOW() + INTERVAL '7 days'
   `;
 }
@@ -82,6 +85,30 @@ export async function saveRunIfStage(
            expires_at = NOW() + INTERVAL '7 days'
      WHERE chat_id = ${run.chatId}
        AND stage = ANY(${requiredStages}::text[])
+   RETURNING chat_id
+  `) as unknown as Array<{ chat_id: string }>;
+  return rows.length > 0;
+}
+
+// Optimistic-locking variant: write only when the row's current updated_at
+// matches the snapshot the caller loaded with. Used by /topics where two
+// concurrent edits would otherwise read the same run, write back, and
+// silently clobber one another's article additions.
+export async function saveRunIfUnchanged(
+  run: OrchestratorRun,
+  expectedUpdatedAt: string,
+): Promise<boolean> {
+  const stateJson = JSON.stringify(buildPayload(run));
+  const rows = (await sql`
+    UPDATE orchestrator_runs
+       SET stage = ${run.stage},
+           today = ${run.today},
+           timezone = ${run.timezone},
+           state = ${stateJson}::jsonb,
+           updated_at = NOW(),
+           expires_at = NOW() + INTERVAL '7 days'
+     WHERE chat_id = ${run.chatId}
+       AND updated_at = ${expectedUpdatedAt}::timestamptz
    RETURNING chat_id
   `) as unknown as Array<{ chat_id: string }>;
   return rows.length > 0;

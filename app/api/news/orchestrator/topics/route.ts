@@ -4,7 +4,7 @@ import { gatherSources } from '@/lib/orchestrator/source-gathering';
 import {
   ensureOrchestratorTables,
   loadRun,
-  saveRun,
+  saveRunIfUnchanged,
 } from '@/lib/orchestrator/state';
 import {
   deriveApprovedTopics,
@@ -114,6 +114,29 @@ export async function POST(req: Request) {
     return Response.json({ error: 'no_topics_yet' }, { status: 409 });
   }
   const distill: DistillResult = run.distill;
+  // Optimistic-locking snapshot: every action below CAS-writes on this
+  // value so two concurrent /topics calls can't both win.
+  const baseUpdatedAt = run.updatedAt;
+
+  // Tries the CAS write; on conflict surface a 409 so the UI re-fetches
+  // and retries with the latest snapshot.
+  const commit = async (
+    updated: OrchestratorRun,
+    extra: Record<string, unknown> = {},
+  ): Promise<Response> => {
+    const ok = await saveRunIfUnchanged(updated, baseUpdatedAt);
+    if (!ok) {
+      return Response.json(
+        { error: 'stale_state', detail: 'Run was updated by another request. Reload and retry.' },
+        { status: 409 },
+      );
+    }
+    return Response.json({
+      stage: updated.stage,
+      distill: updated.distill,
+      ...extra,
+    });
+  };
 
   if (body.action === 'add') {
     let articles: RatedArticle[] = [];
@@ -152,10 +175,7 @@ export async function POST(req: Request) {
       approvedTopics: refreshApproved(run, updatedDistill),
       updatedAt: new Date().toISOString(),
     };
-    await saveRun(updated);
-    return Response.json({
-      stage: updated.stage,
-      distill: updated.distill,
+    return commit(updated, {
       addedTopicIndex: updated.distill!.topics.length - 1,
       addedSourceCount: articles.length,
     });
@@ -181,8 +201,7 @@ export async function POST(req: Request) {
       approvedTopics: refreshApproved(run, updatedDistill),
       updatedAt: new Date().toISOString(),
     };
-    await saveRun(updated);
-    return Response.json({ stage: updated.stage, distill: updated.distill });
+    return commit(updated);
   }
 
   if (body.action === 'delete') {
@@ -204,8 +223,7 @@ export async function POST(req: Request) {
         : run.approvedTopics,
       updatedAt: new Date().toISOString(),
     };
-    await saveRun(updated);
-    return Response.json({ stage: updated.stage, distill: updated.distill });
+    return commit(updated);
   }
 
   // action === 'gather' — fetch sources for an existing topic shell that
@@ -241,10 +259,5 @@ export async function POST(req: Request) {
     approvedTopics: refreshApproved(run, updatedDistill),
     updatedAt: new Date().toISOString(),
   };
-  await saveRun(updated);
-  return Response.json({
-    stage: updated.stage,
-    distill: updated.distill,
-    addedCount: deduped.length,
-  });
+  return commit(updated, { addedCount: deduped.length });
 }
