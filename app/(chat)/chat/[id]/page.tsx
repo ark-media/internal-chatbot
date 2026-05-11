@@ -34,6 +34,7 @@ import type {
 import { cn } from '@/lib/cn';
 import { chatFetch } from '@/lib/chat-fetch';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
+import { useFlash } from '@/lib/use-flash';
 
 const EXAMPLE_PROMPTS = [
   'What has Nadav Eyal said about the Houthis recently?',
@@ -80,9 +81,9 @@ function ChatBody({
   const [input, setInput] = useState('');
   const [openPanel, setOpenPanel] = useState<PanelView | null>(null);
   const [episodeCount, setEpisodeCount] = useState<number | null>(null);
-  const [copySuccess, setCopySuccess] = useState(false);
+  const [copySuccess, flashCopySuccess] = useFlash(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
-  const [showUndoToast, setShowUndoToast] = useState(false);
+  const [showUndoToast, flashShowUndoToast] = useFlash(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   // Custom fetch that adds editingMessageId to the body if present
@@ -158,12 +159,11 @@ function ChatBody({
 
     try {
       await navigator.clipboard.writeText(text);
-      setCopySuccess(true);
-      setTimeout(() => setCopySuccess(false), 2000);
+      flashCopySuccess(true, 2000);
     } catch {
       alert('Failed to copy to clipboard');
     }
-  }, [extractAnswerText]);
+  }, [extractAnswerText, flashCopySuccess]);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -343,14 +343,16 @@ function ChatBody({
     };
   }, [messages, selectedModel]);
 
-  // Auto-focus input when entering edit mode
+  // Auto-focus input when entering edit mode. The setTimeout(0) defers the
+  // focus until after React commits the input value so setSelectionRange
+  // operates on the populated value, not the empty initial render.
   useEffect(() => {
-    if (editingMessageId && inputRef.current) {
-      setTimeout(() => {
-        inputRef.current?.focus();
-        inputRef.current?.setSelectionRange(inputRef.current.value.length, inputRef.current.value.length);
-      }, 0);
-    }
+    if (!editingMessageId || !inputRef.current) return;
+    const timer = setTimeout(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(inputRef.current.value.length, inputRef.current.value.length);
+    }, 0);
+    return () => clearTimeout(timer);
   }, [editingMessageId]);
 
   // Handle Escape key to cancel edit
@@ -375,8 +377,7 @@ function ChatBody({
     sendMessage({ text: q });
     setInput('');
     if (wasEditing) {
-      setShowUndoToast(true);
-      setTimeout(() => setShowUndoToast(false), 3000);
+      flashShowUndoToast(true, 3000);
     }
   };
 
@@ -540,7 +541,7 @@ type MsgProps = {
 };
 
 function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }: MsgProps) {
-  const [copyState, setCopyState] = useState<'idle' | 'success' | 'error'>('idle');
+  const [copyState, flashCopyState] = useFlash<'idle' | 'success' | 'error'>('idle');
 
   const extractTextContent = useCallback((): string => {
     const textParts: string[] = [];
@@ -556,14 +557,12 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
     const text = extractTextContent();
     try {
       await navigator.clipboard.writeText(text);
-      setCopyState('success');
-      setTimeout(() => setCopyState('idle'), 2000);
+      flashCopyState('success', 2000);
     } catch (err) {
       console.error('Failed to copy:', err);
-      setCopyState('error');
-      setTimeout(() => setCopyState('idle'), 2000);
+      flashCopyState('error', 2000);
     }
-  }, [extractTextContent]);
+  }, [extractTextContent, flashCopyState]);
 
   if (message.role === 'user') {
     return (

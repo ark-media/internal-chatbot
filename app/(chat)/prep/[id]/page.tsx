@@ -41,6 +41,7 @@ import type {
 import { cn } from '@/lib/cn';
 import { chatFetch } from '@/lib/chat-fetch';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
+import { useFlash } from '@/lib/use-flash';
 import {
   MAX_FILES,
   MAX_FILE_BYTES,
@@ -103,19 +104,21 @@ function PrepBody({
   const [driveSaveInProgress, setDriveSaveInProgress] = useState(false);
   const [driveMatchedShow, setDriveMatchedShow] = useState<string | null>(null);
   const [driveFallback, setDriveFallback] = useState(false);
-  const [copySuccess, setCopySuccess] = useState(false);
+  const [copySuccess, flashCopySuccess, resetCopySuccess] = useFlash(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
-  const [showUndoToast, setShowUndoToast] = useState(false);
+  const [showUndoToast, flashShowUndoToast] = useFlash(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  // Auto-focus input when entering edit mode
+  // Auto-focus input when entering edit mode. setTimeout(0) defers focus
+  // until after React commits the populated value so setSelectionRange
+  // operates on the final length.
   useEffect(() => {
-    if (editingMessageId && inputRef.current) {
-      setTimeout(() => {
-        inputRef.current?.focus();
-        inputRef.current?.setSelectionRange(inputRef.current.value.length, inputRef.current.value.length);
-      }, 0);
-    }
+    if (!editingMessageId || !inputRef.current) return;
+    const timer = setTimeout(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(inputRef.current.value.length, inputRef.current.value.length);
+    }, 0);
+    return () => clearTimeout(timer);
   }, [editingMessageId]);
 
   // Handle Escape key to cancel edit
@@ -248,15 +251,14 @@ function PrepBody({
     setInput('');
     setFiles([]);
     if (wasEditing) {
-      setShowUndoToast(true);
-      setTimeout(() => setShowUndoToast(false), 3000);
+      flashShowUndoToast(true, 3000);
     }
     // Reset post-generation actions when starting a new turn.
     setDriveLink(null);
     setDriveError(null);
     setDriveMatchedShow(null);
     setDriveFallback(false);
-    setCopySuccess(false);
+    resetCopySuccess();
   };
 
   const extractQuestionsText = useCallback(() => {
@@ -283,12 +285,11 @@ function PrepBody({
     if (!text?.trim()) return;
     try {
       await navigator.clipboard.writeText(text);
-      setCopySuccess(true);
-      setTimeout(() => setCopySuccess(false), 2000);
+      flashCopySuccess(true, 2000);
     } catch {
       alert('Failed to copy to clipboard');
     }
-  }, [extractQuestionsText]);
+  }, [extractQuestionsText, flashCopySuccess]);
 
   const saveQuestionsToDrive = useCallback(async () => {
     if (driveSaveInProgress) return;
