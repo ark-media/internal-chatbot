@@ -9,6 +9,10 @@ export type WebSearchResponse =
   | { ok: true; results: WebSearchResult[] }
   | { ok: false; reason: 'not_configured' | 'error'; note: string };
 
+// Tavily search is normally quick; cap so a stuck connection can't hold the
+// route handler open for ~120s and stall the streamed response.
+const SEARCH_TIMEOUT_MS = 15_000;
+
 // Tavily Search — simple REST, free tier covers internal-tool usage.
 // https://docs.tavily.com/docs/rest-api/api-reference
 export async function webSearch(
@@ -36,6 +40,7 @@ export async function webSearch(
         include_answer: false,
         days: opts.daysBack,
       }),
+      signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
     });
     if (!resp.ok) {
       return {

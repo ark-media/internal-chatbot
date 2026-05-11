@@ -25,6 +25,10 @@ export type ExtractResponse = {
 };
 
 const ARTICLE_CHAR_CAP = 12_000;
+// Tavily extract on `advanced` depth occasionally hangs on bot-blocked URLs.
+// Without a ceiling each stuck call burns ~120s of Node's default socket
+// timeout, which serializes the orchestrator's per-article extraction.
+const EXTRACT_TIMEOUT_MS = 30_000;
 
 export async function extractArticles(
   urls: string[],
@@ -48,6 +52,7 @@ export async function extractArticles(
         urls,
         extract_depth: 'advanced',
       }),
+      signal: AbortSignal.timeout(EXTRACT_TIMEOUT_MS),
     });
 
     if (!resp.ok) {

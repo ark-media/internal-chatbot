@@ -2,6 +2,7 @@ import { generateText } from 'ai';
 
 // Simple language detection: check for Hebrew Unicode ranges
 function detectHebrewContent(text: string): boolean {
+  if (text.length === 0) return false;
   const hebrewRegex = /[֐-׿]/g;
   const hebrewChars = text.match(hebrewRegex) || [];
   // If >10% of text is Hebrew characters, treat as Hebrew
