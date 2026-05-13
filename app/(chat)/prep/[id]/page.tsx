@@ -350,11 +350,11 @@ function PrepBody({
                 description={
                   <>
                     Give an episode title + guest. Get 6–7 questions tagged{' '}
-                    <span className="rounded border border-white/15 bg-white/[0.06] px-1 py-0.5 text-[0.72rem] text-white/70">
+                    <span className="rounded border border-overlay/15 bg-overlay/[0.06] px-1 py-0.5 text-[0.72rem] text-fg/70">
                       open
                     </span>{' '}
                     /{' '}
-                    <span className="rounded border border-[#3eb5f9]/30 bg-[#3eb5f9]/[0.12] px-1 py-0.5 text-[0.72rem] text-[#79cdfc]">
+                    <span className="rounded border border-sky-brand/30 bg-sky-brand/[0.12] px-1 py-0.5 text-[0.72rem] text-sky-brand-soft">
                       therefore
                     </span>{' '}
                     /{' '}
@@ -382,7 +382,7 @@ function PrepBody({
             ))}
 
             {busy ? (
-              <div className="flex items-center gap-3 pl-12 text-xs text-white/50">
+              <div className="flex items-center gap-3 pl-12 text-xs text-fg/50">
                 <TypingDots />
                 <span className="tracking-wide">
                   {status === 'submitted' ? 'Researching…' : 'Writing questions…'}
@@ -390,7 +390,7 @@ function PrepBody({
                 <button
                   type="button"
                   onClick={() => stop()}
-                  className="ml-2 inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-[0.7rem] text-white/70 transition hover:bg-white/10 hover:text-white"
+                  className="ml-2 inline-flex items-center gap-1 rounded-md border border-overlay/10 bg-overlay/5 px-2 py-0.5 text-[0.7rem] text-fg/70 transition hover:bg-overlay/10 hover:text-fg"
                 >
                   <Square className="h-2.5 w-2.5 fill-current" />
                   Stop
@@ -409,7 +409,7 @@ function PrepBody({
             />
 
             {!busy && messages.length > 0 && messages[messages.length - 1]?.role === 'assistant' ? (
-              <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-white/10 pt-4">
+              <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-overlay/10 pt-4">
                 {driveLink ? (
                   <div className="inline-flex items-center gap-2 rounded-lg bg-green-500/10 px-4 py-2.5 text-sm text-green-200">
                     <CheckCircle2 className="h-4 w-4" />
@@ -425,7 +425,7 @@ function PrepBody({
                       href={driveLink}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-green-300 transition hover:bg-white/10"
+                      className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-green-300 transition hover:bg-overlay/10"
                     >
                       Open
                       <ExternalLink className="h-3 w-3" />
@@ -536,15 +536,15 @@ function PrepBody({
                   {files.map((f) => (
                     <div
                       key={f.id}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1 text-[0.72rem] text-white/75"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-overlay/10 bg-overlay/[0.04] px-2 py-1 text-[0.72rem] text-fg/75"
                     >
-                      <FileText className="h-3 w-3 text-[#3eb5f9]" />
+                      <FileText className="h-3 w-3 text-sky-brand" />
                       <span className="max-w-[240px] truncate">{f.file.name}</span>
-                      <span className="text-white/35">{formatBytes(f.file.size)}</span>
+                      <span className="text-fg/35">{formatBytes(f.file.size)}</span>
                       <button
                         type="button"
                         onClick={() => removeFile(f.id)}
-                        className="ml-0.5 rounded p-0.5 text-white/45 transition hover:bg-white/10 hover:text-white"
+                        className="ml-0.5 rounded p-0.5 text-fg/45 transition hover:bg-overlay/10 hover:text-fg"
                         aria-label={`Remove ${f.file.name}`}
                       >
                         <X className="h-3 w-3" />
@@ -589,7 +589,7 @@ function MessageRow({
         <div
           className={cn(
             'max-w-[82%] rounded-2xl rounded-br-md px-4 py-2.5',
-            'bg-gradient-to-br from-[#3eb5f9] to-[#2a8fd6] text-[#070b22]',
+            'bg-gradient-to-br from-sky-brand to-sky-brand-deep text-ink-950',
             'shadow-[0_8px_22px_-10px_rgba(62,181,249,0.6)]',
             'text-[0.95rem] font-medium leading-relaxed',
             'transition-all duration-200',
@@ -610,7 +610,7 @@ function MessageRow({
                 return (
                   <span
                     key={i}
-                    className="inline-flex items-center gap-1 rounded-md bg-[#070b22]/20 px-1.5 py-0.5 text-[0.72rem] text-[#070b22]/85"
+                    className="inline-flex items-center gap-1 rounded-md bg-ink-950/20 px-1.5 py-0.5 text-[0.72rem] text-ink-950/85"
                   >
                     <FileText className="h-3 w-3" />
                     {p.filename ?? p.mediaType}
@@ -627,7 +627,7 @@ function MessageRow({
               'mt-1 p-1.5 rounded-lg transition-all opacity-0 group-hover:opacity-100 duration-200',
               isEditing
                 ? 'bg-blue-400/20 text-blue-300 hover:bg-blue-400/30'
-                : 'hover:bg-white/10 text-white/50 hover:text-white/70',
+                : 'hover:bg-overlay/10 text-fg/50 hover:text-fg/70',
             )}
             title="Edit message (or click to edit)"
           >
@@ -642,7 +642,7 @@ function MessageRow({
     <div className="ark-fade-up flex gap-4">
       <div
         aria-hidden
-        className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-gradient-to-br from-[#101736] to-[#070b22]"
+        className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-overlay/10 bg-gradient-to-br from-ink-800 to-ink-950"
       >
         <ArkLogo className="h-7" bg="transparent" fg="#3eb5f9" markOnly />
       </div>
@@ -720,7 +720,7 @@ function PrepMarkdown({ text }: { text: string }) {
         text={text}
         components={{
           h1: ({ children }) => (
-            <h1 className="!mt-0 !mb-4 !text-[1.05rem] !font-bold !uppercase !tracking-[0.18em] !text-white/50">
+            <h1 className="!mt-0 !mb-4 !text-[1.05rem] !font-bold !uppercase !tracking-[0.18em] !text-fg/50">
               {children}
             </h1>
           ),
@@ -728,16 +728,16 @@ function PrepMarkdown({ text }: { text: string }) {
             const raw = String(children);
             const tag = raw.match(/\[(open|therefore|but)\]/i)?.[1]?.toLowerCase();
             return (
-              <h2 className="!mt-6 !mb-2 !text-[1.02rem] !font-bold !text-white/95 !normal-case !tracking-normal">
+              <h2 className="!mt-6 !mb-2 !text-[1.02rem] !font-bold !text-fg/95 !normal-case !tracking-normal">
                 {tag ? <QuestionHeading tag={tag as 'open' | 'therefore' | 'but'} raw={raw} /> : children}
               </h2>
             );
           },
           em: ({ children }) => (
-            <em className="text-[0.85rem] text-white/55">{children}</em>
+            <em className="text-[0.85rem] text-fg/55">{children}</em>
           ),
           strong: ({ children }) => (
-            <strong className="text-white">{children}</strong>
+            <strong className="text-fg">{children}</strong>
           ),
           a: ({ children, href }) => (
             <a href={href} target="_blank" rel="noopener noreferrer">
@@ -764,12 +764,12 @@ function QuestionHeading({
     tag === 'but'
       ? 'bg-amber-400/[0.12] text-amber-200 border-amber-300/30'
       : tag === 'therefore'
-        ? 'bg-[#3eb5f9]/[0.12] text-[#79cdfc] border-[#3eb5f9]/30'
-        : 'bg-white/[0.06] text-white/70 border-white/15';
+        ? 'bg-sky-brand/[0.12] text-sky-brand-soft border-sky-brand/30'
+        : 'bg-overlay/[0.06] text-fg/70 border-overlay/15';
   return (
     <span className="inline-flex items-baseline gap-2">
       {num && (
-        <span className="font-mono text-[0.78rem] text-white/40">Q{num}</span>
+        <span className="font-mono text-[0.78rem] text-fg/40">Q{num}</span>
       )}
       <span
         className={cn(
@@ -795,13 +795,13 @@ function ToolChip({
   return (
     <div
       className={cn(
-        'inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03]',
-        'px-2.5 py-1 text-[0.72rem] text-white/65',
+        'inline-flex items-center gap-2 rounded-lg border border-overlay/10 bg-overlay/[0.03]',
+        'px-2.5 py-1 text-[0.72rem] text-fg/65',
       )}
     >
       <Icon
         className={cn(
-          'h-3.5 w-3.5 text-[#3eb5f9]',
+          'h-3.5 w-3.5 text-sky-brand',
           pulsing && 'ark-pulse-dot',
         )}
       />
@@ -816,7 +816,7 @@ function TypingDots() {
       {[0, 1, 2].map((i) => (
         <span
           key={i}
-          className="h-1.5 w-1.5 rounded-full bg-[#3eb5f9] ark-pulse-dot"
+          className="h-1.5 w-1.5 rounded-full bg-sky-brand ark-pulse-dot"
           style={{ animationDelay: `${i * 140}ms` }}
         />
       ))}

@@ -28,6 +28,7 @@ import { ChatComposer } from '@/components/ChatComposer';
 import { ChatErrorBanner } from '@/components/ChatErrorBanner';
 import { EmptyState } from '@/components/EmptyState';
 import { MarkdownRenderer } from '@/components/MarkdownRenderer';
+import { KindBadge } from '@/components/ui/KindBadge';
 import type { NewsUIMessage, NewsSource } from '@/components/news-types';
 import { cn } from '@/lib/cn';
 import { chatFetch } from '@/lib/chat-fetch';
@@ -365,7 +366,7 @@ function NewsBody({
             ))}
 
             {busy ? (
-              <div className="flex items-center gap-3 pl-12 text-xs text-white/50">
+              <div className="flex items-center gap-3 pl-12 text-xs text-fg/50">
                 <TypingDots />
                 <span className="tracking-wide">
                   {status === 'submitted' ? 'Fetching articles…' : 'Generating script…'}
@@ -373,7 +374,7 @@ function NewsBody({
                 <button
                   type="button"
                   onClick={() => stop()}
-                  className="ml-2 inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-[0.7rem] text-white/70 transition hover:bg-white/10 hover:text-white"
+                  className="ml-2 inline-flex items-center gap-1 rounded-md border border-overlay/10 bg-overlay/5 px-2 py-0.5 text-[0.7rem] text-fg/70 transition hover:bg-overlay/10 hover:text-fg"
                 >
                   <Square className="h-2.5 w-2.5 fill-current" />
                   Stop
@@ -391,7 +392,7 @@ function NewsBody({
             />
 
             {!busy && messages.length > 0 && messages[messages.length - 1]?.role === 'assistant' ? (
-              <div className="mt-4 flex flex-col gap-3 border-t border-white/10 pt-4">
+              <div className="mt-4 flex flex-col gap-3 border-t border-overlay/10 pt-4">
                 <div className="flex flex-wrap items-center gap-2">
                   {driveLink ? (
                     <div className="inline-flex items-center gap-2 rounded-lg bg-green-500/10 px-4 py-2.5 text-sm text-green-200">
@@ -401,7 +402,7 @@ function NewsBody({
                         href={driveLink}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-green-300 transition hover:bg-white/10"
+                        className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-green-300 transition hover:bg-overlay/10"
                       >
                         Open
                         <ExternalLink className="h-3 w-3" />
@@ -459,7 +460,7 @@ function NewsBody({
                 </div>
 
                 <div className="mt-2">
-                  <div className="text-xs font-medium uppercase tracking-[0.2em] text-white/40 mb-2">
+                  <div className="text-xs font-medium uppercase tracking-[0.2em] text-fg/40 mb-2">
                     Refine the script
                   </div>
                   <div className="flex flex-wrap gap-1.5">
@@ -469,8 +470,8 @@ function NewsBody({
                         onClick={() => submit(hint)}
                         disabled={busy}
                         className={cn(
-                          'rounded-full border border-white/20 bg-white/[0.03] px-3 py-1 text-[0.75rem] text-white/70',
-                          'transition hover:border-white/40 hover:bg-white/[0.06] hover:text-white',
+                          'rounded-full border border-overlay/20 bg-overlay/[0.03] px-3 py-1 text-[0.75rem] text-fg/70',
+                          'transition hover:border-overlay/40 hover:bg-overlay/[0.06] hover:text-fg',
                           'disabled:cursor-not-allowed disabled:opacity-50',
                         )}
                       >
@@ -542,15 +543,15 @@ function NewsBody({
                   {files.map((f) => (
                     <div
                       key={f.id}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1 text-[0.72rem] text-white/75"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-overlay/10 bg-overlay/[0.04] px-2 py-1 text-[0.72rem] text-fg/75"
                     >
-                      <FileText className="h-3 w-3 text-[#3eb5f9]" />
+                      <FileText className="h-3 w-3 text-sky-brand" />
                       <span className="max-w-[240px] truncate">{f.file.name}</span>
-                      <span className="text-white/35">{formatBytes(f.file.size)}</span>
+                      <span className="text-fg/35">{formatBytes(f.file.size)}</span>
                       <button
                         type="button"
                         onClick={() => removeFile(f.id)}
-                        className="ml-0.5 rounded p-0.5 text-white/45 transition hover:bg-white/10 hover:text-white"
+                        className="ml-0.5 rounded p-0.5 text-fg/45 transition hover:bg-overlay/10 hover:text-fg"
                         aria-label={`Remove ${f.file.name}`}
                       >
                         <X className="h-3 w-3" />
@@ -574,7 +575,7 @@ function NewsBody({
 
       {/* Sources sidebar */}
       {openSource ? (
-        <aside className="ark-fade-up relative flex h-full w-full max-w-md flex-col border-l border-white/10 bg-[#070b22]/80 backdrop-blur-xl">
+        <aside className="ark-fade-up relative flex h-full w-full max-w-md flex-col border-l border-overlay/10 bg-canvas-deep/80 backdrop-blur-xl">
           <div
             aria-hidden
             className="pointer-events-none absolute inset-0 opacity-60"
@@ -583,26 +584,21 @@ function NewsBody({
                 'radial-gradient(80% 50% at 50% 0%, rgba(62,181,249,0.14) 0%, transparent 60%)',
             }}
           />
-          <header className="relative flex items-start justify-between gap-3 border-b border-white/10 px-5 py-4">
+          <header className="relative flex items-start justify-between gap-3 border-b border-overlay/10 px-5 py-4">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <span className="inline-flex items-center rounded-md border border-[#3eb5f9]/30 bg-[#3eb5f9]/10 px-1.5 py-0.5 font-mono text-[0.65rem] font-semibold uppercase tracking-wider text-[#79cdfc]">
-                  Source {openSource.number}
-                </span>
+                <KindBadge tone="sky">Source {openSource.number}</KindBadge>
               </div>
-              <div
-                className="mt-2 truncate text-base font-bold text-white"
-                style={{ fontFamily: 'var(--font-display)' }}
-              >
+              <div className="mt-2 truncate font-display text-base font-bold text-fg">
                 {openSource.title}
               </div>
               {openSource.date ? (
-                <div className="mt-1 text-xs text-white/55">{openSource.date}</div>
+                <div className="mt-1 text-xs text-fg/55">{openSource.date}</div>
               ) : null}
             </div>
             <button
               onClick={() => setOpenSource(null)}
-              className="rounded p-1 text-white/60 transition hover:bg-white/10 hover:text-white"
+              className="rounded p-1 text-fg/60 transition hover:bg-overlay/10 hover:text-fg"
               aria-label="Close source"
             >
               <X className="h-4 w-4" />
@@ -692,7 +688,7 @@ function MessageRow({
         <div
           className={cn(
             'max-w-[82%] rounded-2xl rounded-br-md px-4 py-2.5',
-            'bg-gradient-to-br from-[#3eb5f9] to-[#2a8fd6] text-[#070b22]',
+            'bg-gradient-to-br from-sky-brand to-sky-brand-deep text-ink-950',
             'shadow-[0_8px_22px_-10px_rgba(62,181,249,0.6)]',
             'text-[0.95rem] font-medium leading-relaxed',
             'transition-all duration-200',
@@ -709,7 +705,7 @@ function MessageRow({
           {fileParts.length > 0 ? (
             <div className="mt-2 flex flex-wrap gap-1">
               {fileParts.map((p, i) => (
-                <span key={i} className="inline-block rounded bg-white/20 px-1.5 py-0.5 text-[0.85rem]">
+                <span key={i} className="inline-block rounded bg-overlay/20 px-1.5 py-0.5 text-[0.85rem]">
                   {p.filename ?? 'file'}
                 </span>
               ))}
@@ -723,7 +719,7 @@ function MessageRow({
               'mt-1 p-1.5 rounded-lg transition-all opacity-0 group-hover:opacity-100 duration-200',
               isEditing
                 ? 'bg-blue-400/20 text-blue-300 hover:bg-blue-400/30'
-                : 'hover:bg-white/10 text-white/50 hover:text-white/70',
+                : 'hover:bg-overlay/10 text-fg/50 hover:text-fg/70',
             )}
             title="Edit message (or click to edit)"
           >
@@ -736,7 +732,7 @@ function MessageRow({
 
   return (
     <div className="ark-fade-up flex justify-start">
-      <div className="max-w-[90%] rounded-2xl rounded-bl-md bg-white/[0.04] px-4 py-3 text-white">
+      <div className="max-w-[90%] rounded-2xl rounded-bl-md bg-overlay/[0.04] px-4 py-3 text-fg">
         <MessageContent message={message} onSourceClick={onSourceClick} sources={sources} />
       </div>
     </div>
@@ -889,8 +885,8 @@ function NewsScriptContent({
         i++;
       }
       parts.push(
-        <div key={parts.length} className="my-3 ml-4 border-l-2 border-white/20 pl-4 italic text-white/80">
-          <div className="font-semibold text-white/90">{speaker}</div>
+        <div key={parts.length} className="my-3 ml-4 border-l-2 border-overlay/20 pl-4 italic text-fg/80">
+          <div className="font-semibold text-fg/90">{speaker}</div>
           <div>{quoteLines.join(' ')}</div>
         </div>,
       );
@@ -933,12 +929,12 @@ function NewsScriptContent({
               strong: ({ children }) => <strong className="font-semibold">{renderFootnotes(children, onSourceClick, sources)}</strong>,
               em: ({ children }) => <em className="italic">{renderFootnotes(children, onSourceClick, sources)}</em>,
               blockquote: ({ children }) => (
-                <blockquote className="border-l-4 border-white/30 pl-4 my-3 italic text-white/80">{renderFootnotes(children, onSourceClick, sources)}</blockquote>
+                <blockquote className="border-l-4 border-overlay/30 pl-4 my-3 italic text-fg/80">{renderFootnotes(children, onSourceClick, sources)}</blockquote>
               ),
               ul: ({ children }) => <ul className="list-disc list-inside my-2">{children}</ul>,
               ol: ({ children }) => <ol className="list-decimal list-inside my-2">{children}</ol>,
               li: ({ children }) => <li className="my-1">{renderFootnotes(children, onSourceClick, sources)}</li>,
-              hr: () => <hr className="my-4 border-white/20" />,
+              hr: () => <hr className="my-4 border-overlay/20" />,
               a: ({ href, children }) => (
                 <a href={href} target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:text-cyan-300 underline">
                   {children}
@@ -1022,7 +1018,7 @@ function TypingDots() {
       {[0, 1, 2].map((i) => (
         <span
           key={i}
-          className="h-1.5 w-1.5 rounded-full bg-white/40"
+          className="h-1.5 w-1.5 rounded-full bg-overlay/40"
           style={{
             animation: `ark-pulse-dot 1.4s infinite`,
             animationDelay: `${i * 0.2}s`,

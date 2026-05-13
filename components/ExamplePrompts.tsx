@@ -25,16 +25,16 @@ export function ExamplePrompts({
     : 'grid w-full max-w-2xl gap-2 sm:grid-cols-2';
 
   const buttonClassName = cn(
-    'group rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left',
-    'text-[0.88rem] leading-snug text-white/75 transition',
-    'hover:border-[#3eb5f9]/40 hover:bg-[#3eb5f9]/[0.06] hover:text-white',
+    'ark-surface group rounded-xl border border-overlay/10 px-4 py-3 text-left',
+    'text-[0.88rem] leading-snug text-fg/75 transition',
+    'hover:border-sky-brand/40 hover:bg-sky-brand/[0.06] hover:text-fg',
     'disabled:cursor-not-allowed disabled:opacity-40',
   );
 
   return (
     <>
       {label && (
-        <div className="text-[0.75rem] uppercase tracking-[0.15em] text-white/40 mt-8 mb-2">
+        <div className="text-[0.75rem] uppercase tracking-[0.15em] text-fg/40 mt-8 mb-2">
           {label}
         </div>
       )}
@@ -48,7 +48,7 @@ export function ExamplePrompts({
             className={buttonClassName}
           >
             <div className="flex items-start gap-2.5">
-              <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#3eb5f9]/70 transition group-hover:text-[#3eb5f9]" />
+              <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-brand/70 transition group-hover:text-sky-brand" />
               <span>{prompt}</span>
             </div>
           </button>

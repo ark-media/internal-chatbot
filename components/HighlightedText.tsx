@@ -22,7 +22,7 @@ export function HighlightedText({ text, quote }: Props): ReactNode {
     nodes.push(
       <mark
         key={`m${i}`}
-        className="rounded-sm bg-[#3eb5f9]/35 px-0.5 text-white shadow-[inset_0_0_0_1px_rgba(62,181,249,0.45)]"
+        className="rounded-sm bg-sky-brand/35 px-0.5 text-fg shadow-[inset_0_0_0_1px_rgba(62,181,249,0.45)]"
       >
         {text.slice(start, end)}
       </mark>,

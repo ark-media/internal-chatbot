@@ -59,9 +59,9 @@ export function ChatErrorBanner({
                 type="button"
                 onClick={onDismiss}
                 className={cn(
-                  'inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5',
-                  'px-2 py-1 text-[0.75rem] font-medium text-white/70',
-                  'transition hover:bg-white/10 hover:text-white',
+                  'inline-flex items-center gap-1 rounded-md border border-overlay/10 bg-overlay/5',
+                  'px-2 py-1 text-[0.75rem] font-medium text-fg/70',
+                  'transition hover:bg-overlay/10 hover:text-fg',
                 )}
               >
                 <X className="h-3 w-3" />

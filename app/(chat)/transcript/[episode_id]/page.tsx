@@ -101,24 +101,21 @@ export default async function TranscriptPage({ params, searchParams }: Props) {
 
       <main className="relative flex-1 overflow-y-auto">
         <div className="w-full px-5 py-10">
-          <header className="mb-8 border-b border-white/[0.06] pb-6">
+          <header className="mb-8 border-b border-overlay/[0.06] pb-6">
             <Link
               href="/"
-              className="mb-4 inline-flex items-center gap-1.5 text-[0.78rem] text-white/55 transition hover:text-white"
+              className="mb-4 inline-flex items-center gap-1.5 text-[0.78rem] text-fg/55 transition hover:text-fg"
             >
               <ArrowLeft className="h-3.5 w-3.5" />
               Back to chat
             </Link>
-            <div className="text-[0.7rem] uppercase tracking-[0.22em] text-white/45">
-              <span className="text-[#79cdfc]">{episode.show}</span>
+            <div className="text-[0.7rem] uppercase tracking-[0.22em] text-fg/45">
+              <span className="text-sky-brand-soft">{episode.show}</span>
               {headerDate ? (
-                <span className="text-white/35"> · {headerDate}</span>
+                <span className="text-fg/35"> · {headerDate}</span>
               ) : null}
             </div>
-            <h1
-              className="mt-2 text-2xl font-black tracking-tight text-white"
-              style={{ fontFamily: 'var(--font-display)' }}
-            >
+            <h1 className="mt-2 font-display text-2xl font-black tracking-tight text-fg">
               {episode.title}
             </h1>
             {episode.drive_url ? (
@@ -126,7 +123,7 @@ export default async function TranscriptPage({ params, searchParams }: Props) {
                 href={episode.drive_url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-white/[0.04] px-2.5 py-1 text-[0.72rem] text-white/60 transition hover:bg-white/[0.08] hover:text-white"
+                className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-overlay/[0.04] px-2.5 py-1 text-[0.72rem] text-fg/60 transition hover:bg-overlay/[0.08] hover:text-fg"
               >
                 Open in Drive
                 <ExternalLink className="h-3 w-3" />
@@ -142,7 +139,7 @@ export default async function TranscriptPage({ params, searchParams }: Props) {
               return (
                 <div key={t.turn_id}>
                   {showSection && t.section ? (
-                    <div className="mt-8 mb-3 text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-white/35">
+                    <div className="mt-8 mb-3 text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-fg/35">
                       {t.section}
                     </div>
                   ) : null}
@@ -158,21 +155,21 @@ export default async function TranscriptPage({ params, searchParams }: Props) {
                     }
                     className={cn(
                       'scroll-mt-24 rounded-lg px-4 py-3 transition-colors outline-none',
-                      'focus-visible:ring-2 focus-visible:ring-[#3eb5f9]/60',
+                      'focus-visible:ring-2 focus-visible:ring-sky-brand/60',
                       highlighted
-                        ? 'border-l-2 border-[#3eb5f9] bg-[#3eb5f9]/[0.10] shadow-[0_4px_24px_-12px_rgba(62,181,249,0.5)]'
+                        ? 'border-l-2 border-sky-brand bg-sky-brand/[0.10] shadow-[0_4px_24px_-12px_rgba(62,181,249,0.5)]'
                         : 'border-l-2 border-transparent',
                     )}
                   >
                     <div
                       className={cn(
                         'mb-1 text-[0.72rem] font-semibold uppercase tracking-[0.14em]',
-                        highlighted ? 'text-[#79cdfc]' : 'text-white/45',
+                        highlighted ? 'text-sky-brand-soft' : 'text-fg/45',
                       )}
                     >
                       {t.speaker}
                     </div>
-                    <div className="whitespace-pre-wrap text-[0.95rem] leading-[1.65] text-white/85">
+                    <div className="whitespace-pre-wrap text-[0.95rem] leading-[1.65] text-fg/85">
                       {highlighted
                         ? <HighlightedText text={t.text} quote={quote} />
                         : t.text}

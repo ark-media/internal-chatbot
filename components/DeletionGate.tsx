@@ -14,7 +14,7 @@ export function DeletionGate({ children }: { children: React.ReactNode }) {
 
   if (isDeleting) {
     return (
-      <div className="flex min-w-0 flex-1 items-center justify-center text-white/40">
+      <div className="flex min-w-0 flex-1 items-center justify-center text-fg/40">
         <Loader2 className="h-5 w-5 animate-spin" />
       </div>
     );

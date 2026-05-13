@@ -44,16 +44,16 @@ export function Citation({ kind, id, source, quote, onOpen, today }: Props) {
 
   const turnStyles = cn(
     'border-emerald-300/40 bg-emerald-400/[0.12] text-emerald-200',
-    'hover:border-emerald-300/70 hover:bg-emerald-400/25 hover:text-white',
+    'hover:border-emerald-300/70 hover:bg-emerald-400/25 hover:text-fg',
     'hover:shadow-[0_4px_14px_-4px_rgba(52,211,153,0.55)]',
     'focus-visible:ring-emerald-300/60',
   );
 
   const chunkStyles = cn(
-    'border-[#3eb5f9]/40 bg-[#3eb5f9]/[0.12] text-[#79cdfc]',
-    'hover:border-[#3eb5f9]/70 hover:bg-[#3eb5f9]/25 hover:text-white',
+    'border-sky-brand/40 bg-sky-brand/[0.12] text-sky-brand-soft',
+    'hover:border-sky-brand/70 hover:bg-sky-brand/25 hover:text-fg',
     'hover:shadow-[0_4px_14px_-4px_rgba(62,181,249,0.6)]',
-    'focus-visible:ring-[#3eb5f9]/60',
+    'focus-visible:ring-sky-brand/60',
   );
 
   return (

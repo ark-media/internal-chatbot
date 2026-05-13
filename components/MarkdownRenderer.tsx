@@ -19,12 +19,12 @@ const defaultComponents: Partial<Components> = {
   strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
   em: ({ children }) => <em className="italic">{children}</em>,
   blockquote: ({ children }) => (
-    <blockquote className="border-l-4 border-white/30 pl-4 my-3 italic text-white/80">{children}</blockquote>
+    <blockquote className="border-l-4 border-overlay/30 pl-4 my-3 italic text-fg/80">{children}</blockquote>
   ),
   ul: ({ children }) => <ul className="list-disc list-inside my-2 ml-2">{children}</ul>,
   ol: ({ children }) => <ol className="list-decimal list-inside my-2 ml-2">{children}</ol>,
   li: ({ children }) => <li className="my-1">{children}</li>,
-  hr: () => <hr className="my-4 border-white/20" />,
+  hr: () => <hr className="my-4 border-overlay/20" />,
   a: ({ href, children }) => (
     <a href={href} target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:text-cyan-300 underline">
       {children}
@@ -32,19 +32,19 @@ const defaultComponents: Partial<Components> = {
   ),
   table: ({ children }) => (
     <div className="my-4 overflow-x-auto">
-      <table className="w-full border-collapse border border-white/30">{children}</table>
+      <table className="w-full border-collapse border border-overlay/30">{children}</table>
     </div>
   ),
   thead: ({ children }) => (
-    <thead className="bg-white/10 border-b border-white/30">{children}</thead>
+    <thead className="bg-overlay/10 border-b border-overlay/30">{children}</thead>
   ),
   tbody: ({ children }) => <tbody>{children}</tbody>,
-  tr: ({ children }) => <tr className="border-b border-white/20 hover:bg-white/5">{children}</tr>,
+  tr: ({ children }) => <tr className="border-b border-overlay/20 hover:bg-overlay/5">{children}</tr>,
   th: ({ children }) => (
-    <th className="px-4 py-2 text-left font-semibold border-r border-white/20 last:border-r-0">{children}</th>
+    <th className="px-4 py-2 text-left font-semibold border-r border-overlay/20 last:border-r-0">{children}</th>
   ),
   td: ({ children }) => (
-    <td className="px-4 py-2 border-r border-white/20 last:border-r-0">{children}</td>
+    <td className="px-4 py-2 border-r border-overlay/20 last:border-r-0">{children}</td>
   ),
 };
 

@@ -25,6 +25,7 @@ import type { Components } from 'react-markdown';
 
 import { Header } from '@/components/Header';
 import { MarkdownRenderer } from '@/components/MarkdownRenderer';
+import { KindBadge } from '@/components/ui/KindBadge';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
 import { cn } from '@/lib/cn';
 import {
@@ -331,7 +332,7 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
     return (
       <div className="flex flex-1 flex-col">
         <Header variant="news" />
-        <main className="flex flex-1 items-center justify-center text-white/50">
+        <main className="flex flex-1 items-center justify-center text-fg/50">
           <Loader2 className="h-5 w-5 animate-spin" />
         </main>
       </div>
@@ -357,14 +358,14 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
       <main className="relative flex-1 overflow-y-auto">
         <div className="flex w-full flex-col gap-6 px-5 py-10">
           <div className="flex items-baseline justify-between">
-            <h1 className="text-2xl font-bold text-white" style={{ fontFamily: 'var(--font-display)' }}>
-              News Script <span className="text-[#3eb5f9]">Orchestrator</span>
+            <h1 className="font-display text-2xl font-bold text-fg">
+              News Script <span className="text-sky-brand">Orchestrator</span>
             </h1>
-            <div className="text-xs uppercase tracking-[0.22em] text-white/45">
+            <div className="text-xs uppercase tracking-[0.22em] text-fg/45">
               {stageLabel(run?.stage)}
             </div>
           </div>
-          <p className="text-sm text-white/60">
+          <p className="text-sm text-fg/60">
             Pulls today&rsquo;s top stories, lets you pick which to cover, then writes and edits the
             script for you. Or skip ahead — bring your own URLs or topics.
           </p>
@@ -514,7 +515,7 @@ function StartCard({
   })();
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
+    <div className="rounded-2xl border border-overlay/10 bg-overlay/[0.03] p-6">
       {previousError ? (
         <div className="mb-4 rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
           Last attempt didn&rsquo;t finish: {previousError}
@@ -522,7 +523,7 @@ function StartCard({
       ) : null}
 
       <div className="mb-4 flex items-center gap-3">
-        <label className="text-sm text-white/70" htmlFor="today">
+        <label className="text-sm text-fg/70" htmlFor="today">
           Recording date
         </label>
         <input
@@ -530,11 +531,11 @@ function StartCard({
           type="date"
           value={today}
           onChange={(e) => onTodayChange(e.target.value)}
-          className="rounded-md border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
+          className="rounded-md border border-overlay/15 ark-recessed px-2 py-1 text-sm text-fg"
         />
       </div>
 
-      <div className="mb-5 flex flex-wrap gap-1 rounded-lg border border-white/10 bg-black/30 p-1">
+      <div className="mb-5 flex flex-wrap gap-1 rounded-lg border border-overlay/10 ark-recessed p-1">
         {(
           [
             ['discover', 'Discover stories'],
@@ -548,8 +549,8 @@ function StartCard({
             className={cn(
               'flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition',
               mode === k
-                ? 'bg-[#3eb5f9]/20 text-[#79cdfc]'
-                : 'text-white/55 hover:bg-white/5 hover:text-white/85',
+                ? 'bg-sky-brand/20 text-sky-brand-soft'
+                : 'text-fg/55 hover:bg-overlay/5 hover:text-fg/85',
             )}
           >
             {label}
@@ -558,22 +559,22 @@ function StartCard({
       </div>
 
       {mode === 'discover' ? (
-        <p className="mb-4 text-sm text-white/55">
+        <p className="mb-4 text-sm text-fg/55">
           Pull today&rsquo;s top stories, group them into topics, and rate the sources.
         </p>
       ) : null}
 
       {mode === 'urls' ? (
         <div className="mb-4 flex flex-col gap-2">
-          <label className="text-sm text-white/70">Paste URLs (one per line)</label>
+          <label className="text-sm text-fg/70">Paste URLs (one per line)</label>
           <textarea
             value={urlsText}
             onChange={(e) => setUrlsText(e.target.value)}
             placeholder={'https://www.timesofisrael.com/...\nhttps://www.reuters.com/...'}
             rows={5}
-            className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 font-mono text-xs text-white placeholder:text-white/30"
+            className="w-full rounded-md border border-overlay/15 ark-recessed px-3 py-2 font-mono text-xs text-fg placeholder:text-fg/30"
           />
-          <p className="text-xs text-white/40">
+          <p className="text-xs text-fg/40">
             We&rsquo;ll extract each one and group + rate them like a normal run. URLs outside the
             freshness window get an &ldquo;older story&rdquo; flag, but stay in the pool.
           </p>
@@ -582,17 +583,17 @@ function StartCard({
 
       {mode === 'topics' ? (
         <div className="mb-4 flex flex-col gap-3">
-          <label className="text-sm text-white/70">Your topics (up to 4)</label>
+          <label className="text-sm text-fg/70">Your topics (up to 4)</label>
           {topics.map((t, i) => (
-            <div key={i} className="flex flex-col gap-1.5 rounded-md border border-white/10 bg-black/20 p-3">
+            <div key={i} className="flex flex-col gap-1.5 rounded-md border border-overlay/10 ark-recessed-soft p-3">
               <div className="flex items-center justify-between">
-                <span className="text-[0.7rem] uppercase tracking-wider text-white/45">
+                <span className="text-[0.7rem] uppercase tracking-wider text-fg/45">
                   Topic {i + 1}
                 </span>
                 {topics.length > 1 ? (
                   <button
                     onClick={() => setTopics((prev) => prev.filter((_, idx) => idx !== i))}
-                    className="text-xs text-white/40 hover:text-red-300"
+                    className="text-xs text-fg/40 hover:text-red-300"
                   >
                     Remove
                   </button>
@@ -606,7 +607,7 @@ function StartCard({
                   )
                 }
                 placeholder="Short topic name (e.g. Strait of Hormuz tensions)"
-                className="w-full rounded-md border border-white/15 bg-black/30 px-2 py-1 text-sm text-white placeholder:text-white/30"
+                className="w-full rounded-md border border-overlay/15 ark-recessed px-2 py-1 text-sm text-fg placeholder:text-fg/30"
               />
               <textarea
                 value={t.description}
@@ -617,24 +618,24 @@ function StartCard({
                 }
                 placeholder="1–2 sentence description of what this topic covers"
                 rows={2}
-                className="w-full rounded-md border border-white/15 bg-black/30 px-2 py-1 text-sm text-white placeholder:text-white/30"
+                className="w-full rounded-md border border-overlay/15 ark-recessed px-2 py-1 text-sm text-fg placeholder:text-fg/30"
               />
             </div>
           ))}
           {topics.length < 4 ? (
             <button
               onClick={() => setTopics((prev) => [...prev, { topic: '', description: '' }])}
-              className="inline-flex items-center gap-1.5 self-start rounded-md border border-white/15 px-2 py-1 text-xs text-white/60 hover:bg-white/5 hover:text-white"
+              className="inline-flex items-center gap-1.5 self-start rounded-md border border-overlay/15 px-2 py-1 text-xs text-fg/60 hover:bg-overlay/5 hover:text-fg"
             >
               <Plus className="h-3 w-3" /> Add topic
             </button>
           ) : null}
-          <label className="mt-1 flex items-center gap-2 text-xs text-white/55">
+          <label className="mt-1 flex items-center gap-2 text-xs text-fg/55">
             <input
               type="checkbox"
               checked={autoGather}
               onChange={(e) => setAutoGather(e.target.checked)}
-              className="rounded border-white/20 bg-black/30"
+              className="rounded border-overlay/20 ark-recessed"
             />
             Auto-gather sources for each topic now (uncheck if you&rsquo;ll attach URLs yourself).
           </label>
@@ -645,7 +646,7 @@ function StartCard({
         onClick={submit}
         disabled={busy || !canSubmit}
         className={cn(
-          'inline-flex items-center gap-2 rounded-lg bg-[#3eb5f9] px-4 py-2.5 text-sm font-semibold text-[#070b22]',
+          'inline-flex items-center gap-2 rounded-lg bg-sky-brand px-4 py-2.5 text-sm font-semibold text-ink-950',
           'transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50',
         )}
       >
@@ -666,12 +667,12 @@ function StartCard({
 
 function ProgressCard({ label, detail }: { label: string; detail: string }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
-      <div className="flex items-center gap-3 text-white">
-        <Loader2 className="h-5 w-5 animate-spin text-[#3eb5f9]" />
+    <div className="rounded-2xl border border-overlay/10 bg-overlay/[0.03] p-6">
+      <div className="flex items-center gap-3 text-fg">
+        <Loader2 className="h-5 w-5 animate-spin text-sky-brand" />
         <span className="font-medium">{label}</span>
       </div>
-      <p className="mt-2 text-sm text-white/50">{detail}</p>
+      <p className="mt-2 text-sm text-fg/50">{detail}</p>
     </div>
   );
 }
@@ -732,14 +733,14 @@ function CheckpointView({
       ) : null}
 
       {distill.rationale ? (
-        <div className="rounded-lg border border-white/10 bg-white/[0.02] px-4 py-3 text-sm text-white/70">
-          <span className="font-semibold text-white">Why these topics: </span>
+        <div className="rounded-lg border border-overlay/10 bg-overlay/[0.02] px-4 py-3 text-sm text-fg/70">
+          <span className="font-semibold text-fg">Why these topics: </span>
           {distill.rationale}
         </div>
       ) : null}
 
       {distill.topics.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-white/15 bg-white/[0.01] p-6 text-center text-sm text-white/55">
+        <div className="rounded-2xl border border-dashed border-overlay/15 bg-overlay/[0.01] p-6 text-center text-sm text-fg/55">
           No topics yet. Add one below to get started.
         </div>
       ) : null}
@@ -770,18 +771,18 @@ function CheckpointView({
       ) : (
         <button
           onClick={() => setShowAdd(true)}
-          className="inline-flex items-center justify-center gap-2 rounded-2xl border border-dashed border-white/15 bg-white/[0.01] p-4 text-sm text-white/55 transition hover:border-white/30 hover:text-white"
+          className="inline-flex items-center justify-center gap-2 rounded-2xl border border-dashed border-overlay/15 bg-overlay/[0.01] p-4 text-sm text-fg/55 transition hover:border-overlay/30 hover:text-fg"
         >
           <Plus className="h-4 w-4" /> Add a topic
         </button>
       )}
 
-      <div className="sticky bottom-0 -mx-6 mt-2 border-t border-white/10 bg-[#0b153c]/90 px-6 py-4 backdrop-blur">
+      <div className="sticky bottom-0 -mx-6 mt-2 border-t border-overlay/10 bg-canvas/90 px-6 py-4 backdrop-blur">
         <button
           onClick={onGenerate}
           disabled={busy !== null || approvedCount === 0}
           className={cn(
-            'w-full rounded-lg bg-[#3eb5f9] px-4 py-3 text-sm font-semibold text-[#070b22]',
+            'w-full rounded-lg bg-sky-brand px-4 py-3 text-sm font-semibold text-ink-950',
             'transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50',
           )}
         >
@@ -814,27 +815,27 @@ function AddTopicCard({
   const [autoGather, setAutoGather] = useState(true);
   const canSubmit = topic.trim().length > 0 && description.trim().length > 0;
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
-      <div className="mb-3 text-sm font-semibold text-white">New topic</div>
+    <div className="rounded-2xl border border-overlay/10 bg-overlay/[0.03] p-5">
+      <div className="mb-3 text-sm font-semibold text-fg">New topic</div>
       <input
         value={topic}
         onChange={(e) => setTopic(e.target.value)}
         placeholder="Short topic name"
-        className="mb-2 w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-white placeholder:text-white/30"
+        className="mb-2 w-full rounded-md border border-overlay/15 ark-recessed px-3 py-2 text-sm text-fg placeholder:text-fg/30"
       />
       <textarea
         value={description}
         onChange={(e) => setDescription(e.target.value)}
         placeholder="1–2 sentence description"
         rows={2}
-        className="mb-3 w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-white placeholder:text-white/30"
+        className="mb-3 w-full rounded-md border border-overlay/15 ark-recessed px-3 py-2 text-sm text-fg placeholder:text-fg/30"
       />
-      <label className="mb-3 flex items-center gap-2 text-xs text-white/55">
+      <label className="mb-3 flex items-center gap-2 text-xs text-fg/55">
         <input
           type="checkbox"
           checked={autoGather}
           onChange={(e) => setAutoGather(e.target.checked)}
-          className="rounded border-white/20 bg-black/30"
+          className="rounded border-overlay/20 ark-recessed"
         />
         Find sources for this topic now
       </label>
@@ -842,14 +843,14 @@ function AddTopicCard({
         <button
           onClick={() => onSubmit({ topic: topic.trim(), description: description.trim(), autoGather })}
           disabled={!canSubmit || busy}
-          className="inline-flex items-center gap-1.5 rounded-md bg-[#3eb5f9]/20 px-3 py-1.5 text-xs text-[#3eb5f9] transition hover:bg-[#3eb5f9]/30 disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-md bg-sky-brand/20 px-3 py-1.5 text-xs text-sky-brand transition hover:bg-sky-brand/30 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
           Add topic
         </button>
         <button
           onClick={onCancel}
-          className="rounded-md px-3 py-1.5 text-xs text-white/60 hover:bg-white/5 hover:text-white"
+          className="rounded-md px-3 py-1.5 text-xs text-fg/60 hover:bg-overlay/5 hover:text-fg"
         >
           Cancel
         </button>
@@ -911,25 +912,23 @@ function TopicCard({
       className={cn(
         'rounded-2xl border p-5 transition',
         rejected
-          ? 'border-white/5 bg-white/[0.01] opacity-50'
-          : 'border-white/10 bg-white/[0.03]',
+          ? 'border-overlay/5 bg-overlay/[0.01] opacity-50'
+          : 'border-overlay/10 bg-overlay/[0.03]',
       )}
     >
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="inline-flex items-center rounded-md border border-[#3eb5f9]/30 bg-[#3eb5f9]/10 px-1.5 py-0.5 font-mono text-[0.65rem] font-semibold uppercase tracking-wider text-[#79cdfc]">
-              Topic {index + 1}
-            </span>
+            <KindBadge tone="sky">Topic {index + 1}</KindBadge>
             {editingTitle ? (
               <input
                 value={titleDraft}
                 onChange={(e) => setTitleDraft(e.target.value)}
-                className="flex-1 rounded-md border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
+                className="flex-1 rounded-md border border-overlay/15 ark-recessed px-2 py-1 text-sm text-fg"
                 autoFocus
               />
             ) : (
-              <h3 className="text-base font-bold text-white">{topic.topic}</h3>
+              <h3 className="text-base font-bold text-fg">{topic.topic}</h3>
             )}
           </div>
           {editingTitle ? (
@@ -937,10 +936,10 @@ function TopicCard({
               value={descDraft}
               onChange={(e) => setDescDraft(e.target.value)}
               rows={2}
-              className="mt-2 w-full rounded-md border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
+              className="mt-2 w-full rounded-md border border-overlay/15 ark-recessed px-2 py-1 text-sm text-fg"
             />
           ) : (
-            <p className="mt-1 text-sm text-white/60">{topic.description}</p>
+            <p className="mt-1 text-sm text-fg/60">{topic.description}</p>
           )}
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1.5">
@@ -959,7 +958,7 @@ function TopicCard({
                   setTitleDraft(topic.topic);
                   setDescDraft(topic.description);
                 }}
-                className="text-xs text-white/45 hover:text-white"
+                className="text-xs text-fg/45 hover:text-fg"
               >
                 Cancel
               </button>
@@ -989,7 +988,7 @@ function TopicCard({
               <div className="flex gap-1">
                 <button
                   onClick={() => setEditingTitle(true)}
-                  className="rounded-md p-1 text-white/45 hover:bg-white/5 hover:text-white"
+                  className="rounded-md p-1 text-fg/45 hover:bg-overlay/5 hover:text-fg"
                   title="Edit title and description"
                 >
                   <Pencil className="h-3.5 w-3.5" />
@@ -1004,7 +1003,7 @@ function TopicCard({
                       onTopicAction({ action: 'delete', topicIndex: index });
                     }
                   }}
-                  className="rounded-md p-1 text-white/45 hover:bg-red-500/20 hover:text-red-300"
+                  className="rounded-md p-1 text-fg/45 hover:bg-red-500/20 hover:text-red-300"
                   title="Delete this topic"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
@@ -1016,7 +1015,7 @@ function TopicCard({
       </div>
 
       {noSources ? (
-        <div className="mt-4 rounded-md border border-dashed border-white/10 bg-white/[0.01] px-3 py-3 text-center text-xs text-white/45">
+        <div className="mt-4 rounded-md border border-dashed border-overlay/10 bg-overlay/[0.01] px-3 py-3 text-center text-xs text-fg/45">
           No sources yet. Use the actions below to gather or attach.
         </div>
       ) : (
@@ -1028,30 +1027,30 @@ function TopicCard({
       )}
 
       {!rejected ? (
-        <div className="mt-4 flex flex-col gap-2 border-t border-white/10 pt-3">
+        <div className="mt-4 flex flex-col gap-2 border-t border-overlay/10 pt-3">
           <div className="flex flex-wrap gap-2">
             {!showRefetch && !showAttach ? (
               <>
                 <button
                   onClick={() => setShowRefetch(true)}
-                  className="inline-flex items-center gap-1.5 text-xs text-white/55 transition hover:text-white"
+                  className="inline-flex items-center gap-1.5 text-xs text-fg/55 transition hover:text-fg"
                 >
                   <Plus className="h-3 w-3" /> Find more sources
                 </button>
-                <span className="text-xs text-white/20">·</span>
+                <span className="text-xs text-fg/20">·</span>
                 <button
                   onClick={() => setShowAttach(true)}
-                  className="inline-flex items-center gap-1.5 text-xs text-white/55 transition hover:text-white"
+                  className="inline-flex items-center gap-1.5 text-xs text-fg/55 transition hover:text-fg"
                 >
                   <LinkIcon className="h-3 w-3" /> Attach URL
                 </button>
                 {noSources ? (
                   <>
-                    <span className="text-xs text-white/20">·</span>
+                    <span className="text-xs text-fg/20">·</span>
                     <button
                       onClick={() => onTopicAction({ action: 'gather', topicIndex: index })}
                       disabled={busy !== null}
-                      className="inline-flex items-center gap-1.5 text-xs text-[#79cdfc] transition hover:text-white disabled:opacity-50"
+                      className="inline-flex items-center gap-1.5 text-xs text-sky-brand-soft transition hover:text-fg disabled:opacity-50"
                     >
                       <RefreshCw className="h-3 w-3" /> Auto-gather for this topic
                     </button>
@@ -1068,7 +1067,7 @@ function TopicCard({
                 onChange={(e) => setGuidance(e.target.value)}
                 placeholder="What angle should I look for?"
                 rows={2}
-                className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-white placeholder:text-white/30"
+                className="w-full rounded-md border border-overlay/15 ark-recessed px-3 py-2 text-sm text-fg placeholder:text-fg/30"
               />
               <div className="flex gap-2">
                 <button
@@ -1079,7 +1078,7 @@ function TopicCard({
                     setGuidance('');
                   }}
                   disabled={busy !== null || !guidance.trim()}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-[#3eb5f9]/20 px-3 py-1.5 text-xs text-[#3eb5f9] transition hover:bg-[#3eb5f9]/30 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 rounded-md bg-sky-brand/20 px-3 py-1.5 text-xs text-sky-brand transition hover:bg-sky-brand/30 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {busy === 'refetch' ? (
                     <Loader2 className="h-3 w-3 animate-spin" />
@@ -1093,7 +1092,7 @@ function TopicCard({
                     setShowRefetch(false);
                     setGuidance('');
                   }}
-                  className="rounded-md px-3 py-1.5 text-xs text-white/60 hover:bg-white/5 hover:text-white"
+                  className="rounded-md px-3 py-1.5 text-xs text-fg/60 hover:bg-overlay/5 hover:text-fg"
                 >
                   Cancel
                 </button>
@@ -1108,13 +1107,13 @@ function TopicCard({
                 onChange={(e) => setUrlsText(e.target.value)}
                 placeholder={'https://...'}
                 rows={3}
-                className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 font-mono text-xs text-white placeholder:text-white/30"
+                className="w-full rounded-md border border-overlay/15 ark-recessed px-3 py-2 font-mono text-xs text-fg placeholder:text-fg/30"
               />
               <div className="flex gap-2">
                 <button
                   onClick={submitAttach}
                   disabled={busy !== null || !urlsText.trim()}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-[#3eb5f9]/20 px-3 py-1.5 text-xs text-[#3eb5f9] transition hover:bg-[#3eb5f9]/30 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 rounded-md bg-sky-brand/20 px-3 py-1.5 text-xs text-sky-brand transition hover:bg-sky-brand/30 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {busy === 'attach' ? (
                     <Loader2 className="h-3 w-3 animate-spin" />
@@ -1128,7 +1127,7 @@ function TopicCard({
                     setShowAttach(false);
                     setUrlsText('');
                   }}
-                  className="rounded-md px-3 py-1.5 text-xs text-white/60 hover:bg-white/5 hover:text-white"
+                  className="rounded-md px-3 py-1.5 text-xs text-fg/60 hover:bg-overlay/5 hover:text-fg"
                 >
                   Cancel
                 </button>
@@ -1150,18 +1149,18 @@ function SourceRow({ rated }: { rated: RatedArticle }) {
       target="_blank"
       rel="noopener noreferrer"
       className={cn(
-        'group flex items-start gap-3 rounded-md border border-white/[0.06] bg-white/[0.02] px-3 py-2 transition',
-        'hover:border-white/15 hover:bg-white/[0.04]',
+        'group flex items-start gap-3 rounded-md border border-overlay/[0.06] bg-overlay/[0.02] px-3 py-2 transition',
+        'hover:border-overlay/15 hover:bg-overlay/[0.04]',
       )}
     >
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="text-[0.7rem] uppercase tracking-wider text-white/45">{a.source}</span>
+          <span className="text-[0.7rem] uppercase tracking-wider text-fg/45">{a.source}</span>
           {a.publicationDate ? (
-            <span className="text-[0.7rem] text-white/35">{a.publicationDate.slice(0, 10)}</span>
+            <span className="text-[0.7rem] text-fg/35">{a.publicationDate.slice(0, 10)}</span>
           ) : null}
           {rated.provenance === 'manual' ? (
-            <span className="rounded bg-[#3eb5f9]/15 px-1.5 py-0.5 text-[0.65rem] uppercase tracking-wider text-[#79cdfc]">
+            <span className="rounded bg-sky-brand/15 px-1.5 py-0.5 text-[0.65rem] uppercase tracking-wider text-sky-brand-soft">
               attached
             </span>
           ) : null}
@@ -1171,16 +1170,16 @@ function SourceRow({ rated }: { rated: RatedArticle }) {
             </span>
           ) : null}
         </div>
-        <div className="truncate text-sm text-white/85">{a.title}</div>
+        <div className="truncate text-sm text-fg/85">{a.title}</div>
       </div>
       <div
         className="shrink-0 text-right"
         title={`Relevance ${rated.relevance} · Credibility ${rated.credibility} · Completeness ${rated.completeness}`}
       >
-        <div className="text-[0.7rem] text-white/55">Score</div>
-        <div className="font-mono text-sm text-white/80">{rated.avgScore}</div>
+        <div className="text-[0.7rem] text-fg/55">Score</div>
+        <div className="font-mono text-sm text-fg/80">{rated.avgScore}</div>
       </div>
-      <ExternalLink className="mt-1 h-3.5 w-3.5 shrink-0 text-white/30 transition group-hover:text-white/60" />
+      <ExternalLink className="mt-1 h-3.5 w-3.5 shrink-0 text-fg/30 transition group-hover:text-fg/60" />
     </a>
   );
 }
@@ -1418,7 +1417,7 @@ function ScriptView({
         ) : null}
       </div>
 
-      <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+      <div className="rounded-2xl border border-overlay/10 bg-overlay/[0.02] p-6">
         {editMode ? (
           <div className="flex flex-col gap-4">
             <textarea
@@ -1426,18 +1425,18 @@ function ScriptView({
               onChange={(e) => setDraft(e.target.value)}
               disabled={editBusy}
               spellCheck
-              className="w-full min-h-[60vh] rounded-md border border-white/15 bg-black/30 px-3 py-2 font-mono text-sm leading-6 text-white/90 placeholder:text-white/30 focus:border-white/30 focus:outline-none disabled:opacity-60"
+              className="w-full min-h-[60vh] rounded-md border border-overlay/15 ark-recessed px-3 py-2 font-mono text-sm leading-6 text-fg/90 placeholder:text-fg/30 focus:border-overlay/30 focus:outline-none disabled:opacity-60"
             />
             {sourcesTail ? (
-              <div className="rounded-md border border-white/[0.06] bg-black/20 p-4">
-                <div className="prose prose-invert max-w-none text-sm text-white/60">
+              <div className="rounded-md border border-overlay/[0.06] ark-recessed-soft p-4">
+                <div className="prose prose-invert max-w-none text-sm text-fg/60">
                   <MarkdownRenderer text={sourcesTail.trimStart()} components={scriptMarkdownComponents} />
                 </div>
               </div>
             ) : null}
           </div>
         ) : (
-          <div className="prose prose-invert max-w-none text-white/90">
+          <div className="prose prose-invert max-w-none text-fg/90">
             <MarkdownRenderer text={script.fullText} components={scriptMarkdownComponents} />
           </div>
         )}
@@ -1456,7 +1455,7 @@ function ScriptView({
           <button
             onClick={cancelEdit}
             disabled={editBusy}
-            className="inline-flex items-center gap-2 rounded-lg border border-white/15 px-4 py-2 text-sm text-white/70 transition hover:border-white/30 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-lg border border-overlay/15 px-4 py-2 text-sm text-fg/70 transition hover:border-overlay/30 hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
           >
             <XCircle className="h-4 w-4" /> Cancel
           </button>
@@ -1494,7 +1493,7 @@ function ScriptView({
             href={driveLink}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 rounded-lg border border-white/15 px-4 py-2 text-sm text-white/70 transition hover:border-white/30 hover:text-white"
+            className="inline-flex items-center gap-1 rounded-lg border border-overlay/15 px-4 py-2 text-sm text-fg/70 transition hover:border-overlay/30 hover:text-fg"
           >
             Open in Drive <ExternalLink className="h-3.5 w-3.5" />
           </a>
@@ -1540,13 +1539,13 @@ function ScriptView({
           }}
           disabled={refineBusy || undoBusy || learnBusy}
           title="Hand-edit the script text directly."
-          className="inline-flex items-center gap-2 rounded-lg border border-white/15 px-4 py-2 text-sm text-white/70 transition hover:border-white/30 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-lg border border-overlay/15 px-4 py-2 text-sm text-fg/70 transition hover:border-overlay/30 hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Pencil className="h-4 w-4" /> Edit text
         </button>
         <button
           onClick={onEdit}
-          className="inline-flex items-center gap-2 rounded-lg border border-white/15 px-4 py-2 text-sm text-white/70 transition hover:border-white/30 hover:text-white"
+          className="inline-flex items-center gap-2 rounded-lg border border-overlay/15 px-4 py-2 text-sm text-fg/70 transition hover:border-overlay/30 hover:text-fg"
         >
           <ArrowLeft className="h-4 w-4" /> Edit topics & regenerate
         </button>
@@ -1566,14 +1565,14 @@ function ScriptView({
       ) : null}
 
       {editMode ? null : (
-      <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5">
+      <div className="rounded-2xl border border-overlay/10 bg-overlay/[0.02] p-5">
         <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-white">Refine the script</h3>
+          <h3 className="text-sm font-semibold text-fg">Refine the script</h3>
           {canUndo ? (
             <button
               onClick={undo}
               disabled={undoBusy || refineBusy || learnBusy}
-              className="inline-flex items-center gap-1.5 rounded-md border border-white/15 px-2.5 py-1 text-xs text-white/70 transition hover:border-white/30 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-md border border-overlay/15 px-2.5 py-1 text-xs text-fg/70 transition hover:border-overlay/30 hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
               title="Revert to the previous version"
             >
               {undoBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Undo2 className="h-3 w-3" />}
@@ -1587,9 +1586,9 @@ function ScriptView({
             {refineHistory.map((entry) => (
               <li
                 key={`${entry.version}-${entry.at}`}
-                className="flex items-start gap-2 rounded-md border border-white/[0.06] bg-white/[0.02] px-3 py-1.5 text-xs text-white/70"
+                className="flex items-start gap-2 rounded-md border border-overlay/[0.06] bg-overlay/[0.02] px-3 py-1.5 text-xs text-fg/70"
               >
-                <span className="mt-0.5 shrink-0 rounded bg-[#3eb5f9]/15 px-1.5 py-0.5 font-mono text-[0.6rem] uppercase tracking-wider text-[#79cdfc]">
+                <span className="mt-0.5 shrink-0 rounded bg-sky-brand/15 px-1.5 py-0.5 font-mono text-[0.6rem] uppercase tracking-wider text-sky-brand-soft">
                   v{entry.version - 1} → v{entry.version}
                 </span>
                 <span className="min-w-0">{entry.instruction}</span>
@@ -1611,16 +1610,16 @@ function ScriptView({
             placeholder="What should change? (e.g., 'Tighten the B block' or 'Drop the cricket reference')"
             rows={2}
             disabled={refineBusy || learnBusy || undoBusy}
-            className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-white placeholder:text-white/30 disabled:opacity-60"
+            className="w-full rounded-md border border-overlay/15 ark-recessed px-3 py-2 text-sm text-fg placeholder:text-fg/30 disabled:opacity-60"
           />
           <div className="flex items-center justify-between">
-            <span className="text-[0.7rem] text-white/40">
+            <span className="text-[0.7rem] text-fg/40">
               {refineBusy ? 'Revising — usually 30–60 seconds…' : 'Cmd/Ctrl+Enter to send'}
             </span>
             <button
               onClick={refine}
               disabled={refineBusy || learnBusy || undoBusy || !instruction.trim()}
-              className="inline-flex items-center gap-1.5 rounded-md bg-[#3eb5f9] px-3 py-1.5 text-xs font-semibold text-[#070b22] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-md bg-sky-brand px-3 py-1.5 text-xs font-semibold text-ink-950 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {refineBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
               Apply edit

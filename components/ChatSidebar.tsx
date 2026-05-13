@@ -102,17 +102,14 @@ export function ChatSidebar() {
   return (
     <aside
       className={cn(
-        'flex h-screen w-[260px] shrink-0 flex-col border-r border-white/[0.06]',
-        'bg-white/[0.02] backdrop-blur-md',
+        'ark-surface-faint flex h-screen w-[260px] shrink-0 flex-col border-r border-overlay/[0.06]',
+        'backdrop-blur-md',
       )}
       style={{ fontFamily: 'var(--font-sans)' }}
     >
       <div className="flex items-center gap-2 px-4 pt-5 pb-3">
-        <ArkLogo className="h-7 text-white" bg="#3eb5f9" fg="#0b153c" markOnly />
-        <span
-          className="text-[0.85rem] font-black tracking-tight text-white"
-          style={{ fontFamily: 'var(--font-display)' }}
-        >
+        <ArkLogo className="h-7 text-fg" bg="#3eb5f9" fg="#0b153c" markOnly />
+        <span className="font-display text-[0.85rem] font-black tracking-tight text-fg">
           Ark Media
         </span>
       </div>
@@ -121,11 +118,11 @@ export function ChatSidebar() {
         <Link
           href={newChatHref}
           className={cn(
-            'flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2',
-            'text-[0.82rem] text-white/85 transition hover:bg-white/[0.08]',
+            'ark-surface-raised flex items-center gap-2 rounded-lg border border-overlay/10 px-3 py-2',
+            'text-[0.82rem] text-fg/85 transition hover:bg-overlay/[0.08]',
           )}
         >
-          <Plus className="h-3.5 w-3.5 text-[#3eb5f9]" />
+          <Plus className="h-3.5 w-3.5 text-sky-brand" />
           New chat
         </Link>
       </div>
@@ -139,8 +136,8 @@ export function ChatSidebar() {
             className={cn(
               'rounded-md px-2 py-1 transition',
               viewSurface === s.key
-                ? 'bg-[#3eb5f9]/[0.14] text-[#79cdfc]'
-                : 'text-white/55 hover:bg-white/[0.05] hover:text-white',
+                ? 'bg-sky-brand/[0.14] text-sky-brand-soft'
+                : 'text-fg/55 hover:bg-overlay/[0.05] hover:text-fg',
             )}
           >
             {s.label}
@@ -150,9 +147,9 @@ export function ChatSidebar() {
 
       <div className="flex-1 overflow-y-auto px-2 pb-4">
         {loading && chats.length === 0 ? (
-          <div className="px-2 py-4 text-[0.72rem] text-white/30">Loading…</div>
+          <div className="px-2 py-4 text-[0.72rem] text-fg/30">Loading…</div>
         ) : chats.length === 0 ? (
-          <div className="px-2 py-4 text-[0.72rem] text-white/30">
+          <div className="px-2 py-4 text-[0.72rem] text-fg/30">
             No saved chats. Send a message to start.
           </div>
         ) : (
@@ -168,14 +165,14 @@ export function ChatSidebar() {
                     className={cn(
                       'flex items-start gap-2 rounded-md px-2 py-2 pr-8 text-[0.8rem] leading-snug transition',
                       isActive
-                        ? 'bg-white/[0.06] text-white'
-                        : 'text-white/70 hover:bg-white/[0.04] hover:text-white',
+                        ? 'bg-overlay/[0.06] text-fg'
+                        : 'text-fg/70 hover:bg-overlay/[0.04] hover:text-fg',
                     )}
                   >
-                    <MessageSquare className="mt-0.5 h-3.5 w-3.5 shrink-0 text-white/35" />
+                    <MessageSquare className="mt-0.5 h-3.5 w-3.5 shrink-0 text-fg/35" />
                     <div className="min-w-0 flex-1">
                       <div className="truncate">{c.title?.trim() || 'Untitled chat'}</div>
-                      <div className="mt-0.5 text-[0.66rem] text-white/35">
+                      <div className="mt-0.5 text-[0.66rem] text-fg/35">
                         {formatRelative(c.updated_at)}
                       </div>
                     </div>
@@ -185,7 +182,7 @@ export function ChatSidebar() {
                     aria-label={`Delete chat ${c.title ?? c.id}`}
                     title="Delete"
                     onClick={(e) => handleDeleteClick(e, c.id)}
-                    className="absolute right-1.5 top-1.5 rounded p-1 text-white/40 opacity-0 transition group-hover:opacity-100 hover:bg-red-500/15 hover:text-red-300"
+                    className="absolute right-1.5 top-1.5 rounded p-1 text-fg/40 opacity-0 transition group-hover:opacity-100 hover:bg-red-500/15 hover:text-red-300"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
@@ -196,7 +193,7 @@ export function ChatSidebar() {
         )}
       </div>
 
-      <div className="border-t border-white/[0.06] px-4 py-3 text-[0.65rem] uppercase tracking-[0.18em] text-white/30">
+      <div className="border-t border-overlay/[0.06] px-4 py-3 text-[0.65rem] uppercase tracking-[0.18em] text-fg/30">
         Chats expire after 7 days
       </div>
     </aside>

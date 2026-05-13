@@ -3,6 +3,7 @@
 import { ChangeEvent, FormEvent, ReactNode, useEffect, useRef } from 'react';
 import { ArrowUp, Loader2, Paperclip } from 'lucide-react';
 import { ModelSelector } from '@/components/ModelSelector';
+import { IconButton } from '@/components/ui/IconButton';
 import { cn } from '@/lib/cn';
 
 type FileAttachConfig = {
@@ -85,7 +86,7 @@ export function ChatComposer({
   return (
     <form
       onSubmit={handleFormSubmit}
-      className="relative z-10 border-t border-white/[0.06] bg-gradient-to-b from-transparent to-[#070b22]/60 px-5 py-4 backdrop-blur-md"
+      className="relative z-10 border-t border-overlay/[0.06] bg-gradient-to-b from-transparent to-canvas-deep/60 px-5 py-4 backdrop-blur-md"
     >
       <div className="mx-auto max-w-7xl">
         {attachments}
@@ -93,9 +94,9 @@ export function ChatComposer({
             textarea baseline as it auto-grows, instead of drifting upward. */}
         <div
           className={cn(
-            'group flex items-end gap-2 rounded-2xl border bg-white/[0.04] px-3 py-2.5 backdrop-blur',
-            'border-white/10 shadow-[0_12px_40px_-16px_rgba(3,62,200,0.45)]',
-            'transition focus-within:border-[#3eb5f9]/60',
+            'ark-surface-raised group flex items-end gap-2 rounded-2xl border px-3 py-2.5 backdrop-blur',
+            'border-overlay/10 shadow-[0_12px_40px_-16px_rgba(3,62,200,0.45)]',
+            'transition focus-within:border-sky-brand/60',
             'focus-within:shadow-[0_12px_40px_-14px_rgba(62,181,249,0.55)]',
           )}
         >
@@ -130,27 +131,22 @@ export function ChatComposer({
               disabled={busy}
               className={cn(
                 'min-h-[40px] max-h-[200px] w-full resize-none bg-transparent px-3 py-1.5',
-                'text-[0.95rem] leading-relaxed text-white placeholder:text-white/35',
+                'text-[0.95rem] leading-relaxed text-fg placeholder:text-fg/35',
                 'outline-none disabled:opacity-60 overflow-y-auto',
               )}
             />
           </div>
 
           {fileAttach && (
-            <button
-              type="button"
+            <IconButton
+              size="md"
               onClick={() => fileInputRef.current?.click()}
               disabled={busy}
-              className={cn(
-                'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl',
-                'text-white/60 transition hover:bg-white/[0.06] hover:text-white',
-                'disabled:cursor-not-allowed disabled:opacity-40',
-              )}
               aria-label={fileAttach.ariaLabel}
               title={fileAttach.tooltip}
             >
               <Paperclip className="h-4 w-4" />
-            </button>
+            </IconButton>
           )}
 
           <button
@@ -159,10 +155,10 @@ export function ChatComposer({
             disabled={busy || !canSubmit}
             className={cn(
               'group/btn relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl',
-              'text-[#070b22] transition',
-              'bg-[#3eb5f9] hover:bg-[#79cdfc]',
+              'text-ink-950 transition',
+              'bg-sky-brand hover:bg-sky-brand-soft',
               'shadow-[0_6px_20px_-6px_rgba(62,181,249,0.7)]',
-              'disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-white/30 disabled:shadow-none',
+              'disabled:cursor-not-allowed disabled:bg-overlay/10 disabled:text-fg/30 disabled:shadow-none',
             )}
           >
             {busy ? (
@@ -172,7 +168,7 @@ export function ChatComposer({
             )}
           </button>
         </div>
-        <div className="mt-2 px-1 text-[0.68rem] uppercase tracking-[0.2em] text-white/30">
+        <div className="mt-2 px-1 text-[0.68rem] uppercase tracking-[0.2em] text-fg/30">
           {footerHint}
         </div>
       </div>

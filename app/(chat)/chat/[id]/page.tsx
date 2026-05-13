@@ -448,7 +448,7 @@ function ChatBody({
             ) : null}
 
             {busy ? (
-              <div className="flex items-center gap-3 pl-12 text-xs text-white/50">
+              <div className="flex items-center gap-3 pl-12 text-xs text-fg/50">
                 <TypingDots />
                 <span className="tracking-wide">
                   {status === 'submitted' ? 'Summoning context…' : 'Writing…'}
@@ -456,7 +456,7 @@ function ChatBody({
                 <button
                   type="button"
                   onClick={() => stop()}
-                  className="ml-2 inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-[0.7rem] text-white/70 transition hover:bg-white/10 hover:text-white"
+                  className="ml-2 inline-flex items-center gap-1 rounded-md border border-overlay/10 bg-overlay/5 px-2 py-0.5 text-[0.7rem] text-fg/70 transition hover:bg-overlay/10 hover:text-fg"
                 >
                   <Square className="h-2.5 w-2.5 fill-current" />
                   Stop
@@ -570,7 +570,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
         <div
           className={cn(
             'max-w-[82%] rounded-2xl rounded-br-md px-4 py-2.5',
-            'bg-gradient-to-br from-[#3eb5f9] to-[#2a8fd6] text-[#070b22]',
+            'bg-gradient-to-br from-sky-brand to-sky-brand-deep text-ink-950',
             'shadow-[0_8px_22px_-10px_rgba(62,181,249,0.6)]',
             'text-[0.95rem] font-medium leading-relaxed',
             'transition-all duration-200',
@@ -592,7 +592,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
               'mt-1 p-1.5 rounded-lg transition-all opacity-0 group-hover:opacity-100 duration-200',
               isEditing
                 ? 'bg-blue-400/20 text-blue-300 hover:bg-blue-400/30'
-                : 'hover:bg-white/10 text-white/50 hover:text-white/70',
+                : 'hover:bg-overlay/10 text-fg/50 hover:text-fg/70',
             )}
             title="Edit message (or click to edit)"
           >
@@ -607,7 +607,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
     <div className="ark-fade-up flex gap-4">
       <div
         aria-hidden
-        className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-gradient-to-br from-[#101736] to-[#070b22]"
+        className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-overlay/10 bg-gradient-to-br from-ink-800 to-ink-950"
       >
         <ArkLogo className="h-7" bg="transparent" fg="#3eb5f9" markOnly />
       </div>
@@ -772,7 +772,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
               ? 'bg-emerald-400/20 text-emerald-300'
               : copyState === 'error'
                 ? 'bg-red-400/20 text-red-300'
-                : 'bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/70',
+                : 'bg-overlay/5 text-fg/50 hover:bg-overlay/10 hover:text-fg/70',
           )}
         >
           {copyState === 'success' ? (
@@ -835,10 +835,10 @@ function EpisodeList({
             >
               <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-200/80 transition group-hover:text-amber-100" />
               <div className="min-w-0 flex-1">
-                <div className="truncate text-[0.85rem] font-medium text-white/90">
+                <div className="truncate text-[0.85rem] font-medium text-fg/90">
                   {ep.title}
                 </div>
-                <div className="mt-0.5 text-[0.7rem] text-white/45">
+                <div className="mt-0.5 text-[0.7rem] text-fg/45">
                   {ep.date ?? 'date unknown'}
                   {ep.matched_by === 'title'
                     ? ' · billed in title'
@@ -879,22 +879,22 @@ function TopGuestsTable({
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-2 text-[0.72rem] text-white/50">
+      <div className="flex items-center gap-2 text-[0.72rem] text-fg/50">
         <span className="uppercase tracking-[0.18em]">Top Guests</span>
-        <span className="text-white/25">·</span>
-        <span className="text-[#79cdfc]">{scopeLabel}</span>
+        <span className="text-fg/25">·</span>
+        <span className="text-sky-brand-soft">{scopeLabel}</span>
         {dateRange ? (
           <>
-            <span className="text-white/25">·</span>
-            <span className="text-white/60">{dateRange}</span>
+            <span className="text-fg/25">·</span>
+            <span className="text-fg/60">{dateRange}</span>
           </>
         ) : null}
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.02]">
+      <div className="overflow-hidden rounded-xl border border-overlay/10 bg-overlay/[0.02]">
         <table className="w-full text-[0.88rem]">
           <thead>
-            <tr className="border-b border-white/[0.06] text-left text-[0.68rem] uppercase tracking-[0.14em] text-white/40">
+            <tr className="border-b border-overlay/[0.06] text-left text-[0.68rem] uppercase tracking-[0.14em] text-fg/40">
               <th className="px-4 py-2.5 font-medium">Rank</th>
               <th className="px-4 py-2.5 font-medium">Guest</th>
               <th className="px-4 py-2.5 text-right font-medium">Episodes</th>
@@ -905,15 +905,15 @@ function TopGuestsTable({
             {guests.map((g) => (
               <tr
                 key={`${g.rank}-${g.speaker_name}`}
-                className="border-t border-white/[0.04] transition hover:bg-white/[0.025]"
+                className="border-t border-overlay/[0.04] transition hover:bg-overlay/[0.025]"
               >
-                <td className="px-4 py-2.5 text-white/60">
+                <td className="px-4 py-2.5 text-fg/60">
                   <RankBadge rank={g.rank} />
                 </td>
-                <td className="px-4 py-2.5 font-medium text-white/90">
+                <td className="px-4 py-2.5 font-medium text-fg/90">
                   {g.speaker_name}
                 </td>
-                <td className="px-4 py-2.5 text-right font-mono text-white/75 tabular-nums">
+                <td className="px-4 py-2.5 text-right font-mono text-fg/75 tabular-nums">
                   {g.episode_count}
                 </td>
                 <td className="px-4 py-2.5 text-right">
@@ -929,10 +929,10 @@ function TopGuestsTable({
                       })
                     }
                     className={cn(
-                      'inline-flex items-center gap-1 rounded-md border border-[#3eb5f9]/30 bg-[#3eb5f9]/[0.08]',
-                      'px-2 py-1 text-[0.72rem] font-medium text-[#79cdfc]',
-                      'transition hover:border-[#3eb5f9]/60 hover:bg-[#3eb5f9]/[0.18] hover:text-white',
-                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-[#3eb5f9]/60',
+                      'inline-flex items-center gap-1 rounded-md border border-sky-brand/30 bg-sky-brand/[0.08]',
+                      'px-2 py-1 text-[0.72rem] font-medium text-sky-brand-soft',
+                      'transition hover:border-sky-brand/60 hover:bg-sky-brand/[0.18] hover:text-fg',
+                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-brand/60',
                     )}
                   >
                     View
@@ -946,7 +946,7 @@ function TopGuestsTable({
       </div>
 
       {hasTies ? (
-        <div className="text-[0.7rem] text-white/40">
+        <div className="text-[0.7rem] text-fg/40">
           Tied ranks share a position; within a tier guests are listed alphabetically.
         </div>
       ) : null}
@@ -956,9 +956,9 @@ function TopGuestsTable({
 
 function RankBadge({ rank }: { rank: number }) {
   if (rank === 1) return <span className="font-mono text-amber-300">🥇 1</span>;
-  if (rank === 2) return <span className="font-mono text-white/80">🥈 2</span>;
+  if (rank === 2) return <span className="font-mono text-fg/80">🥈 2</span>;
   if (rank === 3) return <span className="font-mono text-orange-300">🥉 3</span>;
-  return <span className="font-mono text-white/55">{rank}</span>;
+  return <span className="font-mono text-fg/55">{rank}</span>;
 }
 
 function ToolChip({
@@ -974,13 +974,13 @@ function ToolChip({
   return (
     <div
       className={cn(
-        'inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03]',
-        'px-2.5 py-1 text-[0.72rem] text-white/65',
+        'inline-flex items-center gap-2 rounded-lg border border-overlay/10 bg-overlay/[0.03]',
+        'px-2.5 py-1 text-[0.72rem] text-fg/65',
       )}
     >
       <Icon
         className={cn(
-          'h-3.5 w-3.5 text-[#3eb5f9]',
+          'h-3.5 w-3.5 text-sky-brand',
           pulsing && 'ark-pulse-dot',
         )}
       />
@@ -995,7 +995,7 @@ function TypingDots() {
       {[0, 1, 2].map((i) => (
         <span
           key={i}
-          className="h-1.5 w-1.5 rounded-full bg-[#3eb5f9] ark-pulse-dot"
+          className="h-1.5 w-1.5 rounded-full bg-sky-brand ark-pulse-dot"
           style={{ animationDelay: `${i * 140}ms` }}
         />
       ))}

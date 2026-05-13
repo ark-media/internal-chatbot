@@ -9,6 +9,7 @@
    ============================================================ */
 
 @theme {
+  /* Brand ink scale — constant across themes */
   --color-ink-950: #070b22;
   --color-ink-900: #0b153c;
   --color-ink-800: #101736;
@@ -21,11 +22,16 @@
   --color-ink-100: #dde2f0;
   --color-ink-50:  #f3f5fb;
 
+  /* Brand accents — constant across themes */
   --color-sky-brand: #3eb5f9;
   --color-sky-brand-soft: #79cdfc;
+  --color-sky-brand-deep: #2a8fd6;
   --color-royal: #033ec8;
   --color-signal: #eb0102;
 
+  /* Theme-swappable semantic tokens (defaults match dark mode) */
+  --color-fg: #ffffff;
+  --color-overlay: #ffffff;
   --color-canvas: var(--color-ink-900);
   --color-canvas-raised: var(--color-ink-800);
   --color-canvas-deep: var(--color-ink-950);
@@ -41,6 +47,51 @@
   color-scheme: dark;
 }
 
+html.theme-dark {
+  color-scheme: dark;
+}
+
+html.theme-light {
+  --color-fg: #0b153c;
+  --color-overlay: #0b153c;
+  /* Tinted toward sky-brand rather than neutral grey — keeps the page from
+     reading as a "muddy office grey" while staying near-white in practice. */
+  --color-canvas: #f6faff;
+  --color-canvas-raised: #ffffff;
+  --color-canvas-deep: #e6eefb;
+  /* "Soft" semantically means "the accent-text variant"; in light mode a
+     deeper sky reads as readable text on tinted-white surfaces, while the
+     light #79cdfc would be invisible. */
+  --color-sky-brand-soft: #1d6fb0;
+
+  /* Tailwind palette accents (citation chips, badges, alerts) ship with
+     light-tinted text colors meant for dark backgrounds. Remap the
+     "-100/200/300" tones to deeper, AA-readable variants in light mode so
+     emerald/amber/rose/blue chips don't disappear into the canvas. The
+     fills (-400/[0.12], -500/20) stay light and tinted; only text shifts.
+
+     Note: blue-100 intentionally NOT overridden — it's the text color of
+     the "Editing • Press ESC" toast which has a dark bg-blue-900/90 fill
+     in both themes. Remapping would make that toast text unreadable. */
+  --color-emerald-100: #065f46;
+  --color-emerald-200: #047857;
+  --color-emerald-300: #047857;
+  --color-amber-100: #78350f;
+  --color-amber-200: #b45309;
+  --color-amber-300: #b45309;
+  --color-rose-200: #be123c;
+  --color-red-100: #991b1b;
+  --color-red-200: #b91c1c;
+  --color-red-300: #b91c1c;
+  --color-red-400: #b91c1c;
+  --color-blue-200: #1d4ed8;
+  --color-blue-300: #1d4ed8;
+  --color-green-200: #15803d;
+  --color-green-300: #15803d;
+
+  color-scheme: light;
+}
+
 html,
 body {
   height: 100%;
@@ -48,8 +99,8 @@ body {
 
 body {
   font-family: var(--font-sans);
-  color: var(--color-ink-50);
-  background: var(--color-ink-900);
+  color: var(--color-fg);
+  background: var(--color-canvas);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -69,6 +120,14 @@ body {
     linear-gradient(180deg, #070b22 0%, #0b153c 45%, #101736 100%);
 }
 
+html.theme-light .ark-backdrop {
+  background:
+    radial-gradient(60% 55% at 18% 12%, rgba(62, 181, 249, 0.22) 0%, transparent 60%),
+    radial-gradient(50% 50% at 82% 20%, rgba(3, 62, 200, 0.14) 0%, transparent 65%),
+    radial-gradient(75% 60% at 65% 95%, rgba(62, 181, 249, 0.16) 0%, transparent 70%),
+    linear-gradient(180deg, #ffffff 0%, #f3f7ff 55%, #e6eefb 100%);
+}
+
 .ark-backdrop::after {
   content: "";
   position: absolute;
@@ -82,10 +141,56 @@ body {
   opacity: 0.4;
 }
 
+html.theme-light .ark-backdrop::after {
+  background-image: radial-gradient(
+    rgba(11, 21, 60, 0.05) 1px,
+    transparent 1px
+  );
+  mix-blend-mode: multiply;
+  opacity: 0.35;
+}
+
+/* ---------- Theme-aware recessed surfaces ----------
+   Dark mode uses a black overlay to "step down" from the navy canvas;
+   that same overlay reads as a muddy grey on a light canvas. These
+   utilities pick the right tint per theme so inputs, segmented controls,
+   and other recessed wells feel consistent in both modes. */
+.ark-recessed {
+  background-color: rgba(0, 0, 0, 0.3);
+}
+html.theme-light .ark-recessed {
+  background-color: rgba(11, 21, 60, 0.045);
+}
+
+.ark-recessed-soft {
+  background-color: rgba(0, 0, 0, 0.2);
+}
+html.theme-light .ark-recessed-soft {
+  background-color: rgba(11, 21, 60, 0.03);
+}
+
+/* ---------- Theme-aware raised surfaces ----------
+   Tints lifted *above* the canvas — sidebars, headers, cards, chips.
+   Mirrors bg-overlay/[0.02|0.03|0.04] but named so the tier scale lives
+   in one place. Pair with a border utility (border-overlay/...) as needed. */
+.ark-surface-faint {
+  background-color: rgb(from var(--color-overlay) r g b / 0.02);
+}
+.ark-surface {
+  background-color: rgb(from var(--color-overlay) r g b / 0.03);
+}
+.ark-surface-raised {
+  background-color: rgb(from var(--color-overlay) r g b / 0.04);
+}
+
 /* ---------- Selection + focus ---------- */
 ::selection {
   background: rgba(62, 181, 249, 0.35);
   color: #ffffff;
+}
+html.theme-light ::selection {
+  background: rgba(62, 181, 249, 0.28);
+  color: #0b153c;
 }
 
 /* ---------- Scrollbar ---------- */
@@ -97,13 +202,13 @@ body {
   background: transparent;
 }
 *::-webkit-scrollbar-thumb {
-  background: rgba(126, 138, 184, 0.25);
+  background: color-mix(in oklab, var(--color-fg) 25%, transparent);
   border-radius: 999px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: rgba(126, 138, 184, 0.45);
+  background: color-mix(in oklab, var(--color-fg) 45%, transparent);
   background-clip: padding-box;
 }
 
@@ -115,7 +220,7 @@ body {
   font-family: var(--font-sans);
   font-size: 0.95rem;
   line-height: 1.7;
-  color: var(--color-ink-100);
+  color: color-mix(in oklab, var(--color-fg) 92%, transparent);
   letter-spacing: 0.005em;
 }
 
@@ -132,7 +237,7 @@ body {
 .ark-prose h4 {
   font-family: var(--font-display);
   font-weight: 700;
-  color: #ffffff;
+  color: var(--color-fg);
   letter-spacing: -0.01em;
   margin-top: 1.4em;
   margin-bottom: 0.5em;
@@ -141,15 +246,23 @@ body {
 .ark-prose h1 { font-size: 1.5rem; }
 .ark-prose h2 { font-size: 1.25rem; }
 .ark-prose h3 { font-size: 1.05rem; }
-.ark-prose h4 { font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--color-sky-brand-soft); }
+.ark-prose h4 {
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-sky-brand-soft);
+}
+html.theme-light .ark-prose h4 {
+  color: var(--color-sky-brand-deep);
+}
 
 .ark-prose strong {
-  color: #ffffff;
+  color: var(--color-fg);
   font-weight: 700;
 }
 
 .ark-prose em {
-  color: var(--color-ink-100);
+  color: color-mix(in oklab, var(--color-fg) 92%, transparent);
 }
 
 .ark-prose a {
@@ -158,6 +271,9 @@ body {
   text-decoration-color: rgba(62, 181, 249, 0.4);
   text-underline-offset: 3px;
   transition: text-decoration-color 150ms ease;
+}
+html.theme-light .ark-prose a {
+  color: var(--color-sky-brand-deep);
 }
 .ark-prose a:hover {
   text-decoration-color: var(--color-sky-brand);
@@ -202,7 +318,7 @@ body {
   border-left: 3px solid var(--color-sky-brand);
   background: rgba(62, 181, 249, 0.06);
   border-radius: 0 0.5rem 0.5rem 0;
-  color: var(--color-ink-100);
+  color: color-mix(in oklab, var(--color-fg) 92%, transparent);
   font-style: italic;
 }
 .ark-prose blockquote p { margin: 0.25em 0; }
@@ -216,18 +332,23 @@ body {
   color: var(--color-sky-brand-soft);
   border: 1px solid rgba(62, 181, 249, 0.18);
 }
+html.theme-light .ark-prose code {
+  background: rgba(62, 181, 249, 0.12);
+  color: var(--color-sky-brand-deep);
+  border-color: rgba(62, 181, 249, 0.28);
+}
 
 .ark-prose pre {
   font-family: var(--font-mono);
   margin: 1em 0;
   padding: 0.9em 1em;
-  background: rgba(7, 11, 34, 0.7);
-  border: 1px solid rgba(126, 138, 184, 0.18);
+  background: color-mix(in oklab, var(--color-canvas-deep) 70%, transparent);
+  border: 1px solid color-mix(in oklab, var(--color-fg) 18%, transparent);
   border-radius: 0.75rem;
   overflow-x: auto;
   font-size: 0.85em;
   line-height: 1.55;
-  color: var(--color-ink-100);
+  color: color-mix(in oklab, var(--color-fg) 92%, transparent);
 }
 .ark-prose pre code {
   background: transparent;
@@ -243,7 +364,7 @@ body {
   background: linear-gradient(
     to right,
     transparent,
-    rgba(126, 138, 184, 0.35),
+    color-mix(in oklab, var(--color-fg) 35%, transparent),
     transparent
   );
 }
@@ -257,14 +378,14 @@ body {
 .ark-prose th,
 .ark-prose td {
   padding: 0.45em 0.75em;
-  border-bottom: 1px solid rgba(126, 138, 184, 0.2);
+  border-bottom: 1px solid color-mix(in oklab, var(--color-fg) 20%, transparent);
   text-align: left;
   vertical-align: top;
 }
 .ark-prose th {
   font-family: var(--font-display);
   font-weight: 700;
-  color: #ffffff;
+  color: var(--color-fg);
   font-size: 0.8em;
   text-transform: uppercase;
   letter-spacing: 0.05em;
