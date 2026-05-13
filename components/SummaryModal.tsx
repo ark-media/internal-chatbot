@@ -175,7 +175,7 @@ export function SummaryModal({
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Hand off to new chat"
+      aria-labelledby="handoff-modal-title"
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
     >
       <div
@@ -193,7 +193,10 @@ export function SummaryModal({
         <header className="border-b border-overlay/[0.06] px-5 py-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <h2 className="text-sm font-medium tracking-wide text-fg/90">
+              <h2
+                id="handoff-modal-title"
+                className="text-sm font-medium tracking-wide text-fg/90"
+              >
                 Hand off to new chat
               </h2>
               {status === 'streaming' ? (

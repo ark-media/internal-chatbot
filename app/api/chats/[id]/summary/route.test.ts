@@ -172,6 +172,50 @@ describe('POST /api/chats/[id]/summary', () => {
     expect(String(last.content)).toMatch(/handoff/i);
   });
 
+  it('selects the prep system prompt for prep chats', async () => {
+    loadChat.mockResolvedValue({
+      id: CHAT_ID,
+      surface: 'prep',
+      title: null,
+      messages: [
+        { id: 'm1', role: 'user', parts: [{ type: 'text', text: 'prep this' }] },
+        { id: 'm2', role: 'assistant', parts: [{ type: 'text', text: '1. [open] …' }] },
+      ],
+    });
+    streamText.mockReturnValue({
+      toTextStreamResponse: () => new Response('ok'),
+    });
+
+    await POST(makeRequest(), params());
+
+    const args = streamText.mock.calls[0][0] as { system: string };
+    expect(args.system).toMatch(/episode-prep/i);
+    expect(args.system).toMatch(/\[open\]/);
+    expect(args.system).not.toMatch(/\[id:N\]/);
+  });
+
+  it('selects the news system prompt for news chats', async () => {
+    loadChat.mockResolvedValue({
+      id: CHAT_ID,
+      surface: 'news',
+      title: null,
+      messages: [
+        { id: 'm1', role: 'user', parts: [{ type: 'text', text: 'outline' }] },
+        { id: 'm2', role: 'assistant', parts: [{ type: 'text', text: '[A BLOCK] …' }] },
+      ],
+    });
+    streamText.mockReturnValue({
+      toTextStreamResponse: () => new Response('ok'),
+    });
+
+    await POST(makeRequest(), params());
+
+    const args = streamText.mock.calls[0][0] as { system: string };
+    expect(args.system).toMatch(/news-script/i);
+    expect(args.system).toMatch(/SOURCES/);
+    expect(args.system).not.toMatch(/\[id:N\]/);
+  });
+
   it('strips UI-only data-* parts before sending history to the model', async () => {
     loadChat.mockResolvedValue({
       id: CHAT_ID,

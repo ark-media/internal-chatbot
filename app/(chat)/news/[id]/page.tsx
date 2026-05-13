@@ -20,6 +20,7 @@ import {
   CheckCircle2,
   Copy,
   Pencil,
+  ScrollText,
 } from 'lucide-react';
 
 import { Header } from '@/components/Header';
@@ -34,6 +35,7 @@ import { cn } from '@/lib/cn';
 import { chatFetch } from '@/lib/chat-fetch';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
 import { useFlash } from '@/lib/use-flash';
+import { useHandoffSummary } from '@/lib/use-handoff-summary';
 import {
   MAX_FILES,
   MAX_FILE_BYTES,
@@ -277,6 +279,11 @@ function NewsBody({
     }
   }, [messages, extractScriptText]);
 
+  const { openSummary, modal: summaryModal } = useHandoffSummary({
+    chatId,
+    messagesLength: messages.length,
+  });
+
   const copyScriptToClipboard = useCallback(async () => {
     const scriptText = extractScriptText();
     if (!scriptText?.trim()) return;
@@ -457,6 +464,18 @@ function NewsBody({
                       </>
                     )}
                   </button>
+
+                  <button
+                    onClick={openSummary}
+                    className={cn(
+                      'inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
+                      'border border-overlay/10 bg-overlay/5 text-fg/75 transition hover:bg-overlay/10 hover:text-fg',
+                    )}
+                    title="Compose a handoff message you can paste into a fresh chat to continue this script"
+                  >
+                    <ScrollText className="h-4 w-4" />
+                    Hand off to new chat
+                  </button>
                 </div>
 
                 <div className="mt-2">
@@ -616,6 +635,8 @@ function NewsBody({
           </div>
         </aside>
       ) : null}
+
+      {summaryModal}
     </div>
   );
 }

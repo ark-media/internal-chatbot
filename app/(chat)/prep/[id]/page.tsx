@@ -19,6 +19,7 @@ import {
   Globe,
   HardDriveUpload,
   Loader2,
+  ScrollText,
   Search,
   Sparkles,
   Square,
@@ -42,6 +43,7 @@ import { cn } from '@/lib/cn';
 import { chatFetch } from '@/lib/chat-fetch';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
 import { useFlash } from '@/lib/use-flash';
+import { useHandoffSummary } from '@/lib/use-handoff-summary';
 import {
   MAX_FILES,
   MAX_FILE_BYTES,
@@ -280,6 +282,11 @@ function PrepBody({
       .trim();
   }, [messages]);
 
+  const { openSummary, modal: summaryModal } = useHandoffSummary({
+    chatId,
+    messagesLength: messages.length,
+  });
+
   const copyQuestionsToClipboard = useCallback(async () => {
     const text = extractQuestionsText();
     if (!text?.trim()) return;
@@ -479,6 +486,18 @@ function PrepBody({
                     </>
                   )}
                 </button>
+
+                <button
+                  onClick={openSummary}
+                  className={cn(
+                    'inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
+                    'border border-overlay/10 bg-overlay/5 text-fg/75 transition hover:bg-overlay/10 hover:text-fg',
+                  )}
+                  title="Compose a handoff message you can paste into a fresh chat to continue this prep"
+                >
+                  <ScrollText className="h-4 w-4" />
+                  Hand off to new chat
+                </button>
               </div>
             ) : null}
           </div>
@@ -564,6 +583,8 @@ function PrepBody({
             </>
           }
         />
+
+        {summaryModal}
     </div>
   );
 }

@@ -14,7 +14,6 @@ import { Square, Sparkles, FileText, ChevronRight, Copy, CheckCircle2, Pencil, S
 
 import { MessageText } from '@/components/MessageText';
 import { SourcePanel } from '@/components/SourcePanel';
-import { SummaryModal } from '@/components/SummaryModal';
 import { MODELS, getContextWindow } from '@/components/ModelSelector';
 import { ChatComposer } from '@/components/ChatComposer';
 import { ChatErrorBanner } from '@/components/ChatErrorBanner';
@@ -36,6 +35,7 @@ import { cn } from '@/lib/cn';
 import { chatFetch } from '@/lib/chat-fetch';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
 import { useFlash } from '@/lib/use-flash';
+import { useHandoffSummary } from '@/lib/use-handoff-summary';
 
 const EXAMPLE_PROMPTS = [
   'What has Nadav Eyal said about the Houthis recently?',
@@ -86,17 +86,6 @@ function ChatBody({
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [showUndoToast, flashShowUndoToast] = useFlash(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
-
-  type SummaryStatus = 'idle' | 'streaming' | 'done' | 'error';
-  const [summaryOpen, setSummaryOpen] = useState(false);
-  const [summaryText, setSummaryText] = useState('');
-  const [summaryStatus, setSummaryStatus] = useState<SummaryStatus>('idle');
-  const [summaryError, setSummaryError] = useState<string | null>(null);
-  // Message count snapshot at the moment the summary started streaming. Used
-  // to detect a stale cached summary on the next open instead of resetting
-  // mid-stream (which would scramble in-flight chunks into the now-empty
-  // buffer).
-  const [summaryGeneratedAt, setSummaryGeneratedAt] = useState<number | null>(null);
 
   // Custom fetch that adds editingMessageId to the body if present
   const customFetch = useCallback<typeof fetch>(
@@ -176,68 +165,6 @@ function ChatBody({
       alert('Failed to copy to clipboard');
     }
   }, [extractAnswerText, flashCopySuccess]);
-
-  // messages.length read inside handleSummaryStart needs to reflect the count
-  // at the moment the fetch begins. A ref avoids re-creating the callback (and
-  // therefore re-running the modal's fetch effect) every time a message lands.
-  const messagesLengthRef = useRef(messages.length);
-  useEffect(() => {
-    messagesLengthRef.current = messages.length;
-  }, [messages.length]);
-
-  const handleSummaryStart = useCallback(() => {
-    setSummaryText('');
-    setSummaryError(null);
-    setSummaryStatus('streaming');
-    setSummaryGeneratedAt(messagesLengthRef.current);
-  }, []);
-
-  const handleSummaryChunk = useCallback((chunk: string) => {
-    setSummaryText((prev) => prev + chunk);
-  }, []);
-
-  const handleSummaryFinish = useCallback(() => {
-    setSummaryStatus('done');
-  }, []);
-
-  const handleSummaryError = useCallback((message: string) => {
-    setSummaryStatus('error');
-    setSummaryError(message);
-  }, []);
-
-  const handleSummaryStop = useCallback(() => {
-    // User pressed Stop, or modal closed mid-stream: keep whatever text
-    // streamed so far, mark as done so Copy works on the partial result.
-    setSummaryStatus('done');
-  }, []);
-
-  const handleSummarySource = useCallback(
-    (source: Source, quote?: string) => {
-      // Close modal so SourcePanel is visible; text stays cached so the user
-      // can reopen and continue reading after inspecting the source.
-      setSummaryOpen(false);
-      setOpenPanel({ view: 'source', source, quote });
-    },
-    [],
-  );
-
-  const openSummary = useCallback(() => {
-    // Decide if the cached summary is still usable. A stale cache (conversation
-    // moved forward since the summary was generated), an error from the last
-    // attempt, or an empty 'done' state (user stopped before any chunks
-    // arrived) all warrant a fresh fetch. Otherwise we reopen with the cached
-    // text so the user can keep reading.
-    const isStale =
-      summaryGeneratedAt !== null && summaryGeneratedAt !== messages.length;
-    const isEmptyDone = summaryStatus === 'done' && !summaryText;
-    if (isStale || isEmptyDone || summaryStatus === 'error') {
-      setSummaryText('');
-      setSummaryError(null);
-      setSummaryStatus('idle');
-      setSummaryGeneratedAt(null);
-    }
-    setSummaryOpen(true);
-  }, [messages.length, summaryGeneratedAt, summaryStatus, summaryText]);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -380,6 +307,13 @@ function ChatBody({
     }
     return map;
   }, [messages]);
+
+  const { openSummary, modal: summaryModal } = useHandoffSummary({
+    chatId,
+    messagesLength: messages.length,
+    sources,
+    onOpenSource: (source, quote) => setOpenPanel({ view: 'source', source, quote }),
+  });
 
   const busy = status === 'submitted' || status === 'streaming';
 
@@ -613,21 +547,7 @@ function ChatBody({
         />
       ) : null}
 
-      <SummaryModal
-        open={summaryOpen}
-        chatId={chatId}
-        text={summaryText}
-        status={summaryStatus}
-        errorMessage={summaryError}
-        sources={sources}
-        onOpenSource={handleSummarySource}
-        onClose={() => setSummaryOpen(false)}
-        onStart={handleSummaryStart}
-        onChunk={handleSummaryChunk}
-        onFinish={handleSummaryFinish}
-        onError={handleSummaryError}
-        onStop={handleSummaryStop}
-      />
+      {summaryModal}
     </div>
   );
 }
