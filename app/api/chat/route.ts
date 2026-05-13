@@ -27,6 +27,7 @@ import { sql } from '@/lib/db';
 import { shows } from '@/lib/knowledge-base';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { routeQuery, type RoutedQuery } from '@/lib/router';
+import { stripStaleToolOutputs } from '@/lib/strip-tool-outputs';
 import type { ChatUIMessage, PreloadedSources, UsageData } from '@/components/chat-types';
 import { ensureTable, getCached, setCached, cacheKey } from '@/lib/tool-cache';
 import {
@@ -837,12 +838,16 @@ export async function POST(req: Request) {
     })),
   };
 
-  // Filter out data-sources and other non-essential parts before sending to model.
-  // Sources are stored for UI display but excluded from the prompt to keep context lean.
-  const messagesForModel = messages.map((m) => ({
-    ...m,
-    parts: m.parts?.filter((p) => p.type !== 'data-sources') ?? [],
-  }));
+  // Prepare history for the model: drop UI-only data-sources parts, then
+  // replace stale tool outputs in older assistant messages with stubs. The
+  // synthesis already lives in each assistant's text response, and the tool
+  // can be re-called if the model needs the raw chunks again.
+  const messagesForModel = stripStaleToolOutputs(
+    messages.map((m) => ({
+      ...m,
+      parts: m.parts?.filter((p) => p.type !== 'data-sources') ?? [],
+    })),
+  );
 
   let capturedUsage: { inputTokens?: number; outputTokens?: number; cachedInputTokens?: number } | null = null;
 

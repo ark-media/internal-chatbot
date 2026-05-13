@@ -24,6 +24,7 @@ import {
   formatBytes,
 } from '@/lib/prep-limits';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { stripStaleToolOutputs } from '@/lib/strip-tool-outputs';
 import {
   ensureChatTables,
   persistAssistantMessage,
@@ -557,12 +558,16 @@ export async function POST(req: Request) {
     },
   ];
 
-  // Filter out data-sources before sending to model (keep only script text).
-  // This ensures sources don't bloat the context on multi-turn conversations.
-  const messagesForModel = normalized.map((m) => ({
-    ...m,
-    parts: m.parts?.filter((p) => p.type !== 'data-sources') ?? [],
-  }));
+  // Prepare history for the model: drop UI-only data-sources parts, then
+  // replace stale tool outputs in older assistant messages with stubs. The
+  // synthesis already lives in each assistant's text response, and the tool
+  // can be re-called if the model needs the raw article body again.
+  const messagesForModel = stripStaleToolOutputs(
+    normalized.map((m) => ({
+      ...m,
+      parts: m.parts?.filter((p) => p.type !== 'data-sources') ?? [],
+    })),
+  );
 
   const allMessages = [...contextMessages, ...messagesForModel];
 

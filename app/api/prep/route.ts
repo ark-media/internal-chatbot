@@ -29,6 +29,7 @@ import {
   formatBytes,
 } from '@/lib/prep-limits';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { stripStaleToolOutputs } from '@/lib/strip-tool-outputs';
 import {
   ensureChatTables,
   persistAssistantMessage,
@@ -531,7 +532,7 @@ export async function POST(req: Request) {
     }
   }
 
-  const normalized = normalizeMessages(messages);
+  const normalized = stripStaleToolOutputs(normalizeMessages(messages));
   const today = new Date().toISOString().slice(0, 10);
   const started = Date.now();
 
