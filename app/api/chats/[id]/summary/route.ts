@@ -86,10 +86,21 @@ export async function POST(
   })) as UIMessage[];
   const messagesForModel = stripStaleToolOutputs(uiMessages);
 
+  // Anthropic rejects requests whose final message is from the assistant
+  // (it interprets that as a prefill, which Sonnet doesn't support). Append a
+  // synthetic user turn that asks for the summary, so the system prompt's
+  // formatting rules apply to a normal user-initiated response.
+  const modelMessages = await convertToModelMessages(messagesForModel);
+  modelMessages.push({
+    role: 'user',
+    content:
+      'Now produce the structured summary of the conversation above, following the rules in your instructions.',
+  });
+
   const result = streamText({
     model: SUMMARY_MODEL,
     system: SUMMARY_SYSTEM_PROMPT,
-    messages: await convertToModelMessages(messagesForModel),
+    messages: modelMessages,
     temperature: 0.2,
     abortSignal: req.signal,
   });

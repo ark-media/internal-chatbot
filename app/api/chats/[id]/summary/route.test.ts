@@ -159,10 +159,16 @@ describe('POST /api/chats/[id]/summary', () => {
       model: string;
       system: string;
       temperature: number;
+      messages: Array<{ role: string; content: unknown }>;
     };
     expect(args.model).toBe('anthropic/claude-sonnet-4-6');
     expect(args.system).toMatch(/preserve every \[id:N\]/i);
     expect(args.temperature).toBeLessThanOrEqual(0.3);
+    // Final turn must be a user message — Anthropic rejects assistant prefill,
+    // so the route appends a synthetic user instruction after the history.
+    const last = args.messages[args.messages.length - 1];
+    expect(last.role).toBe('user');
+    expect(String(last.content)).toMatch(/structured summary/i);
   });
 
   it('strips UI-only data-* parts before sending history to the model', async () => {
