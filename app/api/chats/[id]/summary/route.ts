@@ -23,17 +23,25 @@ function textError(message: string, status: number): Response {
   });
 }
 
-const SUMMARY_SYSTEM_PROMPT = `You are summarizing a research conversation from Ark Media's internal podcast-archive chatbot. The conversation is between a user and an assistant that cites podcast transcripts.
+const SUMMARY_SYSTEM_PROMPT = `You are producing a handoff message. The user will paste your output as the FIRST message of a fresh chat with you, then send their next question as a follow-up turn. Write from the user's first-person voice ("I've been digging into…"), addressed to the next instance of you.
 
-Produce a structured synthesis the user can paste into a research note.
+The conversation you're summarizing is from Ark Media's internal podcast-archive chatbot. Assistant responses cite podcast transcripts with [id:N] and [turn:N] markers. Preserve these citations verbatim — the next assistant can pass them to lookupCorpus or getDossier to re-pull the underlying transcripts (IDs are stable unless the episode has been re-ingested since).
+
+Structure:
+
+1. A short opener (1–2 sentences) naming what the user has been investigating, plus one sentence flagging that this is context from a prior chat and the follow-up question is coming in the next message.
+
+2. ## Findings so far
+   Substantive findings grouped by sub-topic. Short bullets. Every claim is followed by the existing [id:N] or [turn:N] citation EXACTLY as it appeared. Do not invent or renumber.
+
+3. ## Open threads
+   Only include if the prior conversation left something unresolved or was heading somewhere specific. Omit the heading entirely otherwise.
 
 Rules:
-- Preserve every [id:N] and [turn:N] citation EXACTLY as it appears in the assistant's responses. Do not invent new citations. Do not strip or renumber them.
-- Group findings by topic. Use markdown headings and short bullets.
-- Omit the meta-conversation (clarifying back-and-forth, refusals, "I don't have information on that"). Focus on what was found.
-- If the user asked multiple distinct questions, give each its own section.
-- Keep it tight — under 400 words.
-- Output markdown only. Do not wrap your answer in code fences. Do not add a preamble like "Here is the summary".`;
+- First-person, user's voice. Do not address the user; address the next assistant.
+- Skip meta-conversation (clarifying back-and-forth, refusals, "I don't have information on that"). Focus on what was actually found.
+- Under 400 words.
+- Output markdown only. Do not wrap your answer in code fences. Do not add a preamble like "Here is the handoff".`;
 
 export async function POST(
   req: Request,
@@ -70,7 +78,7 @@ export async function POST(
 
   const hasAssistant = chat.messages.some((m) => m.role === 'assistant');
   if (!hasAssistant || chat.messages.length < 2) {
-    return textError('Need at least one assistant reply before summarizing.', 400);
+    return textError('Need at least one assistant reply before composing a handoff.', 400);
   }
 
   // Drop UI-only data-* parts and stale tool outputs before sending history to
@@ -94,7 +102,7 @@ export async function POST(
   modelMessages.push({
     role: 'user',
     content:
-      'Now produce the structured summary of the conversation above, following the rules in your instructions.',
+      'Now produce the handoff message described in your instructions, written in my voice for the next assistant.',
   });
 
   const result = streamText({

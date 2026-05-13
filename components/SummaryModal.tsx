@@ -175,7 +175,7 @@ export function SummaryModal({
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Conversation summary"
+      aria-label="Hand off to new chat"
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
     >
       <div
@@ -190,32 +190,37 @@ export function SummaryModal({
           'rounded-2xl border border-overlay/10 shadow-[0_24px_80px_-20px_rgba(3,12,40,0.7)]',
         )}
       >
-        <header className="flex items-center justify-between border-b border-overlay/[0.06] px-5 py-3">
-          <div className="flex items-center gap-3">
-            <h2 className="text-sm font-medium tracking-wide text-fg/90">
-              Summary of this conversation
-            </h2>
-            {status === 'streaming' ? (
-              <span className="text-[0.7rem] uppercase tracking-[0.18em] text-sky-brand/80">
-                Streaming…
-              </span>
-            ) : null}
+        <header className="border-b border-overlay/[0.06] px-5 py-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <h2 className="text-sm font-medium tracking-wide text-fg/90">
+                Hand off to new chat
+              </h2>
+              {status === 'streaming' ? (
+                <span className="text-[0.7rem] uppercase tracking-[0.18em] text-sky-brand/80">
+                  Streaming…
+                </span>
+              ) : null}
+            </div>
+            <button
+              ref={closeButtonRef}
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="rounded-lg p-1.5 text-fg/50 transition hover:bg-overlay/10 hover:text-fg/80"
+            >
+              <X className="h-4 w-4" />
+            </button>
           </div>
-          <button
-            ref={closeButtonRef}
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded-lg p-1.5 text-fg/50 transition hover:bg-overlay/10 hover:text-fg/80"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <p className="mt-1 text-[0.72rem] text-fg/45">
+            Paste this as the first message of a new chat, then send your follow-up question.
+          </p>
         </header>
 
         <div className="min-h-[120px] flex-1 overflow-y-auto px-5 py-4">
           {status === 'error' ? (
             <div className="rounded-lg border border-red-400/30 bg-red-400/10 px-3 py-2 text-sm text-red-200">
-              {errorMessage ?? 'Failed to generate summary.'}
+              {errorMessage ?? 'Failed to generate handoff.'}
             </div>
           ) : text ? (
             <MessageText text={text} sources={sources} onOpen={onOpenSource} />
