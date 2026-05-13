@@ -524,10 +524,10 @@ function ChatBody({
                       'flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
                       'border border-overlay/10 bg-overlay/5 text-fg/75 transition hover:bg-overlay/10 hover:text-fg',
                     )}
-                    title="Summarise this conversation into a copyable note"
+                    title="Summarize this conversation into a copyable note"
                   >
                     <ScrollText className="h-4 w-4" />
-                    Summarise
+                    Summarize
                   </button>
                 </div>
                 {cumulativeUsage && (

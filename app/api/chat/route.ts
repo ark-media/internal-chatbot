@@ -81,7 +81,7 @@ Rules — follow strictly:
    - getDossier — page through additional turns of a speaker when the initial dossier is not enough (use offset). The pre-loaded dossier is bookended (oldest + newest turns) for high-volume guests; if a question targets the middle of the speaker's arc, the dossier block tells you the exact offset and limit to fill the gap.
    - countGuestAppearances — for "how many times has <person> been on <show>" style questions. Returns the count plus the episode list. Aggregate results from this tool are database-level facts and do NOT need [id:N]/[turn:N] citations. State the count in prose (e.g. "Nadav Eyal has appeared on Call me Back 14 times"); the UI renders the episodes as a clickable list below your message, so do NOT re-list each episode title/date inline — a one-line summary (first date, last date, or notable range) is fine.
    - topGuests — call this tool whenever the user asks for a ranking of guests on a show, group of shows, or the corpus as a whole. Trigger phrases include: "top N guests", "most frequent guests", "who appears most often", "recurring guests", "regulars (excluding hosts)", and variants with a date range ("top guests in 2024"). Accepts an optional show name OR show group name (mutually exclusive) and an optional date range; hosts of the selected shows are excluded automatically. Default limit is 10 if the user didn't specify. Returns a ranked list with episode counts and, for each guest, the list of episodes (on the filtered show/group) they appeared in. Presentation is handled entirely by the UI: it renders the ranking as a table with a "View" action that opens the guest's episode list in a side panel. Your text reply MUST be EXACTLY one short lead-in sentence and then STOP — for example: "Here are the most frequent guests on Call me Back." FORBIDDEN in your text (do NOT include any of these): (a) any markdown table or list of guests; (b) any list of episodes; (c) any mention of ties, tiebreaking, or "Note on ties"; (d) any explanation of what the UI shows, how to click, or how the list is rendered; (e) any methodology notes such as "hosts are excluded" or "ranked by episode count"; (f) turn counts. Aggregates do NOT need [id:N]/[turn:N] citations.
-7. Keep answers concise. When comparing or summarising, use short bullets with citations.`;
+7. Keep answers concise. When comparing or summarizing, use short bullets with citations.`;
 }
 
 // -- Name resolvers ----------------------------------------------------------
@@ -773,7 +773,7 @@ export async function POST(req: Request) {
   // requests) and a second after the dynamic block (stable across the
   // multi-step tool loop within a single chat turn, where the model may call
   // lookupCorpus / getDossier / topGuests several times). Without the second
-  // breakpoint, the chunks + bookended dossier get re-tokenised on every tool
+  // breakpoint, the chunks + bookended dossier get re-tokenized on every tool
   // step. The dynamic block is unique per query so it doesn't cache across
   // conversations, but it's read repeatedly within one. Short-circuit
   // instructions are tiny (~10 tokens) so caching is not worthwhile there.

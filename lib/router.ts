@@ -201,7 +201,7 @@ ${overviews}
 
 # Intents
 - lookup: user wants specific facts, excerpts, OR archive-level aggregates (who are the top/most frequent guests on a show, how many times a person appeared, episode counts, guest lists). Use subqueries for hybrid retrieval even on aggregate questions — a downstream tool (topGuests / countGuestAppearances) will handle the aggregation, and noisy subqueries are harmless.
-- dossier: user wants to compile everything a named speaker has said (e.g. "what has X said about Y", "has Z contradicted themselves", "summarise W's positions"). Requires at least one speakerHint.
+- dossier: user wants to compile everything a named speaker has said (e.g. "what has X said about Y", "has Z contradicted themselves", "summarize W's positions"). Requires at least one speakerHint.
 - disambiguate: the user referenced a speaker whose name matches multiple known canonicals, OR the question targets a speaker but is underspecified (e.g. "Segal" could be multiple people). Fill speakerHints with the ambiguous name.
 - out_of_scope: the question is clearly unrelated to Ark Media, its shows, its people, or its archive (e.g. "what's the weather", "write me a poem"). Questions ABOUT the archive's structure — guests, hosts, frequency, rankings, counts, episode listings — are NEVER out_of_scope; route them as lookup.
 

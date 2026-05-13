@@ -62,7 +62,7 @@ export type TrimResult = {
 // minTurns is a floor — even if the budget would force fewer, at least this
 // many turns are kept and the caller is expected to log when the floor wins
 // past the budget. Three is enough to keep the model from refusing for lack
-// of evidence; the post-build oversize backstop is the next line of defence.
+// of evidence; the post-build oversize backstop is the next line of defense.
 export function trimDossierToBudget(opts: {
   turns: DossierTurn[];
   bookend: { headCount: number; tailCount: number } | null;

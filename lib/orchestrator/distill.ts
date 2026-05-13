@@ -46,7 +46,7 @@ const stage2Schema = z.object({
           .array(z.string())
           .max(5)
           .describe(
-            'Up to 5 verbatim quotes from this article. Copy the source text exactly — do not paraphrase, smooth, or normalise punctuation. Empty array if no quotable material.',
+            'Up to 5 verbatim quotes from this article. Copy the source text exactly — do not paraphrase, smooth, or normalize punctuation. Empty array if no quotable material.',
           ),
       }),
     )
@@ -73,12 +73,12 @@ Return the top 3 topics ordered by newsworthiness (primary), source quality (sec
 const STAGE2_SYSTEM_PROMPT = `You extract quotable soundbites from news articles for a daily broadcast script. The quotes you return will be attributed and read on air, so verbatim fidelity is critical.
 
 Rules:
-- Copy quotes EXACTLY from the source text. Do not paraphrase, smooth wording, normalise punctuation, or correct typos.
+- Copy quotes EXACTLY from the source text. Do not paraphrase, smooth wording, normalize punctuation, or correct typos.
 - Pick lines that are quotable on air or that lock in attribution for a contested claim — direct quotations from named sources are best; tight factual sentences are also acceptable.
 - Up to 5 quotes per article. Empty array if the article has no useful quotable material — do not pad.
 - If the source has no embedded quotations, you may return short factual sentences copied verbatim, but never invent or recombine wording.`;
 
-// Stage 1 article excerpt cap. Haiku is doing classification + summarisation;
+// Stage 1 article excerpt cap. Haiku is doing classification + summarization;
 // 2000 chars ≈ 350 words covers the lead + nut graf of most news stories.
 const STAGE1_ARTICLE_EXCERPT_CHARS = 2000;
 
@@ -90,7 +90,7 @@ const STAGE2_ARTICLE_EXCERPT_CHARS = 6000;
 
 // Cap on the tone-reference excerpt of prior scripts included in the cached
 // stage-1 system. The full examples file is ~25k chars; 8000 chars carries
-// enough register and pacing for the model to recognise the show's voice.
+// enough register and pacing for the model to recognize the show's voice.
 const EXAMPLES_CHARS = 8000;
 
 function buildStage1Articles(articles: Article[]): string {

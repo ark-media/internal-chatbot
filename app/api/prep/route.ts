@@ -610,7 +610,7 @@ export async function POST(req: Request) {
   // requests) and a second after the evidence block (stable across the
   // multi-step tool loop within a single first-turn prep request). Without the
   // second breakpoint, the bookended dossier (~13–18K tokens for high-volume
-  // guests) gets re-tokenised on every tool step. Follow-up turns inherit only
+  // guests) gets re-tokenized on every tool step. Follow-up turns inherit only
   // the base-prompt cache; evidenceBlocks is only built on the first user turn.
   const cachedBaseSystem = {
     role: 'system' as const,

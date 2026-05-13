@@ -23,7 +23,7 @@ function textError(message: string, status: number): Response {
   });
 }
 
-const SUMMARY_SYSTEM_PROMPT = `You are summarising a research conversation from Ark Media's internal podcast-archive chatbot. The conversation is between a user and an assistant that cites podcast transcripts.
+const SUMMARY_SYSTEM_PROMPT = `You are summarizing a research conversation from Ark Media's internal podcast-archive chatbot. The conversation is between a user and an assistant that cites podcast transcripts.
 
 Produce a structured synthesis the user can paste into a research note.
 
@@ -70,7 +70,7 @@ export async function POST(
 
   const hasAssistant = chat.messages.some((m) => m.role === 'assistant');
   if (!hasAssistant || chat.messages.length < 2) {
-    return textError('Need at least one assistant reply before summarising.', 400);
+    return textError('Need at least one assistant reply before summarizing.', 400);
   }
 
   // Drop UI-only data-* parts and stale tool outputs before sending history to
