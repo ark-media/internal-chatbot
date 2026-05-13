@@ -532,7 +532,11 @@ export async function POST(req: Request) {
     }
   }
 
-  const normalized = stripStaleToolOutputs(normalizeMessages(messages));
+  // Prepare history for the model: replace stale tool outputs in older
+  // assistant messages with stubs. The most-recent assistant is left intact
+  // so the next turn can still reference the evidence it just synthesized
+  // from; the tool can be re-called if the model needs the raw data again.
+  const messagesForModel = stripStaleToolOutputs(normalizeMessages(messages));
   const today = new Date().toISOString().slice(0, 10);
   const started = Date.now();
 
@@ -628,7 +632,7 @@ export async function POST(req: Request) {
   const result = streamText({
     model,
     system,
-    messages: await convertToModelMessages(normalized),
+    messages: await convertToModelMessages(messagesForModel),
     tools: {
       searchCorpus: searchCorpusTool,
       pastGuestAppearances: pastGuestAppearancesTool,

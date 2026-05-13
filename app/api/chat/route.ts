@@ -840,8 +840,9 @@ export async function POST(req: Request) {
 
   // Prepare history for the model: drop UI-only data-sources parts, then
   // replace stale tool outputs in older assistant messages with stubs. The
-  // synthesis already lives in each assistant's text response, and the tool
-  // can be re-called if the model needs the raw chunks again.
+  // most-recent assistant is left intact so the next turn can still
+  // reference the evidence it just synthesized from; the tool can be
+  // re-called if the model needs the raw chunks again.
   const messagesForModel = stripStaleToolOutputs(
     messages.map((m) => ({
       ...m,
