@@ -54,11 +54,13 @@ html.theme-dark {
 html.theme-light {
   --color-fg: #0b153c;
   --color-overlay: #0b153c;
-  /* Tinted toward sky-brand rather than neutral grey — keeps the page from
-     reading as a "muddy office grey" while staying near-white in practice. */
-  --color-canvas: #f6faff;
+  /* Editorial cool-paper palette: the canvas reads as a faintly tinted
+     off-white that holds enough warmth to feel like paper while the deep
+     tier near the bottom gives the page real depth. The raised tier stays
+     pure white so cards and the composer lift cleanly off the canvas. */
+  --color-canvas: #f1f5fb;
   --color-canvas-raised: #ffffff;
-  --color-canvas-deep: #e6eefb;
+  --color-canvas-deep: #dde6f4;
   /* "Soft" semantically means "the accent-text variant"; in light mode a
      deeper sky reads as readable text on tinted-white surfaces, while the
      light #79cdfc would be invisible. */
@@ -122,10 +124,10 @@ body {
 
 html.theme-light .ark-backdrop {
   background:
-    radial-gradient(60% 55% at 18% 12%, rgba(62, 181, 249, 0.22) 0%, transparent 60%),
-    radial-gradient(50% 50% at 82% 20%, rgba(3, 62, 200, 0.14) 0%, transparent 65%),
-    radial-gradient(75% 60% at 65% 95%, rgba(62, 181, 249, 0.16) 0%, transparent 70%),
-    linear-gradient(180deg, #ffffff 0%, #f3f7ff 55%, #e6eefb 100%);
+    radial-gradient(55% 50% at 12% 8%, rgba(62, 181, 249, 0.32) 0%, transparent 65%),
+    radial-gradient(45% 45% at 88% 14%, rgba(3, 62, 200, 0.18) 0%, transparent 65%),
+    radial-gradient(70% 55% at 70% 100%, rgba(62, 181, 249, 0.22) 0%, transparent 75%),
+    linear-gradient(180deg, #f7faff 0%, #edf3fc 50%, #dde6f4 100%);
 }
 
 .ark-backdrop::after {
@@ -141,13 +143,17 @@ html.theme-light .ark-backdrop {
   opacity: 0.4;
 }
 
+/* The halftone dot pattern reads as noise on a light canvas. Replace it
+   with a soft top-edge sheen so light appears to fall in from above. */
 html.theme-light .ark-backdrop::after {
-  background-image: radial-gradient(
-    rgba(11, 21, 60, 0.05) 1px,
-    transparent 1px
+  background-image: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.65) 0%,
+    rgba(255, 255, 255, 0) 32%
   );
-  mix-blend-mode: multiply;
-  opacity: 0.35;
+  background-size: auto;
+  mix-blend-mode: normal;
+  opacity: 1;
 }
 
 /* ---------- Theme-aware recessed surfaces ----------
@@ -159,20 +165,24 @@ html.theme-light .ark-backdrop::after {
   background-color: rgba(0, 0, 0, 0.3);
 }
 html.theme-light .ark-recessed {
-  background-color: rgba(11, 21, 60, 0.045);
+  background-color: rgba(11, 21, 60, 0.06);
 }
 
 .ark-recessed-soft {
   background-color: rgba(0, 0, 0, 0.2);
 }
 html.theme-light .ark-recessed-soft {
-  background-color: rgba(11, 21, 60, 0.03);
+  background-color: rgba(11, 21, 60, 0.04);
 }
 
 /* ---------- Theme-aware raised surfaces ----------
    Tints lifted *above* the canvas — sidebars, headers, cards, chips.
    Mirrors bg-overlay/[0.02|0.03|0.04] but named so the tier scale lives
-   in one place. Pair with a border utility (border-overlay/...) as needed. */
+   in one place. Pair with a border utility (border-overlay/...) as needed.
+
+   Dark mode uses a faint white wash; light mode needs a stronger tint
+   *plus* a soft drop-shadow so panels actually lift off the page rather
+   than vanishing into the canvas. */
 .ark-surface-faint {
   background-color: rgb(from var(--color-overlay) r g b / 0.02);
 }
@@ -181,6 +191,62 @@ html.theme-light .ark-recessed-soft {
 }
 .ark-surface-raised {
   background-color: rgb(from var(--color-overlay) r g b / 0.04);
+}
+
+html.theme-light .ark-surface-faint {
+  background-color: rgba(255, 255, 255, 0.62);
+  backdrop-filter: blur(12px) saturate(1.05);
+  -webkit-backdrop-filter: blur(12px) saturate(1.05);
+}
+html.theme-light .ark-surface {
+  background-color: rgba(255, 255, 255, 0.78);
+  box-shadow: 0 1px 0 0 rgba(11, 21, 60, 0.04);
+}
+html.theme-light .ark-surface-raised {
+  background-color: #ffffff;
+  box-shadow:
+    0 1px 2px -1px rgba(11, 21, 60, 0.08),
+    0 8px 24px -16px rgba(11, 21, 60, 0.18);
+}
+
+/* ---------- Light-mode border lift ----------
+   The components target a unified dark canvas with thin navy/white borders
+   at very low alpha (overlay/[0.04..0.20]). On a near-white light canvas
+   those alphas vanish — the UI loses every internal division line. Bump
+   the common alphas here so panels, cards, and chips read crisply in light
+   mode without touching individual components. The class names below are
+   the literal Tailwind alpha strings emitted in the markup. */
+html.theme-light [class*="border-overlay/[0.04]"] {
+  border-color: rgba(11, 21, 60, 0.08);
+}
+html.theme-light [class*="border-overlay/[0.06]"],
+html.theme-light .border-overlay\/\[0\.06\] {
+  border-color: rgba(11, 21, 60, 0.10);
+}
+html.theme-light .border-overlay\/10,
+html.theme-light [class*="border-overlay/10"] {
+  border-color: rgba(11, 21, 60, 0.12);
+}
+html.theme-light .border-overlay\/15,
+html.theme-light [class*="border-overlay/15"] {
+  border-color: rgba(11, 21, 60, 0.16);
+}
+html.theme-light .border-overlay\/20,
+html.theme-light [class*="border-overlay/20"] {
+  border-color: rgba(11, 21, 60, 0.22);
+}
+html.theme-light .border-overlay\/30,
+html.theme-light [class*="border-overlay/30"] {
+  border-color: rgba(11, 21, 60, 0.28);
+}
+
+/* Active sidebar items + nav pills lean on sky-brand at ~12%, which is too
+   pale against a light canvas. Use a deeper sky tint and stronger text. */
+html.theme-light .bg-sky-brand\/\[0\.12\] {
+  background-color: rgba(62, 181, 249, 0.18);
+}
+html.theme-light .bg-sky-brand\/\[0\.14\] {
+  background-color: rgba(62, 181, 249, 0.22);
 }
 
 /* ---------- Selection + focus ---------- */
