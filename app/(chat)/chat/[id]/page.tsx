@@ -10,10 +10,11 @@ import {
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import { useParams } from 'next/navigation';
-import { Square, Sparkles, FileText, ChevronRight, Copy, CheckCircle2, Pencil } from 'lucide-react';
+import { Square, Sparkles, FileText, ChevronRight, Copy, CheckCircle2, Pencil, ScrollText } from 'lucide-react';
 
 import { MessageText } from '@/components/MessageText';
 import { SourcePanel } from '@/components/SourcePanel';
+import { SummaryModal } from '@/components/SummaryModal';
 import { MODELS, getContextWindow } from '@/components/ModelSelector';
 import { ChatComposer } from '@/components/ChatComposer';
 import { ChatErrorBanner } from '@/components/ChatErrorBanner';
@@ -85,6 +86,17 @@ function ChatBody({
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [showUndoToast, flashShowUndoToast] = useFlash(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  type SummaryStatus = 'idle' | 'streaming' | 'done' | 'error';
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [summaryText, setSummaryText] = useState('');
+  const [summaryStatus, setSummaryStatus] = useState<SummaryStatus>('idle');
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  // Message count snapshot at the moment the summary started streaming. Used
+  // to detect a stale cached summary on the next open instead of resetting
+  // mid-stream (which would scramble in-flight chunks into the now-empty
+  // buffer).
+  const [summaryGeneratedAt, setSummaryGeneratedAt] = useState<number | null>(null);
 
   // Custom fetch that adds editingMessageId to the body if present
   const customFetch = useCallback<typeof fetch>(
@@ -164,6 +176,68 @@ function ChatBody({
       alert('Failed to copy to clipboard');
     }
   }, [extractAnswerText, flashCopySuccess]);
+
+  // messages.length read inside handleSummaryStart needs to reflect the count
+  // at the moment the fetch begins. A ref avoids re-creating the callback (and
+  // therefore re-running the modal's fetch effect) every time a message lands.
+  const messagesLengthRef = useRef(messages.length);
+  useEffect(() => {
+    messagesLengthRef.current = messages.length;
+  }, [messages.length]);
+
+  const handleSummaryStart = useCallback(() => {
+    setSummaryText('');
+    setSummaryError(null);
+    setSummaryStatus('streaming');
+    setSummaryGeneratedAt(messagesLengthRef.current);
+  }, []);
+
+  const handleSummaryChunk = useCallback((chunk: string) => {
+    setSummaryText((prev) => prev + chunk);
+  }, []);
+
+  const handleSummaryFinish = useCallback(() => {
+    setSummaryStatus('done');
+  }, []);
+
+  const handleSummaryError = useCallback((message: string) => {
+    setSummaryStatus('error');
+    setSummaryError(message);
+  }, []);
+
+  const handleSummaryStop = useCallback(() => {
+    // User pressed Stop, or modal closed mid-stream: keep whatever text
+    // streamed so far, mark as done so Copy works on the partial result.
+    setSummaryStatus('done');
+  }, []);
+
+  const handleSummarySource = useCallback(
+    (source: Source, quote?: string) => {
+      // Close modal so SourcePanel is visible; text stays cached so the user
+      // can reopen and continue reading after inspecting the source.
+      setSummaryOpen(false);
+      setOpenPanel({ view: 'source', source, quote });
+    },
+    [],
+  );
+
+  const openSummary = useCallback(() => {
+    // Decide if the cached summary is still usable. A stale cache (conversation
+    // moved forward since the summary was generated), an error from the last
+    // attempt, or an empty 'done' state (user stopped before any chunks
+    // arrived) all warrant a fresh fetch. Otherwise we reopen with the cached
+    // text so the user can keep reading.
+    const isStale =
+      summaryGeneratedAt !== null && summaryGeneratedAt !== messages.length;
+    const isEmptyDone = summaryStatus === 'done' && !summaryText;
+    if (isStale || isEmptyDone || summaryStatus === 'error') {
+      setSummaryText('');
+      setSummaryError(null);
+      setSummaryStatus('idle');
+      setSummaryGeneratedAt(null);
+    }
+    setSummaryOpen(true);
+  }, [messages.length, summaryGeneratedAt, summaryStatus, summaryText]);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -376,6 +450,10 @@ function ChatBody({
     const wasEditing = editingMessageId !== null;
     sendMessage({ text: q });
     setInput('');
+    // Don't reset the summary here. If the modal is open and streaming, a
+    // reset would clear the buffer mid-stream while the in-flight fetch keeps
+    // appending chunks. The next open will detect the stale message count and
+    // refetch (see openSummary).
     if (wasEditing) {
       flashShowUndoToast(true, 3000);
     }
@@ -418,7 +496,7 @@ function ChatBody({
 
             {messages.some((m) => m.role === 'assistant') && !busy ? (
               <div className="flex flex-col gap-3 pl-12">
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <button
                     onClick={copyToClipboard}
                     disabled={!messages.some((m) => m.role === 'assistant')}
@@ -439,6 +517,17 @@ function ChatBody({
                         Copy Answer
                       </>
                     )}
+                  </button>
+                  <button
+                    onClick={openSummary}
+                    className={cn(
+                      'flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
+                      'border border-overlay/10 bg-overlay/5 text-fg/75 transition hover:bg-overlay/10 hover:text-fg',
+                    )}
+                    title="Summarise this conversation into a copyable note"
+                  >
+                    <ScrollText className="h-4 w-4" />
+                    Summarise
                   </button>
                 </div>
                 {cumulativeUsage && (
@@ -523,6 +612,22 @@ function ChatBody({
           onChange={setOpenPanel}
         />
       ) : null}
+
+      <SummaryModal
+        open={summaryOpen}
+        chatId={chatId}
+        text={summaryText}
+        status={summaryStatus}
+        errorMessage={summaryError}
+        sources={sources}
+        onOpenSource={handleSummarySource}
+        onClose={() => setSummaryOpen(false)}
+        onStart={handleSummaryStart}
+        onChunk={handleSummaryChunk}
+        onFinish={handleSummaryFinish}
+        onError={handleSummaryError}
+        onStop={handleSummaryStop}
+      />
     </div>
   );
 }
