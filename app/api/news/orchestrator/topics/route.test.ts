@@ -37,6 +37,7 @@ function makeRun(): OrchestratorRun {
     stage: 'checkpoint',
     today: '2026-05-14',
     timezone: 'America/New_York',
+    candidates: [],
     articles: [],
     distill: {
       topics: [{ topic: 'Existing topic', description: 'desc', articles: [] }],

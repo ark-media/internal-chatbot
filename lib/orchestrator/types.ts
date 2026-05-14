@@ -32,14 +32,17 @@ export type TopicWithSources = {
   articles: RatedArticle[];
 };
 
-// A lightweight keyword-search result — title/url/source only, no extracted
-// content. The orchestrator's /search route returns these; extraction into a
-// full Article happens only when the writer clicks "Add" in triage.
-export type SearchHit = {
+// A discovered-but-not-yet-extracted article reference — what the writer sees
+// and triages before grouping. Produced by Gemini discovery or keyword
+// search; URL verification and Tavily extraction are deferred to /group so
+// they run only on the survivors. `isFlagged` is the freshness flag, computed
+// against the run's `today` when the candidate enters the run.
+export type Candidate = {
   title: string;
   url: string;
   source: string;
   publicationDate: string | null;
+  isFlagged?: boolean;
 };
 
 export type DistillResult = {
@@ -96,6 +99,14 @@ export type OrchestratorRun = {
   stage: OrchestratorStage;
   today: string;
   timezone: string;
+  // The triage list: raw discovery/search candidates the writer ranks and
+  // prunes before grouping. Populated by `discover` /start; empty for `urls`
+  // and `topics` modes, which skip triage. Survivors are verified + extracted
+  // into `articles` by /group.
+  candidates: Candidate[];
+  // Extracted article pool. Populated at /group for `discover` runs, at
+  // /start for `urls`/`topics`. Checkpoint-stage gathers (attach/refetch/
+  // topics) append here.
   articles: Article[];
   distill: DistillResult | null;
   approvedTopics: TopicWithSources[] | null;
@@ -141,28 +152,28 @@ export function renumberIndicesAfterDelete(
   return next;
 }
 
-// Reorder a URL-keyed article array to match `urlOrder`. Articles appear in
-// the sequence `urlOrder` gives; any article whose URL is missing from
-// `urlOrder` is appended at the end in its original relative order — a
-// defensive fallback, since a well-formed triage reorder is an exact
-// permutation. URLs in `urlOrder` that match no article are ignored.
-// Used by the /triage `reorder` action; exported for unit testing.
-export function reorderArticlesByUrl(
-  articles: Article[],
+// Reorder a URL-keyed list to match `urlOrder`. Items appear in the sequence
+// `urlOrder` gives; any item whose URL is missing from `urlOrder` is appended
+// at the end in its original relative order — a defensive fallback, since a
+// well-formed triage reorder is an exact permutation. URLs in `urlOrder` that
+// match no item are ignored. Used by the /triage `reorder` action; exported
+// for unit testing.
+export function reorderByUrl<T extends { url: string }>(
+  items: T[],
   urlOrder: string[],
-): Article[] {
-  const byUrl = new Map(articles.map((a) => [a.url, a]));
+): T[] {
+  const byUrl = new Map(items.map((x) => [x.url, x]));
   const seen = new Set<string>();
-  const ordered: Article[] = [];
+  const ordered: T[] = [];
   for (const url of urlOrder) {
-    const a = byUrl.get(url);
-    if (a && !seen.has(url)) {
-      ordered.push(a);
+    const x = byUrl.get(url);
+    if (x && !seen.has(url)) {
+      ordered.push(x);
       seen.add(url);
     }
   }
-  for (const a of articles) {
-    if (!seen.has(a.url)) ordered.push(a);
+  for (const x of items) {
+    if (!seen.has(x.url)) ordered.push(x);
   }
   return ordered;
 }

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   deriveApprovedTopics,
   renumberIndicesAfterDelete,
-  reorderArticlesByUrl,
+  reorderByUrl,
   type Article,
   type TopicWithSources,
 } from './types';
@@ -99,38 +99,38 @@ describe('deriveApprovedTopics', () => {
   });
 });
 
-describe('reorderArticlesByUrl', () => {
+describe('reorderByUrl', () => {
   it('reorders to match the given URL order', () => {
     const articles = [article('a'), article('b'), article('c')];
-    const result = reorderArticlesByUrl(articles, ['c', 'a', 'b']);
+    const result = reorderByUrl(articles, ['c', 'a', 'b']);
     expect(result.map((a) => a.url)).toEqual(['c', 'a', 'b']);
   });
 
-  it('appends articles missing from the order, preserving original order', () => {
+  it('appends items missing from the order, preserving original order', () => {
     const articles = [article('a'), article('b'), article('c')];
-    const result = reorderArticlesByUrl(articles, ['c']);
+    const result = reorderByUrl(articles, ['c']);
     expect(result.map((a) => a.url)).toEqual(['c', 'a', 'b']);
   });
 
-  it('ignores URLs in the order that match no article', () => {
+  it('ignores URLs in the order that match no item', () => {
     const articles = [article('a'), article('b')];
-    const result = reorderArticlesByUrl(articles, ['b', 'ghost', 'a']);
+    const result = reorderByUrl(articles, ['b', 'ghost', 'a']);
     expect(result.map((a) => a.url)).toEqual(['b', 'a']);
   });
 
   it('ignores duplicate URLs in the order', () => {
     const articles = [article('a'), article('b')];
-    const result = reorderArticlesByUrl(articles, ['b', 'b', 'a']);
+    const result = reorderByUrl(articles, ['b', 'b', 'a']);
     expect(result.map((a) => a.url)).toEqual(['b', 'a']);
   });
 
-  it('returns an empty array when there are no articles', () => {
-    expect(reorderArticlesByUrl([], ['a'])).toEqual([]);
+  it('returns an empty array when there are no items', () => {
+    expect(reorderByUrl([], ['a'])).toEqual([]);
   });
 
   it('does not mutate the input array', () => {
     const articles = [article('a'), article('b')];
-    reorderArticlesByUrl(articles, ['b', 'a']);
+    reorderByUrl(articles, ['b', 'a']);
     expect(articles.map((a) => a.url)).toEqual(['a', 'b']);
   });
 });

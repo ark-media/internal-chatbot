@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { getNewsExamples } from '@/lib/news-prompt';
 import { distillTopics } from '@/lib/orchestrator/distill';
+import { extractCandidates } from '@/lib/orchestrator/source-gathering';
 import {
   ensureOrchestratorTables,
   loadRun,
@@ -14,12 +15,12 @@ export const runtime = 'nodejs';
 export const maxDuration = 300;
 
 // The triage ↔ checkpoint boundary.
-//   `group`   — triage → checkpoint: today's distillTopics() (group + score +
-//               summarize + extract quotes), lifted out of /start. Runs on
-//               demand against the survivors, so enrichment is only paid for
-//               articles that made it through triage.
-//   `regroup` — checkpoint → triage: drops the distill so the writer can
-//               re-rank/prune the pool and group again.
+//   `group`   — triage → checkpoint: verify + Tavily-extract the triaged
+//               candidates, then run distillTopics() (group + score +
+//               summarize + extract quotes). Verification and extraction were
+//               lifted out of /start, so they're only paid for the survivors.
+//   `regroup` — checkpoint → triage: drops the distill and the extracted
+//               article pool so the writer can re-rank/prune the candidates.
 const bodySchema = z.object({
   chatId: z.string().min(1),
   mode: z.enum(['group', 'regroup']).default('group'),
@@ -57,8 +58,10 @@ export async function POST(req: Request) {
   const run = await loadRun(body.chatId);
   if (!run) return Response.json({ error: 'run_not_found' }, { status: 404 });
 
-  // regroup — checkpoint → triage. Drops the distill (and any approval
-  // snapshot derived from it) so the writer is back to the raw pool.
+  // regroup — checkpoint → triage. Drops the distill, the extracted article
+  // pool, and any approval snapshot, so the writer is back to the raw
+  // candidate list. `run.candidates` is left intact — that's what they
+  // re-triage.
   if (body.mode === 'regroup') {
     if (run.stage !== 'checkpoint') {
       return Response.json({ error: 'wrong_stage', stage: run.stage }, { status: 409 });
@@ -66,6 +69,7 @@ export async function POST(req: Request) {
     const updated: OrchestratorRun = {
       ...run,
       stage: 'triage',
+      articles: [],
       distill: null,
       approvedTopics: null,
       approvedTopicIndices: undefined,
@@ -88,7 +92,7 @@ export async function POST(req: Request) {
   if (run.stage !== 'triage') {
     return Response.json({ error: 'wrong_stage', stage: run.stage }, { status: 409 });
   }
-  if (run.articles.length === 0) {
+  if (run.candidates.length === 0) {
     return Response.json(
       { error: 'no_articles', detail: 'Add at least one article before grouping.' },
       { status: 409 },
@@ -97,11 +101,27 @@ export async function POST(req: Request) {
 
   const started = Date.now();
   try {
-    const exampleScripts = await getNewsExamples();
-    const distill = await distillTopics(run.articles, exampleScripts);
+    // Verify + extract the triaged candidates (the first slow step), then
+    // distill the survivors into topics (the second).
+    const articles = await extractCandidates(run.candidates, run.today, req.signal);
+    if (articles.length === 0) {
+      // Every candidate 404'd or failed extraction. Leave the run in `triage`
+      // so the writer can adjust the list and retry.
+      return Response.json(
+        {
+          error: 'extraction_failed',
+          detail:
+            'None of the triaged articles could be opened. Remove or replace them and try again.',
+        },
+        { status: 502 },
+      );
+    }
 
-    // The distill pass is the slow part — the writer may have walked away.
-    // Don't persist a result they'll never see.
+    const exampleScripts = await getNewsExamples();
+    const distill = await distillTopics(articles, exampleScripts);
+
+    // Extraction + distill are the slow part — the writer may have walked
+    // away. Don't persist a result they'll never see.
     if (req.signal.aborted) {
       return new Response('client closed request', { status: 499 });
     }
@@ -109,6 +129,7 @@ export async function POST(req: Request) {
     const updated: OrchestratorRun = {
       ...run,
       stage: 'checkpoint',
+      articles,
       distill,
       updatedAt: new Date().toISOString(),
     };
@@ -127,7 +148,8 @@ export async function POST(req: Request) {
         event: 'orchestrator.group.complete',
         chatId: body.chatId,
         ms: Date.now() - started,
-        articleCount: run.articles.length,
+        candidateCount: run.candidates.length,
+        articleCount: articles.length,
         topicCount: distill.topics.length,
       }),
     );
@@ -135,11 +157,15 @@ export async function POST(req: Request) {
     return Response.json({
       stage: 'checkpoint',
       distill,
-      articleCount: run.articles.length,
+      articleCount: articles.length,
     });
   } catch (err) {
-    // Leave the run parked in `triage` so the writer can retry Group without
-    // losing their triaged list — a distill failure is recoverable.
+    // A writer-cancelled group surfaces as an abort — unwind quietly.
+    if (req.signal.aborted) {
+      return new Response('client closed request', { status: 499 });
+    }
+    // Otherwise leave the run parked in `triage` so the writer can retry Group
+    // without losing their triaged list — extract/distill failures recover.
     console.error(
       JSON.stringify({ event: 'orchestrator.group.error', chatId: body.chatId, err: String(err) }),
     );

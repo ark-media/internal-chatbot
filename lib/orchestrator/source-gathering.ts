@@ -4,7 +4,7 @@ import { google } from '@ai-sdk/google';
 import { ensureEnglish } from '../translate';
 import { cacheKey, getCached, setCached } from '../tool-cache';
 import { approvedHostnames, isApprovedSource, newsSources } from '../news-sources';
-import type { Article, SearchHit } from './types';
+import type { Article, Candidate } from './types';
 
 // -- Freshness window --------------------------------------------------------
 // `today` is YYYY-MM-DD anchored in the writer's local timezone — the client
@@ -195,13 +195,6 @@ function titleSimilarity(a: string, b: string): number {
 
 // -- Gemini google search discovery ------------------------------------------
 
-type Candidate = {
-  title: string;
-  url: string;
-  publicationDate: string | null;
-  source: string;
-};
-
 const DISCOVERY_PROMPT = (
   today: string,
   dateContext: string,
@@ -289,8 +282,7 @@ export async function discoverCandidates(
   return parseCandidates(text);
 }
 
-// Exported for testing. The Candidate type is file-local; tests pass a plain
-// object with the same shape.
+// Exported for testing.
 export async function verifyOrRecover(
   c: Candidate,
   signal?: AbortSignal,
@@ -331,7 +323,9 @@ export async function verifyOrRecover(
 
 // -- Public API --------------------------------------------------------------
 
-function inAcceptableRange(today: string, publicationDate: string | null): boolean {
+// Exported so triage-stage code (the /triage and /search routes) can flag
+// freshness on candidates without re-implementing the window logic.
+export function inAcceptableRange(today: string, publicationDate: string | null): boolean {
   if (!publicationDate) return false;
   return freshnessWindow(today).includes(publicationDate.slice(0, 10));
 }
@@ -367,9 +361,9 @@ export async function extractUrlToArticle(
 // Multi-domain keyword search across the approved outlets — the writer-facing
 // escape hatch for triage when Gemini discovery comes up short. Generalizes
 // `searchByTitle` (single-domain, used for URL recovery) to query every
-// approved hostname at once. Returns lightweight hits only; extraction is
-// deferred to `extractUrlToArticle` when the writer clicks "Add", so a search
-// that surfaces 12 results doesn't pay for 12 Tavily extracts.
+// approved hostname at once. Returns candidates only — adding one to the
+// triage list is just an append; verification and Tavily extraction wait for
+// /group, same as discovery candidates.
 //
 // Limitation: Tavily `include_domains` can't target specific X/Twitter
 // handles, so this covers the news sites and think tanks but not the 15 X
@@ -377,7 +371,7 @@ export async function extractUrlToArticle(
 export async function keywordSearch(
   query: string,
   signal?: AbortSignal,
-): Promise<SearchHit[]> {
+): Promise<Candidate[]> {
   const apiKey = process.env.TAVILY_API_KEY;
   if (!apiKey) throw new Error('TAVILY_API_KEY missing');
 
@@ -404,7 +398,7 @@ export async function keywordSearch(
   };
 
   const seen = new Set<string>();
-  const hits: SearchHit[] = [];
+  const hits: Candidate[] = [];
   for (const r of data.results ?? []) {
     if (typeof r.url !== 'string' || typeof r.title !== 'string') continue;
     if (seen.has(r.url)) continue;
@@ -428,13 +422,16 @@ export async function keywordSearch(
   return hits;
 }
 
-export async function gatherSources(opts: {
+// Discover → approval-filter → dedupe/cap. No URL verification, no Tavily
+// extraction — this is the raw candidate pool the writer triages. Verification
+// and extraction are deferred to `extractCandidates`, run later on only the
+// candidates that survive triage.
+export async function gatherCandidates(opts: {
   today: string;
-  timezone?: string;
   extraGuidance?: string;
   maxArticles?: number;
   signal?: AbortSignal;
-}): Promise<Article[]> {
+}): Promise<Candidate[]> {
   const { today, extraGuidance = '', maxArticles = 15, signal } = opts;
   const dateContext = freshnessContext(today);
 
@@ -444,17 +441,31 @@ export async function gatherSources(opts: {
   // Drop anything Gemini returned from outside the approved outlet list —
   // belt-and-suspenders backup to the prompt-level constraint.
   const approved = candidates.filter((c) => isApprovedSource(c.url));
-  if (approved.length === 0) return [];
 
-  // Dedupe by URL, cap before extraction (Tavily charges per call).
+  // Dedupe by URL and cap. Freshness is flagged from Gemini's claimed date;
+  // extraction can refine it later against the real publish date.
   const seen = new Set<string>();
   const deduped: Candidate[] = [];
   for (const c of approved) {
     if (seen.has(c.url)) continue;
     seen.add(c.url);
-    deduped.push(c);
+    deduped.push({ ...c, isFlagged: !inAcceptableRange(today, c.publicationDate) });
     if (deduped.length >= maxArticles) break;
   }
+  return deduped;
+}
+
+// Verify (and recover hallucinated 404s), then Tavily-extract a candidate list
+// into full Articles. This is where URL verification and per-article Tavily
+// cost is paid — callers that defer it (triage → /group) only pay for the
+// survivors. Extraction failures are dropped: the writer shouldn't cite a
+// source we couldn't read.
+export async function extractCandidates(
+  candidates: Candidate[],
+  today: string,
+  signal?: AbortSignal,
+): Promise<Article[]> {
+  if (candidates.length === 0) return [];
 
   // Verify URLs (and recover hallucinated ones) before paying for Tavily
   // extract. Dedupe again in case recovery collapses two candidates to the
@@ -462,13 +473,13 @@ export async function gatherSources(opts: {
   // collapse the entire run to zero articles.
   const verifiedSeen = new Set<string>();
   const verified: Candidate[] = [];
-  const settled = await Promise.allSettled(deduped.map((c) => verifyOrRecover(c, signal)));
+  const settled = await Promise.allSettled(candidates.map((c) => verifyOrRecover(c, signal)));
   for (const s of settled) {
     if (s.status === 'rejected') {
       // A cancelled gather surfaces here as a rejected settle — propagate it
       // instead of skipping, so the run actually stops.
       if (signal?.aborted) throw s.reason;
-      console.warn(`[gatherSources] verify threw, skipping: ${String(s.reason)}`);
+      console.warn(`[extractCandidates] verify threw, skipping: ${String(s.reason)}`);
       continue;
     }
     const c = s.value;
@@ -485,7 +496,7 @@ export async function gatherSources(opts: {
         // Backstop: even after URL verification, Tavily can fail (paywall,
         // bot block, transient). Drop rather than letting the writer cite a
         // source we couldn't read.
-        console.warn(`[gatherSources] extract failed; dropping: ${c.url} — ${result.note}`);
+        console.warn(`[extractCandidates] extract failed; dropping: ${c.url} — ${result.note}`);
         return null;
       }
       return {
@@ -500,4 +511,24 @@ export async function gatherSources(opts: {
   );
 
   return extracted.filter((a): a is Article => a !== null);
+}
+
+// Discover + verify + extract in one pass — the original behavior, kept for
+// checkpoint-stage topic gathers (/start `topics` mode, /topics, /refetch),
+// where the result drops straight into a topic and extraction can't be
+// deferred. The `discover` /start path uses `gatherCandidates` instead.
+export async function gatherSources(opts: {
+  today: string;
+  timezone?: string;
+  extraGuidance?: string;
+  maxArticles?: number;
+  signal?: AbortSignal;
+}): Promise<Article[]> {
+  const candidates = await gatherCandidates({
+    today: opts.today,
+    extraGuidance: opts.extraGuidance,
+    maxArticles: opts.maxArticles,
+    signal: opts.signal,
+  });
+  return extractCandidates(candidates, opts.today, opts.signal);
 }

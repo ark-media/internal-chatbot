@@ -10,6 +10,14 @@
 > §3/§5 below, which originally routed `urls` through triage; (3) triage removal
 > is permanent. Slice 5 kept `CheckpointView` per-topic attach/refetch intact —
 > the §8 two-surface overlap stays a documented v1 tradeoff.
+>
+> **Post-build correction.** The triage list holds **pre-extraction
+> candidates**, not extracted `Article`s. URL verification and Tavily
+> extraction were moved out of `/start` into `/group`, run only on the
+> survivors — so triage shows everything Gemini discovered (not just the URLs
+> that survive verify+extract), and extraction cost is paid only for kept
+> articles. The run carries a new `run.candidates: Candidate[]` for this; §4
+> and §5 below are updated to match.
 
 ---
 
@@ -66,13 +74,14 @@ urls     → gathering → [distill] → checkpoint → ...    (skips triage —
 topics   → gathering → checkpoint → ...                (skips triage — born grouped)
 ```
 
-- **`triage`** (new stage): a flat, draggable list of `run.articles`. The writer reorders (rank),
-  removes articles, and runs keyword searches to add more. One sticky action:
+- **`triage`** (new stage): a flat, draggable list of `run.candidates` — raw discovery hits
+  (title / url / source / date), **not yet verified or extracted**. The writer reorders (rank),
+  removes candidates, and runs keyword searches to add more. One sticky action:
   **"Group into topics (N)"**.
-- **`[group]`** (new action): the AI grouping pass — this is today's `distillTopics()`
-  (group + score + summarize + extract quotes), simply called *here*, on the survivors, instead
-  of inside `/start`. This resolves the enrichment-timing question: summaries and key quotes are
-  generated only for articles that survived triage, not for everything gathered.
+- **`[group]`** (new action): verify + Tavily-extract the surviving candidates into `run.articles`,
+  *then* run today's `distillTopics()` (group + score + summarize + extract quotes). Both URL
+  verification and extraction were lifted out of `/start` to here, so they — like the distill
+  enrichment — are only paid for candidates that survived triage, not for everything gathered.
 - **`checkpoint`**: essentially today's `CheckpointView`, now reached *after* grouping. Adds a
   "← Re-group" path back to `triage` (clears `distill`, stage → `triage`).
 - **`urls` and `topics` start modes** skip triage. `topics` is born grouped; `urls` keeps today's
@@ -85,14 +94,17 @@ Files: `lib/orchestrator/types.ts`, `lib/orchestrator/state.ts`
 
 - Add `'triage'` to the `OrchestratorStage` union:
   `gathering | triage | checkpoint | crafting | complete | error`.
-- `run.articles` **is** the triage list — it is already a flat, URL-deduped array. Reordering and
-  removing simply mutate this array.
+- Add `Candidate` (`title | url | source | publicationDate | isFlagged?`) and
+  `run.candidates: Candidate[]` — the triage list, a flat URL-deduped array of un-extracted
+  discovery/search hits. Reordering and removing simply mutate this array. `run.articles` keeps
+  its existing role: the *extracted* pool, populated by `/group` for `discover` runs (and still
+  by `/start` for `urls`/`topics`).
 - **Rank order persists across reloads** (it is just the array order — free) but **nothing
   downstream reads order** — `/generate` and `craftScript` ignore it. This is the "triage only"
   contract.
 - `run.distill` stays `null` until `[group]` runs. Today it is populated immediately after gather.
-- **No DB migration.** Runs are a single JSONB blob in `orchestrator_runs.state`. Old-shape runs
-  (no `triage` stage) keep working and age out naturally via the 7-day `expires_at`.
+- **No DB migration.** Runs are a single JSONB blob in `orchestrator_runs.state`; `run.candidates`
+  defaults to `[]` on load. Old-shape runs keep working and age out via the 7-day `expires_at`.
 
 ## 5. API routes
 
@@ -100,22 +112,23 @@ Directory: `app/api/news/orchestrator/`
 
 | Route | Change |
 |---|---|
-| `POST /start` | `discover` mode stops at `triage` — does **not** call `distillTopics()`. `urls` and `topics` modes unchanged (still land at `checkpoint`). |
-| `POST /group` | **New.** `mode: 'group'` runs `distillTopics()` on `run.articles` and advances `triage → checkpoint` (CAS on stage). `mode: 'regroup'` clears `distill` and goes `checkpoint → triage`. (Distill call lifted out of `/start`.) |
-| `POST /triage` | **New.** Actions `reorder` (new URL order), `remove` (url), and `add` (url — extracts a search hit into `run.articles`). Optimistic-locked via `saveRunIfUnchanged`, same pattern as `/topics`. |
-| `POST /search` | **New.** Keyword search — see §6. |
+| `POST /start` | `discover` mode gathers raw candidates (`gatherCandidates`) and stops at `triage` — **no** URL verification, **no** extraction, **no** `distillTopics()`. `urls` and `topics` modes unchanged (still land at `checkpoint`). |
+| `POST /group` | **New.** `mode: 'group'` verifies + extracts `run.candidates` into `run.articles`, then runs `distillTopics()` and advances `triage → checkpoint` (CAS on stage). `mode: 'regroup'` clears `distill` + `run.articles` and goes `checkpoint → triage`. |
+| `POST /triage` | **New.** Actions `reorder` (new URL order), `remove` (url), and `add` (a full `Candidate` — appended to `run.candidates`, **no extraction**). Optimistic-locked via `saveRunIfUnchanged`, same pattern as `/topics`. |
+| `POST /search` | **New.** Keyword search, returns `Candidate[]` — see §6. |
 | `POST /topics`, `/attach`, `/refetch`, `/generate`, `/refine`, `/edit`, `/undo`, `/save-learn` | Unchanged. `/generate` already CAS-flips from `checkpoint`. |
 
 ## 6. Keyword search (the net-new capability)
 
 There is no user-facing search today — discovery is Gemini-driven only.
 
-- **Library wrapper** (`lib/orchestrator/source-gathering.ts`): generalize the existing
-  `searchByTitle()` — already a Tavily `/search` call, currently locked to a single domain — into
-  a multi-domain keyword query using `include_domains: approvedHostnames`.
-- **`/search` route**: takes a query, returns candidate hits (title / url / source) **without
-  extraction** — cheap. The writer clicks "Add" on a result; *that* is when we call
-  `extractUrlToArticle()` and append to `run.articles`.
+- **Library wrapper** (`lib/orchestrator/source-gathering.ts`): `keywordSearch()` — a multi-domain
+  Tavily `/search` query using `include_domains: approvedHostnames`, alongside the existing
+  single-domain `searchByTitle()` used for URL recovery.
+- **`/search` route**: takes a query, returns `Candidate[]` (title / url / source / date) **without
+  extraction** — cheap. The writer clicks "Add" on a result, which simply appends the `Candidate`
+  to `run.candidates` via `/triage`. Verification and extraction wait for `/group`, exactly like
+  discovery candidates — there is no per-add extraction.
 - **Limitation:** Tavily domain-scoping cannot target specific X/Twitter *handles*, so keyword
   search effectively covers the news sites and think tanks, not the 15 X accounts. X stays
   Gemini-discovery-only. Surface this in the UI so writers aren't surprised.
@@ -125,14 +138,15 @@ There is no user-facing search today — discovery is Gemini-driven only.
 File: `app/(chat)/news/orchestrator/[id]/page.tsx`
 
 - **`TriageView`** (new component for stage `triage`):
-  - Sortable list of `run.articles` — drag handle, title, source, date, freshness flag, remove ✕.
+  - Sortable list of `run.candidates` — drag handle, title, source, date, freshness flag, remove ✕.
   - Keyword-search panel: query input → results list → "Add" per result.
   - Sticky footer: **"Group into topics (N)"** → `POST /group`.
-- **`ProgressCard`**: add a "Grouping articles into topics…" state for the `/group` call.
+- **`ProgressCard`**: add a "Grouping articles into topics…" state for the `/group` call (now
+  covers verify + extract + distill, so the copy quotes a longer wait).
 - **`CheckpointView`**: mostly reused. Add a "← Re-group" affordance (clears `distill`,
   stage → `triage`), analogous to today's "Edit topics & regenerate" (`complete → checkpoint`).
-- **`StartCard`** / progress copy: `discover` and `urls` completion now lands at `triage`, not
-  `checkpoint`.
+- **`StartCard`** / progress copy: `discover` completion now lands at `triage`, not `checkpoint`
+  (`urls` is unchanged — see the implementation note).
 
 ### New dependency
 

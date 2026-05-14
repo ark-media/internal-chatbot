@@ -1,25 +1,27 @@
 import { z } from 'zod';
 
-import { extractUrlToArticle } from '@/lib/orchestrator/source-gathering';
+import { inAcceptableRange } from '@/lib/orchestrator/source-gathering';
 import {
   ensureOrchestratorTables,
   loadRun,
   saveRunIfUnchanged,
 } from '@/lib/orchestrator/state';
 import {
-  reorderArticlesByUrl,
+  reorderByUrl,
+  type Candidate,
   type OrchestratorRun,
 } from '@/lib/orchestrator/types';
 import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
-// `reorder`/`remove` are pure array mutations; `add` does one Tavily extract.
-// All finish well inside this budget.
+// All three actions are pure array mutations on the JSONB blob — no model
+// calls, no fetches (extraction is deferred to /group) — so they're fast.
 export const maxDuration = 60;
 
-// All three actions mutate `run.articles` — that array *is* the triage list.
+// All three actions mutate `run.candidates` — that array *is* the triage list.
 // `reorder` carries the full URL list in the writer's working order; `remove`
-// drops one URL; `add` extracts a writer-chosen search hit and appends it.
+// drops one URL; `add` appends a writer-chosen search hit. None of them
+// extract — verification and Tavily extraction wait for /group.
 const bodySchema = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('reorder'),
@@ -34,7 +36,12 @@ const bodySchema = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('add'),
     chatId: z.string().min(1),
-    url: z.string().url(),
+    candidate: z.object({
+      title: z.string().min(1).max(500),
+      url: z.string().url(),
+      source: z.string().min(1).max(200),
+      publicationDate: z.string().min(1).max(40).nullable(),
+    }),
   }),
 ]);
 
@@ -70,34 +77,41 @@ export async function POST(req: Request) {
   const run = await loadRun(body.chatId);
   if (!run) return Response.json({ error: 'run_not_found' }, { status: 404 });
   // Triage actions only make sense while the run sits in `triage`. Once
-  // grouped, the article pool is frozen behind the topic structure — the UI
+  // grouped, the candidate list is frozen behind the topic structure — the UI
   // pushes edits through /topics, /attach, /refetch instead.
   if (run.stage !== 'triage') {
     return Response.json({ error: 'wrong_stage', stage: run.stage }, { status: 409 });
   }
 
-  let articles = run.articles;
+  let candidates = run.candidates;
   if (body.action === 'reorder') {
-    articles = reorderArticlesByUrl(run.articles, body.order);
+    candidates = reorderByUrl(run.candidates, body.order);
   } else if (body.action === 'remove') {
-    articles = run.articles.filter((a) => a.url !== body.url);
+    candidates = run.candidates.filter((c) => c.url !== body.url);
   } else {
-    // add — extract the writer-chosen search hit, deduped by URL like every
-    // other path that appends to the pool.
-    if (run.articles.some((a) => a.url === body.url)) {
+    // add — append a writer-chosen search hit, deduped by URL. No extraction:
+    // verification + Tavily extract happen at /group with every other
+    // candidate. Freshness is re-flagged server-side against the run's date.
+    if (run.candidates.some((c) => c.url === body.candidate.url)) {
       return Response.json({
         stage: 'triage',
-        articleCount: run.articles.length,
+        candidateCount: run.candidates.length,
         note: 'already_added',
       });
     }
-    const article = await extractUrlToArticle(body.url, run.today);
-    articles = [...run.articles, article];
+    const added: Candidate = {
+      title: body.candidate.title,
+      url: body.candidate.url,
+      source: body.candidate.source,
+      publicationDate: body.candidate.publicationDate,
+      isFlagged: !inAcceptableRange(run.today, body.candidate.publicationDate),
+    };
+    candidates = [...run.candidates, added];
   }
 
   const updated: OrchestratorRun = {
     ...run,
-    articles,
+    candidates,
     updatedAt: new Date().toISOString(),
   };
 
@@ -111,5 +125,5 @@ export async function POST(req: Request) {
     );
   }
 
-  return Response.json({ stage: 'triage', articleCount: articles.length });
+  return Response.json({ stage: 'triage', candidateCount: candidates.length });
 }

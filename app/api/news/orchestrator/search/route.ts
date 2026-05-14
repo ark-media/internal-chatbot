@@ -1,6 +1,9 @@
 import { z } from 'zod';
 
-import { keywordSearch } from '@/lib/orchestrator/source-gathering';
+import {
+  inAcceptableRange,
+  keywordSearch,
+} from '@/lib/orchestrator/source-gathering';
 import { ensureOrchestratorTables, loadRun } from '@/lib/orchestrator/state';
 import { checkRateLimit } from '@/lib/rate-limit';
 
@@ -52,7 +55,13 @@ export async function POST(req: Request) {
 
   try {
     const hits = await keywordSearch(body.query, req.signal);
-    return Response.json({ hits });
+    // Flag freshness against the run's date so the search panel shows the
+    // same "older story" badge the triage list does.
+    const flagged = hits.map((h) => ({
+      ...h,
+      isFlagged: !inAcceptableRange(run.today, h.publicationDate),
+    }));
+    return Response.json({ hits: flagged });
   } catch (err) {
     if (req.signal.aborted) {
       return new Response('client closed request', { status: 499 });

@@ -4,6 +4,7 @@ import { getNewsExamples } from '@/lib/news-prompt';
 import { distillTopics } from '@/lib/orchestrator/distill';
 import {
   extractUrlToArticle,
+  gatherCandidates,
   gatherSources,
 } from '@/lib/orchestrator/source-gathering';
 import {
@@ -61,6 +62,7 @@ function newRun(
     stage: 'gathering',
     today,
     timezone,
+    candidates: [],
     articles: [],
     distill: null,
     approvedTopics: null,
@@ -227,12 +229,13 @@ export async function POST(req: Request) {
       });
     }
 
-    // mode === 'discover' — gather the raw article pool and stop at `triage`.
-    // The writer ranks/prunes the list, then explicitly groups via POST
-    // /group, which is where distillTopics() now runs (lifted out of /start).
-    const articles = await gatherSources({ today, timezone });
+    // mode === 'discover' — gather the raw candidate pool and stop at
+    // `triage`. No URL verification, no Tavily extraction here: the writer
+    // ranks/prunes the candidate list, then /group verifies + extracts the
+    // survivors and runs distillTopics().
+    const candidates = await gatherCandidates({ today });
 
-    if (articles.length === 0) {
+    if (candidates.length === 0) {
       const errored: OrchestratorRun = {
         ...initial,
         stage: 'error',
@@ -250,7 +253,7 @@ export async function POST(req: Request) {
     const run: OrchestratorRun = {
       ...initial,
       stage: 'triage',
-      articles,
+      candidates,
       updatedAt: new Date().toISOString(),
     };
     await saveRun(run);
@@ -261,14 +264,14 @@ export async function POST(req: Request) {
         mode: 'discover',
         chatId,
         ms: Date.now() - started,
-        articleCount: articles.length,
+        candidateCount: candidates.length,
         stage: 'triage',
       }),
     );
 
     return Response.json({
       stage: 'triage',
-      articleCount: articles.length,
+      candidateCount: candidates.length,
     });
   } catch (err) {
     const errored = await loadRun(chatId);

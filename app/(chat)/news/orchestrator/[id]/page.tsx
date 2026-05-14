@@ -50,13 +50,12 @@ import { notifyChatUpdated } from '@/lib/chat-refresh';
 import { cn } from '@/lib/cn';
 import {
   renumberIndicesAfterDelete,
-  type Article,
+  type Candidate,
   type DistillResult,
   type OrchestratorRun,
   type RatedArticle,
   type RefineEntry,
   type Script,
-  type SearchHit,
   type TopicWithSources,
 } from '@/lib/orchestrator/types';
 
@@ -78,7 +77,7 @@ type BusyState =
 
 type StartResponse =
   | { stage: 'checkpoint'; distill: DistillResult; articleCount: number }
-  | { stage: 'triage'; articleCount: number }
+  | { stage: 'triage'; candidateCount: number }
   | { stage: 'error'; errorMessage: string };
 
 type GenerateResponse =
@@ -295,18 +294,19 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
     }
   }, [chatId, refresh]);
 
-  // Triage edits update the local article list optimistically for snappy drag
-  // feedback, then persist. The /triage route CAS-writes, so a lost race
+  // Triage edits update the local candidate list optimistically for snappy
+  // drag feedback, then persist. The /triage route CAS-writes, so a lost race
   // surfaces as an error and the follow-up refresh pulls the server truth.
   const triageEdit = useCallback(
     async (
-      optimistic: Article[],
+      optimistic: Candidate[],
       payload:
         | { action: 'reorder'; order: string[] }
-        | { action: 'remove'; url: string },
+        | { action: 'remove'; url: string }
+        | { action: 'add'; candidate: Candidate },
     ) => {
       setError(null);
-      setRun((prev) => (prev ? { ...prev, articles: optimistic } : prev));
+      setRun((prev) => (prev ? { ...prev, candidates: optimistic } : prev));
       setBusy('triage');
       try {
         const res = await fetch('/api/news/orchestrator/triage', {
@@ -332,14 +332,14 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
   );
 
   const reorderArticles = useCallback(
-    (next: Article[]) =>
-      triageEdit(next, { action: 'reorder', order: next.map((a) => a.url) }),
+    (next: Candidate[]) =>
+      triageEdit(next, { action: 'reorder', order: next.map((c) => c.url) }),
     [triageEdit],
   );
 
   const removeArticle = useCallback(
     (url: string) => {
-      const next = (run?.articles ?? []).filter((a) => a.url !== url);
+      const next = (run?.candidates ?? []).filter((c) => c.url !== url);
       return triageEdit(next, { action: 'remove', url });
     },
     [run, triageEdit],
@@ -348,7 +348,7 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
   // Keyword search is read-only — it doesn't touch the run, so it stays off
   // the global busy lock and the search panel owns its own loading state.
   const searchArticles = useCallback(
-    async (query: string): Promise<SearchHit[]> => {
+    async (query: string): Promise<Candidate[]> => {
       const res = await fetch('/api/news/orchestrator/search', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -356,35 +356,20 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
       });
       const data = await res.json();
       if ('error' in data) throw new Error(data.detail || data.error);
-      return data.hits as SearchHit[];
+      return data.hits as Candidate[];
     },
     [chatId],
   );
 
-  // Adding a hit extracts it server-side, so the new article only exists after
-  // the refresh — no optimistic insert. It still holds the busy lock so it
-  // can't race a reorder.
+  // Adding a search hit is just an append — extraction is deferred to /group —
+  // so it updates optimistically like reorder and remove.
   const addArticle = useCallback(
-    async (url: string) => {
-      setError(null);
-      setBusy('triage');
-      try {
-        const res = await fetch('/api/news/orchestrator/triage', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ action: 'add', chatId, url }),
-        });
-        const data = await res.json();
-        if ('error' in data) setError(data.detail || data.error);
-        await refresh();
-      } catch (err) {
-        setError(String(err).slice(0, 300));
-        await refresh();
-      } finally {
-        setBusy(null);
-      }
+    (candidate: Candidate) => {
+      const existing = run?.candidates ?? [];
+      if (existing.some((c) => c.url === candidate.url)) return Promise.resolve();
+      return triageEdit([...existing, candidate], { action: 'add', candidate });
     },
-    [chatId, refresh],
+    [run, triageEdit],
   );
 
   const refetch = useCallback(
@@ -595,11 +580,11 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
 
           {showTriage && run ? (
             <TriageView
-              articles={run.articles}
+              candidates={run.candidates}
               onReorder={reorderArticles}
               onRemove={removeArticle}
               onSearch={searchArticles}
-              onAddUrl={addArticle}
+              onAddCandidate={addArticle}
               onGroup={group}
               busy={busy}
             />
@@ -608,7 +593,7 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
           {busy === 'group' ? (
             <ProgressCard
               label="Grouping articles into topics…"
-              detail="Reading each survivor, clustering into topics, scoring sources, and pulling quotes. Typically 30–90 seconds."
+              detail="Verifying and extracting each survivor, clustering into topics, scoring sources, and pulling quotes. Typically 60–150 seconds."
             />
           ) : null}
 
@@ -902,25 +887,25 @@ function ProgressCard({ label, detail }: { label: string; detail: string }) {
 // ---------- Triage ----------
 
 function TriageView({
-  articles,
+  candidates,
   onReorder,
   onRemove,
   onSearch,
-  onAddUrl,
+  onAddCandidate,
   onGroup,
   busy,
 }: {
-  articles: Article[];
-  onReorder: (next: Article[]) => void;
+  candidates: Candidate[];
+  onReorder: (next: Candidate[]) => void;
   onRemove: (url: string) => void;
-  onSearch: (query: string) => Promise<SearchHit[]>;
-  onAddUrl: (url: string) => void;
+  onSearch: (query: string) => Promise<Candidate[]>;
+  onAddCandidate: (candidate: Candidate) => void;
   onGroup: () => void;
   busy: BusyState;
 }) {
   const existingUrls = useMemo(
-    () => new Set(articles.map((a) => a.url)),
-    [articles],
+    () => new Set(candidates.map((c) => c.url)),
+    [candidates],
   );
   const sensors = useSensors(
     // A small distance threshold so a click on the title link isn't swallowed
@@ -936,25 +921,25 @@ function TriageView({
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    const oldIndex = articles.findIndex((a) => a.url === active.id);
-    const newIndex = articles.findIndex((a) => a.url === over.id);
+    const oldIndex = candidates.findIndex((c) => c.url === active.id);
+    const newIndex = candidates.findIndex((c) => c.url === over.id);
     if (oldIndex === -1 || newIndex === -1) return;
-    onReorder(arrayMove(articles, oldIndex, newIndex));
+    onReorder(arrayMove(candidates, oldIndex, newIndex));
   };
 
   return (
     <div className="flex flex-col gap-4">
       <div className="rounded-lg border border-overlay/10 bg-overlay/[0.02] px-4 py-3 text-sm text-fg/70">
         <span className="font-semibold text-fg">
-          {articles.length} article{articles.length === 1 ? '' : 's'} gathered.
+          {candidates.length} article{candidates.length === 1 ? '' : 's'} found.
         </span>{' '}
-        Drag to rank, remove what you don&rsquo;t want, then group what&rsquo;s left into
-        topics.
+        This is the raw discovery list — drag to rank, remove what you don&rsquo;t want,
+        then group what&rsquo;s left. Sources are verified and read when you group.
       </div>
 
-      {articles.length === 0 ? (
+      {candidates.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-overlay/15 bg-overlay/[0.01] p-6 text-center text-sm text-fg/55">
-          No articles left in the pool. Start a new run to pull stories.
+          No articles left in the pool. Search below to add some, or start a new run.
         </div>
       ) : (
         <DndContext
@@ -963,16 +948,16 @@ function TriageView({
           onDragEnd={handleDragEnd}
         >
           <SortableContext
-            items={articles.map((a) => a.url)}
+            items={candidates.map((c) => c.url)}
             strategy={verticalListSortingStrategy}
           >
             <div className="flex flex-col gap-2">
-              {articles.map((article, i) => (
+              {candidates.map((candidate, i) => (
                 <TriageRow
-                  key={article.url}
-                  article={article}
+                  key={candidate.url}
+                  candidate={candidate}
                   index={i}
-                  onRemove={() => onRemove(article.url)}
+                  onRemove={() => onRemove(candidate.url)}
                   locked={locked}
                 />
               ))}
@@ -984,14 +969,14 @@ function TriageView({
       <TriageSearchPanel
         existingUrls={existingUrls}
         onSearch={onSearch}
-        onAdd={onAddUrl}
+        onAdd={onAddCandidate}
         busy={busy}
       />
 
       <div className="sticky bottom-0 -mx-6 mt-2 border-t border-overlay/10 bg-canvas/90 px-6 py-4 backdrop-blur">
         <button
           onClick={onGroup}
-          disabled={busy !== null || articles.length === 0}
+          disabled={busy !== null || candidates.length === 0}
           className={cn(
             'w-full rounded-lg bg-sky-brand px-4 py-3 text-sm font-semibold text-ink-950',
             'transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50',
@@ -1002,7 +987,7 @@ function TriageView({
               <Loader2 className="h-4 w-4 animate-spin" /> Grouping articles…
             </span>
           ) : (
-            `Group into topics (${articles.length})`
+            `Group into topics (${candidates.length})`
           )}
         </button>
       </div>
@@ -1011,20 +996,19 @@ function TriageView({
 }
 
 function TriageRow({
-  article,
+  candidate,
   index,
   onRemove,
   locked,
 }: {
-  article: Article;
+  candidate: Candidate;
   index: number;
   onRemove: () => void;
   locked: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
-    useSortable({ id: article.url, disabled: locked });
+    useSortable({ id: candidate.url, disabled: locked });
   const style = { transform: CSS.Transform.toString(transform), transition };
-  const flagged = article.isFlagged || article.fetchError;
 
   return (
     <div
@@ -1037,7 +1021,7 @@ function TriageRow({
     >
       <button
         type="button"
-        aria-label={`Reorder ${article.title}`}
+        aria-label={`Reorder ${candidate.title}`}
         disabled={locked}
         className={cn(
           'mt-0.5 shrink-0 rounded p-1 text-fg/30 transition',
@@ -1056,33 +1040,33 @@ function TriageRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-[0.7rem] uppercase tracking-wider text-fg/45">
-            {article.source}
+            {candidate.source}
           </span>
-          {article.publicationDate ? (
+          {candidate.publicationDate ? (
             <span className="text-[0.7rem] text-fg/35">
-              {article.publicationDate.slice(0, 10)}
+              {candidate.publicationDate.slice(0, 10)}
             </span>
           ) : null}
-          {flagged ? (
+          {candidate.isFlagged ? (
             <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[0.65rem] uppercase tracking-wider text-amber-200">
-              {article.fetchError ? 'couldn’t open' : 'older story'}
+              older story
             </span>
           ) : null}
         </div>
         <a
-          href={article.url}
+          href={candidate.url}
           target="_blank"
           rel="noopener noreferrer"
           className="block truncate text-sm text-fg/85 transition hover:text-fg"
         >
-          {article.title}
+          {candidate.title}
         </a>
       </div>
       <button
         type="button"
         onClick={onRemove}
         disabled={locked}
-        aria-label={`Remove ${article.title}`}
+        aria-label={`Remove ${candidate.title}`}
         className="mt-0.5 shrink-0 rounded p-1 text-fg/30 transition hover:bg-red-500/15 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-40"
       >
         <X className="h-4 w-4" />
@@ -1098,12 +1082,12 @@ function TriageSearchPanel({
   busy,
 }: {
   existingUrls: Set<string>;
-  onSearch: (query: string) => Promise<SearchHit[]>;
-  onAdd: (url: string) => void;
+  onSearch: (query: string) => Promise<Candidate[]>;
+  onAdd: (candidate: Candidate) => void;
   busy: BusyState;
 }) {
   const [query, setQuery] = useState('');
-  const [hits, setHits] = useState<SearchHit[] | null>(null);
+  const [hits, setHits] = useState<Candidate[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
 
@@ -1198,7 +1182,7 @@ function TriageSearchPanel({
                     </a>
                   </div>
                   <button
-                    onClick={() => onAdd(hit.url)}
+                    onClick={() => onAdd(hit)}
                     disabled={added || busy !== null}
                     className="mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-md border border-overlay/15 px-2 py-1 text-xs text-fg/70 transition hover:border-overlay/30 hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
                   >
