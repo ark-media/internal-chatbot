@@ -3,8 +3,8 @@ import { google } from '@ai-sdk/google';
 
 import { ensureEnglish } from '../translate';
 import { cacheKey, getCached, setCached } from '../tool-cache';
-import { isApprovedSource, newsSources } from '../news-sources';
-import type { Article } from './types';
+import { approvedHostnames, isApprovedSource, newsSources } from '../news-sources';
+import type { Article, Candidate } from './types';
 
 // -- Freshness window --------------------------------------------------------
 // `today` is YYYY-MM-DD anchored in the writer's local timezone — the client
@@ -36,7 +36,7 @@ function freshnessWindow(today: string): string[] {
   return dates;
 }
 
-function freshnessContext(today: string): string {
+export function freshnessContext(today: string): string {
   const anchor = parseLocalDate(today);
   const dow = anchor.getUTCDay();
   const isMonday = dow === 1;
@@ -47,13 +47,22 @@ function freshnessContext(today: string): string {
   return `Today is ${today}.\n\nAcceptable publication dates: ${list}. Prioritize the freshest stories — articles from the last ~24 hours.`;
 }
 
+// The freshness window as a Tavily `start_date`/`end_date` pair. `window[0]`
+// is today; the last element is the earliest acceptable date (yesterday, or
+// Saturday on Mondays). Tavily filters on publish/update date — `inAcceptableRange`
+// still does the authoritative per-candidate flagging downstream.
+function freshnessRange(today: string): { startDate: string; endDate: string } {
+  const window = freshnessWindow(today);
+  return { startDate: window[window.length - 1], endDate: window[0] };
+}
+
 // -- Tavily Extract (full-text fetch) ----------------------------------------
 
 type ExtractResult =
   | { ok: true; title: string; text: string; date: string | null; source: string }
   | { ok: false; note: string };
 
-async function extractArticle(url: string): Promise<ExtractResult> {
+async function extractArticle(url: string, signal?: AbortSignal): Promise<ExtractResult> {
   const apiKey = process.env.TAVILY_API_KEY;
   if (!apiKey) return { ok: false, note: 'TAVILY_API_KEY missing' };
 
@@ -66,6 +75,7 @@ async function extractArticle(url: string): Promise<ExtractResult> {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ api_key: apiKey, urls: [url], extract_depth: 'advanced' }),
+      signal,
     });
     if (!resp.ok) {
       return { ok: false, note: `Tavily ${resp.status}` };
@@ -82,7 +92,7 @@ async function extractArticle(url: string): Promise<ExtractResult> {
     const r = data.results?.[0];
     if (!r) return { ok: false, note: 'no content' };
 
-    const text = await ensureEnglish(r.raw_content ?? '');
+    const text = await ensureEnglish(r.raw_content ?? '', signal);
     const result: ExtractResult = {
       ok: true,
       title: r.title ?? 'Untitled',
@@ -93,6 +103,9 @@ async function extractArticle(url: string): Promise<ExtractResult> {
     await setCached(key, result);
     return result;
   } catch (err) {
+    // A cancelled gather must abort the whole run — don't bury it as a
+    // per-article failure.
+    if (signal?.aborted) throw err;
     return { ok: false, note: String(err).slice(0, 200) };
   }
 }
@@ -110,15 +123,19 @@ const VERIFY_TIMEOUT_MS = 5000;
 // articles that happen to mention shared keywords.
 const TITLE_SIMILARITY_THRESHOLD = 0.4;
 
-async function headStatus(url: string): Promise<number> {
+async function headStatus(url: string, signal?: AbortSignal): Promise<number> {
+  const timeout = AbortSignal.timeout(VERIFY_TIMEOUT_MS);
   try {
     const r = await fetch(url, {
       method: 'HEAD',
       redirect: 'follow',
-      signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
+      signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
     });
     return r.status;
-  } catch {
+  } catch (err) {
+    // The 5s timeout aborting is an expected dead-URL signal — fall through
+    // to 0. A caller-initiated abort means the whole gather was cancelled.
+    if (signal?.aborted) throw err;
     return 0;
   }
 }
@@ -126,9 +143,11 @@ async function headStatus(url: string): Promise<number> {
 async function searchByTitle(
   title: string,
   domain: string,
+  signal?: AbortSignal,
 ): Promise<{ url: string; title: string } | null> {
   const apiKey = process.env.TAVILY_API_KEY;
   if (!apiKey) return null;
+  const timeout = AbortSignal.timeout(VERIFY_TIMEOUT_MS);
   try {
     const resp = await fetch('https://api.tavily.com/search', {
       method: 'POST',
@@ -139,7 +158,7 @@ async function searchByTitle(
         include_domains: [domain],
         max_results: 3,
       }),
-      signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
+      signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
     });
     if (!resp.ok) return null;
     const data = (await resp.json()) as {
@@ -151,7 +170,9 @@ async function searchByTitle(
       url: top.url,
       title: typeof top.title === 'string' ? top.title : '',
     };
-  } catch {
+  } catch (err) {
+    // Timeout → treat as no recovery found. Caller-initiated abort → propagate.
+    if (signal?.aborted) throw err;
     return null;
   }
 }
@@ -181,102 +202,375 @@ function titleSimilarity(a: string, b: string): number {
   return intersection / (ta.size + tb.size - intersection);
 }
 
-// -- Gemini google search discovery ------------------------------------------
+// -- Gemini X/Twitter discovery ----------------------------------------------
+// Article discovery moved to Tavily (see `discoverCandidates` below) — fast,
+// and it returns real date-filtered URLs. But Tavily's `include_domains`
+// can't target specific X/Twitter handles, so posts from the approved
+// handles still need grounded Gemini search. This prompt is scoped to *only*
+// those handles, so it's far narrower than the old all-outlet discovery.
 
-type Candidate = {
-  title: string;
-  url: string;
-  publicationDate: string | null;
-  source: string;
-};
-
-const DISCOVERY_PROMPT = (
+const X_DISCOVERY_PROMPT = (
   today: string,
   dateContext: string,
-  outletList: string,
-  extraGuidance: string,
-) => `You are a news researcher gathering source candidates for the *Ark News Daily* briefing — a 6–10 minute show on Israel, Jews, and the Middle East. Today is ${today}.
+  handleList: string,
+) => `You are a news researcher gathering recent X/Twitter posts for the *Ark News Daily* briefing — a 6–10 minute show on Israel, Jews, and the Middle East. Today is ${today}.
 
 ${dateContext}
 
-Find the most newsworthy 12–15 articles about Israel, Jews, and the Middle East from the acceptable date range above. Prioritize:
-- Major policy shifts, military or diplomatic developments
-- Stories with broader significance (not just incremental updates)
-- A mix of perspectives where the story is contested
+Find the most newsworthy recent posts from ONLY these X/Twitter accounts:
+${handleList}
 
-APPROVED OUTLETS (hard constraint — only these are allowed):
-${outletList}
+Hard constraints:
+- ONLY return posts from the handles listed above. Do not include posts from any other account, however relevant.
+- Return individual post URLs — status links of the form https://x.com/{handle}/status/{id}. Not profile pages, not search pages.
+- Prioritize posts that break news, add original reporting, or give sharp analysis on Israel, Jews, and the Middle East.
+- Posts must fall within the acceptable date range above.
 
-ONLY return articles from the approved outlets above. Do not include articles from any other publication, regardless of how reputable or relevant they are — including The Guardian, BBC, CNN, Middle East Eye, or any outlet not on this list. If a search result is from a non-approved outlet, exclude it. If you cannot find enough approved-outlet articles, return fewer than 12 rather than padding with non-approved sources.
-
-For X/Twitter accounts on the list, individual posts (status URLs) from those handles count as approved.
-
-${extraGuidance ? `Additional guidance from the writer:\n${extraGuidance}\n\n` : ''}For each article return a strict JSON array. No prose, no markdown fencing — just valid JSON. Each element:
+Return a strict JSON array. No prose, no markdown fencing — just valid JSON. Each element:
 
 { "title": string, "url": string, "publicationDate": "YYYY-MM-DD" or null, "source": string }
 
-The "source" field must match the outlet name from the approved list. Use the google_search tool to find articles. Cite real URLs only.`;
+"title" is a one-line summary of what the post says. "source" is the account's display name. Use the google_search tool to find posts. Cite real status URLs only.`;
 
-const candidateArrayRegex = /\[[\s\S]*\]/;
+// Gemini's grounded-search tool sometimes hands back its own redirect URLs
+// (https://vertexaisearch.cloud.google.com/grounding-api-redirect/...) instead
+// of the real article links. They're unusable downstream — `isApprovedSource`
+// rejects the Google host, so a run full of them silently filters to zero.
+// Drop them at parse time; `discoverCandidates` retries when discovery comes
+// up short.
+const GROUNDING_REDIRECT_HOST = 'vertexaisearch.cloud.google.com';
 
-function parseCandidates(raw: string): Candidate[] {
-  const match = raw.match(candidateArrayRegex);
-  if (!match) return [];
+// Pull the first balanced top-level JSON array out of `raw`. Gemini wraps the
+// array in markdown fences and sometimes trails it with grounding prose that
+// itself contains brackets ("Sources: [1], [2]"); a greedy /\[[\s\S]*\]/
+// over-captures that trailing text and JSON.parse throws. Scan from the first
+// `[` to its matching `]`, tracking string literals so brackets inside titles
+// don't skew the depth count.
+function extractJsonArray(raw: string): string | null {
+  const start = raw.indexOf('[');
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < raw.length; i++) {
+    const ch = raw[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '[') depth++;
+    else if (ch === ']' && --depth === 0) return raw.slice(start, i + 1);
+  }
+  return null;
+}
+
+// Exported for unit testing.
+export function parseCandidates(raw: string): Candidate[] {
+  const json = extractJsonArray(raw);
+  if (!json) return [];
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(match[0]) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap((c): Candidate[] => {
-      if (!c || typeof c !== 'object') return [];
-      const o = c as Record<string, unknown>;
-      const url = typeof o.url === 'string' ? o.url : null;
-      const title = typeof o.title === 'string' ? o.title : null;
-      if (!url || !title) return [];
-      try { new URL(url); } catch { return []; }
-      return [{
-        title,
-        url,
-        publicationDate: typeof o.publicationDate === 'string' ? o.publicationDate : null,
-        source: typeof o.source === 'string' ? o.source : new URL(url).hostname,
-      }];
-    });
+    parsed = JSON.parse(json);
   } catch {
     return [];
   }
+  if (!Array.isArray(parsed)) return [];
+  return parsed.flatMap((c): Candidate[] => {
+    if (!c || typeof c !== 'object') return [];
+    const o = c as Record<string, unknown>;
+    const url = typeof o.url === 'string' ? o.url : null;
+    const title = typeof o.title === 'string' ? o.title : null;
+    if (!url || !title) return [];
+    let parsedUrl: URL;
+    try { parsedUrl = new URL(url); } catch { return []; }
+    if (parsedUrl.hostname === GROUNDING_REDIRECT_HOST) return [];
+    return [{
+      title,
+      url,
+      publicationDate: typeof o.publicationDate === 'string' ? o.publicationDate : null,
+      source: typeof o.source === 'string' ? o.source : parsedUrl.hostname,
+    }];
+  });
 }
 
-async function discoverCandidates(
-  today: string,
-  dateContext: string,
-  extraGuidance: string,
-): Promise<Candidate[]> {
-  const outletList = [
-    `English-language outlets:\n${newsSources.englishSites.map((s) => `  - ${s}`).join('\n')}`,
-    `Hebrew-language outlets:\n${newsSources.hebrewSites.map((s) => `  - ${s}`).join('\n')}`,
-    `X/Twitter accounts:\n${newsSources.xAccounts.map((a) => `  - ${a.handle} (${a.name})`).join('\n')}`,
-    `Analysis and think tanks:\n${newsSources.analysisAndThinkTanks.map((s) => `  - ${s}`).join('\n')}`,
-  ].join('\n\n');
+// Grounded Gemini is non-deterministic and fails several silent ways: the AI
+// Gateway times out, Gemini ends a grounded turn with no text to parse, or it
+// returns only redirect URLs (dropped in parseCandidates). Each yields zero
+// candidates, which the caller would otherwise surface as "no posts." Retry a
+// few times — a fresh call usually succeeds.
+const DISCOVERY_MAX_ATTEMPTS = 3;
 
-  const prompt = DISCOVERY_PROMPT(today, dateContext, outletList, extraGuidance);
+// Recent posts from the approved X/Twitter handles. Kept on grounded Gemini
+// because Tavily can't target specific handles — but scoped to *only* the 15
+// handles instead of the full outlet list, so it's far narrower (and faster)
+// than the old all-source discovery. Runs behind its own triage-stage button,
+// off the main "pull today's stories" path.
+export async function discoverXPosts(
+  today: string,
+  signal?: AbortSignal,
+): Promise<Candidate[]> {
+  const dateContext = freshnessContext(today);
+  const handleList = newsSources.xAccounts
+    .map((a) => `  - ${a.handle} (${a.name}${a.role ? `, ${a.role}` : ''})`)
+    .join('\n');
+  const prompt = X_DISCOVERY_PROMPT(today, dateContext, handleList);
 
   // @ai-sdk/google's googleSearch tool returns Tool<{}, never> which doesn't
   // satisfy ai v6's stricter Tool<never, never> tools-record constraint —
   // narrow the cast rather than disabling type checking on the whole call.
   const googleSearchTool = google.tools.googleSearch({}) as unknown as Tool;
-  const { text } = await generateText({
-    model: 'google/gemini-2.5-flash',
-    tools: { google_search: googleSearchTool },
-    prompt,
-    // 0 to discourage URL paraphrasing — the model still hallucinates
-    // sometimes, which is why we verify each candidate URL below.
-    temperature: 0,
-  });
-  return parseCandidates(text);
+
+  let lastError: unknown = null;
+  let anyCompleted = false;
+  for (let attempt = 1; attempt <= DISCOVERY_MAX_ATTEMPTS; attempt++) {
+    try {
+      const { text, finishReason } = await generateText({
+        model: 'google/gemini-2.5-flash',
+        tools: { google_search: googleSearchTool },
+        prompt,
+        // 0 to discourage URL paraphrasing — the model still hallucinates
+        // sometimes, which is why isApprovedSource re-checks every URL.
+        temperature: 0,
+        abortSignal: signal,
+      });
+      anyCompleted = true;
+      // parseCandidates drops grounding-redirect URLs; isApprovedSource then
+      // rejects anything that isn't a canonical /{handle}/status/{id} URL from
+      // a listed handle — the backstop for Gemini straying off the handle list.
+      const candidates = parseCandidates(text).filter((c) => isApprovedSource(c.url));
+      if (candidates.length > 0) {
+        if (attempt > 1) {
+          console.warn(
+            JSON.stringify({
+              event: 'orchestrator.discover_x.recovered',
+              attempt,
+              candidateCount: candidates.length,
+            }),
+          );
+        }
+        return candidates;
+      }
+      // Completed, but empty/unparseable text or no usable handle URLs — log
+      // the miss so the failure mode is visible, then retry.
+      console.warn(
+        JSON.stringify({
+          event: 'orchestrator.discover_x.empty',
+          attempt,
+          finishReason,
+          textLength: text.length,
+        }),
+      );
+    } catch (err) {
+      // A cancelled gather must abort the whole run — don't retry past it.
+      if (signal?.aborted) throw err;
+      lastError = err;
+      console.warn(
+        JSON.stringify({
+          event: 'orchestrator.discover_x.error',
+          attempt,
+          err: String(err).slice(0, 300),
+        }),
+      );
+    }
+  }
+
+  // Every attempt threw (gateway down, etc.) — surface it so the route reports
+  // the real failure. If at least one attempt completed but returned nothing,
+  // that's a genuine empty result: return [] and let the caller handle it.
+  if (!anyCompleted && lastError) throw lastError;
+  return [];
 }
 
-// Exported for testing. The Candidate type is file-local; tests pass a plain
-// object with the same shape.
-export async function verifyOrRecover(c: Candidate): Promise<Candidate | null> {
-  const status = await headStatus(c.url);
+// -- Tavily article discovery ------------------------------------------------
+// Article discovery used to be a single grounded Gemini call that ran dozens
+// of internal google_search round-trips to satisfy "12-15 articles across the
+// whole outlet list" — 1–2.5 min of wall clock, and it routinely handed back
+// hallucinated or duplicated URLs. Tavily /search scoped to the approved
+// hostnames returns real, date-filtered URLs in seconds; we fan out a handful
+// of beat queries in parallel and merge. Editorial "most newsworthy" judgment
+// isn't lost — distillTopics still groups + scores the survivors downstream.
+
+type TavilySearchHit = {
+  url?: string;
+  title?: string;
+  published_date?: string | null;
+  source_name?: string;
+};
+
+// Tavily's `published_date` comes back as an RFC-2822-ish string
+// ("Wed, 13 May 2026 14:28:00 GMT"). Everything downstream — `inAcceptableRange`,
+// the triage UI's date badge — expects `YYYY-MM-DD`, so normalize here. An
+// unparseable or absent date becomes null, which `inAcceptableRange` treats as
+// out-of-window: the writer sees an "older story" flag and can check it.
+function toIsoDate(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+}
+
+// A single Tavily /search call scoped to the approved outlets, mapped to a
+// deduped Candidate[]. `include_domains` is a soft scope, so every result is
+// re-checked against the approved list — the same belt-and-suspenders backstop
+// applied everywhere a candidate can enter the pool. `startDate`/`endDate` are
+// optional: discovery scopes to the freshness window, keyword search doesn't.
+async function tavilySearch(opts: {
+  query: string;
+  maxResults: number;
+  startDate?: string;
+  endDate?: string;
+  signal?: AbortSignal;
+}): Promise<Candidate[]> {
+  const apiKey = process.env.TAVILY_API_KEY;
+  if (!apiKey) throw new Error('TAVILY_API_KEY missing');
+
+  const resp = await fetch('https://api.tavily.com/search', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      api_key: apiKey,
+      query: opts.query,
+      topic: 'news',
+      include_domains: approvedHostnames,
+      max_results: opts.maxResults,
+      ...(opts.startDate ? { start_date: opts.startDate } : {}),
+      ...(opts.endDate ? { end_date: opts.endDate } : {}),
+    }),
+    signal: opts.signal,
+  });
+  if (!resp.ok) throw new Error(`Tavily search ${resp.status}`);
+
+  const data = (await resp.json()) as { results?: TavilySearchHit[] };
+  const seen = new Set<string>();
+  const hits: Candidate[] = [];
+  for (const r of data.results ?? []) {
+    if (typeof r.url !== 'string' || typeof r.title !== 'string') continue;
+    if (seen.has(r.url)) continue;
+    if (!isApprovedSource(r.url)) continue;
+    let source: string;
+    try {
+      source = r.source_name ?? new URL(r.url).hostname;
+    } catch {
+      continue;
+    }
+    seen.add(r.url);
+    hits.push({
+      title: r.title,
+      url: r.url,
+      source,
+      publicationDate: toIsoDate(r.published_date),
+    });
+  }
+  return hits;
+}
+
+// The show's beat — Israel, Jews, and the Middle East — as durable thematic
+// queries. Deliberately broad and evergreen: outlet-scoping (include_domains)
+// and the freshness window do the narrowing, and distillTopics scores the
+// survivors downstream. No event-specific terms ("hostages", "Gaza war") —
+// those go stale and would need constant re-tuning. Query *count* per theme
+// doubles as the weighting knob: discoverCandidates merges these round-robin,
+// so the three Israel queries hand the show's core beat ~1/3 of the triaged
+// pool. Tune the set here if coverage gaps show up. X/Twitter is intentionally
+// absent — it comes in through `discoverXPosts`.
+const DISCOVERY_QUERIES = [
+  'Israel',
+  'Israeli politics',
+  'Israeli security',
+  'Iran',
+  'Middle East geopolitics',
+  'Israel international relations',
+  'antisemitism',
+  'Jewish diaspora life',
+  'Jewish identity',
+];
+
+// Per-query result cap — the depth of each query's list feeding the round-robin
+// merge in discoverCandidates. Nine queries × 12 ≈ 108 raw hits; the merge
+// interleaves and dedupes them, and gatherCandidates caps the survivors at
+// maxArticles (20). Deeper than the cap strictly needs on purpose — headroom
+// for dedupe collapse and queries that come back short.
+const DISCOVERY_RESULTS_PER_QUERY = 12;
+
+// Exported for the `scripts/discover-news-candidates.ts` preview tool — it
+// dumps this raw output before approval filtering / verification / extraction.
+export async function discoverCandidates(
+  today: string,
+  extraGuidance: string,
+  signal?: AbortSignal,
+): Promise<Candidate[]> {
+  const { startDate, endDate } = freshnessRange(today);
+  // Topic gathers (/start topics, /topics, /refetch) pass the topic as
+  // extraGuidance — search for exactly that. Plain discovery fans out across
+  // the show's beat.
+  const queries = extraGuidance.trim() ? [extraGuidance.trim()] : DISCOVERY_QUERIES;
+
+  const settled = await Promise.allSettled(
+    queries.map((query) =>
+      tavilySearch({
+        query,
+        maxResults: DISCOVERY_RESULTS_PER_QUERY,
+        startDate,
+        endDate,
+        signal,
+      }),
+    ),
+  );
+
+  // Keep each fulfilled query's hits as its own list so the merge below can
+  // interleave them; track errors the same way as before.
+  const lists: Candidate[][] = [];
+  let anyFulfilled = false;
+  let lastError: unknown = null;
+  for (const s of settled) {
+    if (s.status === 'rejected') {
+      // A cancelled gather surfaces as a rejection — propagate it instead of
+      // burying it as one query's bad luck.
+      if (signal?.aborted) throw s.reason;
+      lastError = s.reason;
+      console.warn(
+        JSON.stringify({
+          event: 'orchestrator.discover.query_error',
+          err: String(s.reason).slice(0, 300),
+        }),
+      );
+      continue;
+    }
+    anyFulfilled = true;
+    lists.push(s.value);
+  }
+
+  // Interleave round-robin — hit 0 from every query, then hit 1, and so on —
+  // deduping by URL as we go. gatherCandidates fills its cap in iteration
+  // order, so a plain concatenation would let the first query or two crowd the
+  // rest out; interleaving gives every query (every beat) a fair share.
+  const seen = new Set<string>();
+  const merged: Candidate[] = [];
+  const maxLen = lists.reduce((m, l) => Math.max(m, l.length), 0);
+  for (let i = 0; i < maxLen; i++) {
+    for (const list of lists) {
+      const c = list[i];
+      if (!c || seen.has(c.url)) continue;
+      seen.add(c.url);
+      merged.push(c);
+    }
+  }
+
+  // Every query threw (Tavily down, key missing) — surface it so /start
+  // reports the real failure instead of a generic empty-result message. A
+  // fulfilled-but-empty run is a genuine empty discovery: return [].
+  if (!anyFulfilled && lastError) throw lastError;
+  return merged;
+}
+
+// Exported for testing.
+export async function verifyOrRecover(
+  c: Candidate,
+  signal?: AbortSignal,
+): Promise<Candidate | null> {
+  const status = await headStatus(c.url, signal);
   // Treat only a definitive 404 as a hallucinated URL. 405 (HEAD not allowed),
   // network errors (status 0), and 5xx responses fall through to extract,
   // which has its own retry/timeout semantics and a structured failure path.
@@ -289,7 +583,7 @@ export async function verifyOrRecover(c: Candidate): Promise<Candidate | null> {
     return null;
   }
 
-  const recovered = await searchByTitle(c.title, domain);
+  const recovered = await searchByTitle(c.title, domain, signal);
   if (!recovered || recovered.url === c.url) {
     console.warn(`[gatherSources] dropping unrecoverable 404: ${c.url}`);
     return null;
@@ -312,7 +606,9 @@ export async function verifyOrRecover(c: Candidate): Promise<Candidate | null> {
 
 // -- Public API --------------------------------------------------------------
 
-function inAcceptableRange(today: string, publicationDate: string | null): boolean {
+// Exported so triage-stage code (the /triage and /search routes) can flag
+// freshness on candidates without re-implementing the window logic.
+export function inAcceptableRange(today: string, publicationDate: string | null): boolean {
   if (!publicationDate) return false;
   return freshnessWindow(today).includes(publicationDate.slice(0, 10));
 }
@@ -345,32 +641,79 @@ export async function extractUrlToArticle(
   };
 }
 
-export async function gatherSources(opts: {
+// Multi-domain keyword search across the approved outlets — the writer-facing
+// escape hatch for triage when automatic discovery comes up short. Returns
+// candidates only — adding one to the triage list is just an append;
+// verification and Tavily extraction wait for /group, same as discovery
+// candidates. Unlike discovery, it isn't date-scoped: the writer may be
+// reaching for an older story on purpose.
+//
+// Limitation: Tavily `include_domains` can't target specific X/Twitter
+// handles, so this covers the news sites and think tanks but not the 15 X
+// accounts — those come in through `discoverXPosts`. The UI surfaces this.
+export async function keywordSearch(
+  query: string,
+  signal?: AbortSignal,
+): Promise<Candidate[]> {
+  return tavilySearch({ query, maxResults: 12, signal });
+}
+
+// Discover → approval-filter → dedupe/cap. No URL verification, no Tavily
+// extraction — this is the raw candidate pool the writer triages. Verification
+// and extraction are deferred to `extractCandidates`, run later on only the
+// candidates that survive triage.
+export async function gatherCandidates(opts: {
   today: string;
-  timezone?: string;
   extraGuidance?: string;
   maxArticles?: number;
-}): Promise<Article[]> {
-  const { today, extraGuidance = '', maxArticles = 15 } = opts;
-  const dateContext = freshnessContext(today);
+  signal?: AbortSignal;
+}): Promise<Candidate[]> {
+  const { today, extraGuidance = '', maxArticles = 20, signal } = opts;
 
-  const candidates = await discoverCandidates(today, dateContext, extraGuidance);
-  if (candidates.length === 0) return [];
+  const candidates = await discoverCandidates(today, extraGuidance, signal);
 
-  // Drop anything Gemini returned from outside the approved outlet list —
-  // belt-and-suspenders backup to the prompt-level constraint.
+  // `tavilySearch` already re-checks `isApprovedSource` per result, but keep
+  // the filter here too — it's the funnel's belt-and-suspenders backstop and
+  // keeps `rawCount` vs `approvedCount` meaningful in the log below.
   const approved = candidates.filter((c) => isApprovedSource(c.url));
-  if (approved.length === 0) return [];
 
-  // Dedupe by URL, cap before extraction (Tavily charges per call).
+  // Dedupe by URL and cap. Freshness is flagged from Tavily's claimed date;
+  // extraction can refine it later against the real publish date.
   const seen = new Set<string>();
   const deduped: Candidate[] = [];
   for (const c of approved) {
     if (seen.has(c.url)) continue;
     seen.add(c.url);
-    deduped.push(c);
+    deduped.push({ ...c, isFlagged: !inAcceptableRange(today, c.publicationDate) });
     if (deduped.length >= maxArticles) break;
   }
+
+  // Log the funnel so a zero result is diagnosable from the logs alone —
+  // distinguishes "discovery came up empty" (rawCount 0) from "found articles
+  // but all from non-approved outlets" (rawCount > 0, approvedCount 0).
+  console.log(
+    JSON.stringify({
+      event: 'orchestrator.gather_candidates',
+      rawCount: candidates.length,
+      approvedCount: approved.length,
+      candidateCount: deduped.length,
+    }),
+  );
+
+  return deduped;
+}
+
+// Verify (and recover hallucinated 404s), then Tavily-extract a candidate list
+// into full Articles. This is where URL verification and per-article Tavily
+// cost is paid — callers that defer it (triage → /group) only pay for the
+// survivors. Extraction failures are dropped: the writer shouldn't cite a
+// source we couldn't read.
+export async function extractCandidates(
+  candidates: Candidate[],
+  today: string,
+  signal?: AbortSignal,
+): Promise<Article[]> {
+  if (candidates.length === 0) return [];
 
   // Verify URLs (and recover hallucinated ones) before paying for Tavily
   // extract. Dedupe again in case recovery collapses two candidates to the
@@ -378,10 +721,13 @@ export async function gatherSources(opts: {
   // collapse the entire run to zero articles.
   const verifiedSeen = new Set<string>();
   const verified: Candidate[] = [];
-  const settled = await Promise.allSettled(deduped.map(verifyOrRecover));
+  const settled = await Promise.allSettled(candidates.map((c) => verifyOrRecover(c, signal)));
   for (const s of settled) {
     if (s.status === 'rejected') {
-      console.warn(`[gatherSources] verify threw, skipping: ${String(s.reason)}`);
+      // A cancelled gather surfaces here as a rejected settle — propagate it
+      // instead of skipping, so the run actually stops.
+      if (signal?.aborted) throw s.reason;
+      console.warn(`[extractCandidates] verify threw, skipping: ${String(s.reason)}`);
       continue;
     }
     const c = s.value;
@@ -392,13 +738,13 @@ export async function gatherSources(opts: {
 
   const extracted = await Promise.all(
     verified.map(async (c): Promise<Article | null> => {
-      const result = await extractArticle(c.url);
+      const result = await extractArticle(c.url, signal);
       const isFlagged = !inAcceptableRange(today, c.publicationDate);
       if (!result.ok) {
         // Backstop: even after URL verification, Tavily can fail (paywall,
         // bot block, transient). Drop rather than letting the writer cite a
         // source we couldn't read.
-        console.warn(`[gatherSources] extract failed; dropping: ${c.url} — ${result.note}`);
+        console.warn(`[extractCandidates] extract failed; dropping: ${c.url} — ${result.note}`);
         return null;
       }
       return {
@@ -413,4 +759,24 @@ export async function gatherSources(opts: {
   );
 
   return extracted.filter((a): a is Article => a !== null);
+}
+
+// Discover + verify + extract in one pass — the original behavior, kept for
+// checkpoint-stage topic gathers (/start `topics` mode, /topics, /refetch),
+// where the result drops straight into a topic and extraction can't be
+// deferred. The `discover` /start path uses `gatherCandidates` instead.
+export async function gatherSources(opts: {
+  today: string;
+  timezone?: string;
+  extraGuidance?: string;
+  maxArticles?: number;
+  signal?: AbortSignal;
+}): Promise<Article[]> {
+  const candidates = await gatherCandidates({
+    today: opts.today,
+    extraGuidance: opts.extraGuidance,
+    maxArticles: opts.maxArticles,
+    signal: opts.signal,
+  });
+  return extractCandidates(candidates, opts.today, opts.signal);
 }

@@ -29,6 +29,7 @@ import {
   formatBytes,
 } from '@/lib/prep-limits';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { resolveTemperature } from '@/lib/temperature';
 import { stripStaleToolOutputs } from '@/lib/strip-tool-outputs';
 import {
   ensureChatTables,
@@ -499,6 +500,7 @@ export async function POST(req: Request) {
   }
   const messages = validated.data;
   const model = req.headers.get('x-model') || 'anthropic/claude-sonnet-4-6';
+  const temperature = resolveTemperature(req.headers.get('x-temperature'));
   const uploadError = validateUploads(messages);
   if (uploadError) {
     return new Response(uploadError, {
@@ -639,7 +641,7 @@ export async function POST(req: Request) {
       webSearch: webSearchTool,
     },
     stopWhen: stepCountIs(6),
-    temperature: 0.5,
+    temperature,
     // Propagate client disconnect / Stop into the provider call so the model
     // stops generating instead of burning tokens to completion.
     abortSignal: req.signal,

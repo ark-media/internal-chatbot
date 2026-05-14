@@ -4,6 +4,7 @@ import { getNewsExamples } from '@/lib/news-prompt';
 import { distillTopics } from '@/lib/orchestrator/distill';
 import {
   extractUrlToArticle,
+  gatherCandidates,
   gatherSources,
 } from '@/lib/orchestrator/source-gathering';
 import {
@@ -61,6 +62,7 @@ function newRun(
     stage: 'gathering',
     today,
     timezone,
+    candidates: [],
     articles: [],
     distill: null,
     approvedTopics: null,
@@ -227,18 +229,23 @@ export async function POST(req: Request) {
       });
     }
 
-    // mode === 'discover' (the original flow)
-    const [articles, exampleScripts] = await Promise.all([
-      gatherSources({ today, timezone }),
-      getNewsExamples(),
-    ]);
+    // mode === 'discover' — gather the raw candidate pool and stop at
+    // `triage`. No URL verification, no Tavily extraction here: the writer
+    // ranks/prunes the candidate list, then /group verifies + extracts the
+    // survivors and runs distillTopics().
+    //
+    // gatherCandidates throws (not returns []) when every discovery attempt
+    // hits an infrastructure error — that's caught below and surfaces the real
+    // error. A returned [] means discovery completed but came up empty, which
+    // is almost always a transient search-provider issue, not a date problem.
+    const candidates = await gatherCandidates({ today });
 
-    if (articles.length === 0) {
+    if (candidates.length === 0) {
       const errored: OrchestratorRun = {
         ...initial,
         stage: 'error',
         errorMessage:
-          'No articles found for the acceptable date range. Try again or seed manually.',
+          'News discovery came up empty after several tries. This is usually a transient issue with the search provider — try again in a moment, or seed the run manually with article URLs.',
         updatedAt: new Date().toISOString(),
       };
       await saveRun(errored);
@@ -248,13 +255,10 @@ export async function POST(req: Request) {
       );
     }
 
-    const distill = await distillTopics(articles, exampleScripts);
-
     const run: OrchestratorRun = {
       ...initial,
-      stage: 'checkpoint',
-      articles,
-      distill,
+      stage: 'triage',
+      candidates,
       updatedAt: new Date().toISOString(),
     };
     await saveRun(run);
@@ -265,15 +269,14 @@ export async function POST(req: Request) {
         mode: 'discover',
         chatId,
         ms: Date.now() - started,
-        articleCount: articles.length,
-        topicCount: distill.topics.length,
+        candidateCount: candidates.length,
+        stage: 'triage',
       }),
     );
 
     return Response.json({
-      stage: 'checkpoint',
-      distill,
-      articleCount: articles.length,
+      stage: 'triage',
+      candidateCount: candidates.length,
     });
   } catch (err) {
     const errored = await loadRun(chatId);

@@ -117,6 +117,7 @@ function buildStage2Articles(articles: Article[], indices: number[]): string {
 export async function distillTopics(
   articles: Article[],
   exampleScripts: string,
+  signal?: AbortSignal,
 ): Promise<DistillResult> {
   if (articles.length === 0) {
     return { topics: [], rationale: 'No articles available to distill.' };
@@ -148,6 +149,7 @@ Select up to 3 topics. For each topic, list which article indices belong, and fo
     },
     prompt: stage1Prompt,
     temperature: 0.2,
+    abortSignal: signal,
   });
 
   // Stage 2 (Sonnet): verbatim quote extraction on the deduped selected set.
@@ -179,6 +181,7 @@ ${buildStage2Articles(articles, selectedIndices)}
 
 For each article above, pull up to 5 verbatim quotes the script writer could use as soundbites or attributed claims. Copy the source text exactly. Return an empty quotes array if an article has no quotable material.`,
         temperature: 0,
+        abortSignal: signal,
       });
       for (const aq of stage2.articleQuotes) {
         if (aq.articleIndex >= 0 && aq.articleIndex < articles.length) {
@@ -186,6 +189,9 @@ For each article above, pull up to 5 verbatim quotes the script writer could use
         }
       }
     } catch (err) {
+      // A caller-initiated cancel must propagate — don't mask it as a
+      // (degraded-but-successful) distill missing its quotes.
+      if (signal?.aborted) throw err;
       // Quote-extraction failure shouldn't block the script — the writer can
       // still work from summaries. Log so the gap is visible in observability.
       console.warn(

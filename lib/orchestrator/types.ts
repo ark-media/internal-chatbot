@@ -32,6 +32,19 @@ export type TopicWithSources = {
   articles: RatedArticle[];
 };
 
+// A discovered-but-not-yet-extracted article reference — what the writer sees
+// and triages before grouping. Produced by Gemini discovery or keyword
+// search; URL verification and Tavily extraction are deferred to /group so
+// they run only on the survivors. `isFlagged` is the freshness flag, computed
+// against the run's `today` when the candidate enters the run.
+export type Candidate = {
+  title: string;
+  url: string;
+  source: string;
+  publicationDate: string | null;
+  isFlagged?: boolean;
+};
+
 export type DistillResult = {
   topics: TopicWithSources[];
   rationale: string;
@@ -67,6 +80,7 @@ export type ReviewResult = {
 
 export type OrchestratorStage =
   | 'gathering'
+  | 'triage'
   | 'checkpoint'
   | 'crafting'
   | 'complete'
@@ -85,6 +99,14 @@ export type OrchestratorRun = {
   stage: OrchestratorStage;
   today: string;
   timezone: string;
+  // The triage list: raw discovery/search candidates the writer ranks and
+  // prunes before grouping. Populated by `discover` /start; empty for `urls`
+  // and `topics` modes, which skip triage. Survivors are verified + extracted
+  // into `articles` by /group.
+  candidates: Candidate[];
+  // Extracted article pool. Populated at /group for `discover` runs, at
+  // /start for `urls`/`topics`. Checkpoint-stage gathers (attach/refetch/
+  // topics) append here.
   articles: Article[];
   distill: DistillResult | null;
   approvedTopics: TopicWithSources[] | null;
@@ -128,6 +150,32 @@ export function renumberIndicesAfterDelete(
     // Equal: drop.
   }
   return next;
+}
+
+// Reorder a URL-keyed list to match `urlOrder`. Items appear in the sequence
+// `urlOrder` gives; any item whose URL is missing from `urlOrder` is appended
+// at the end in its original relative order — a defensive fallback, since a
+// well-formed triage reorder is an exact permutation. URLs in `urlOrder` that
+// match no item are ignored. Used by the /triage `reorder` action; exported
+// for unit testing.
+export function reorderByUrl<T extends { url: string }>(
+  items: T[],
+  urlOrder: string[],
+): T[] {
+  const byUrl = new Map(items.map((x) => [x.url, x]));
+  const seen = new Set<string>();
+  const ordered: T[] = [];
+  for (const url of urlOrder) {
+    const x = byUrl.get(url);
+    if (x && !seen.has(url)) {
+      ordered.push(x);
+      seen.add(url);
+    }
+  }
+  for (const x of items) {
+    if (!seen.has(x.url)) ordered.push(x);
+  }
+  return ordered;
 }
 
 // Materialize the approved topic snapshot from the current distill against

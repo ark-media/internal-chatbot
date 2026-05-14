@@ -9,7 +9,7 @@ function detectHebrewContent(text: string): boolean {
   return hebrewChars.length / text.length > 0.1;
 }
 
-export async function ensureEnglish(text: string): Promise<string> {
+export async function ensureEnglish(text: string, signal?: AbortSignal): Promise<string> {
   if (!detectHebrewContent(text)) {
     return text;
   }
@@ -18,10 +18,14 @@ export async function ensureEnglish(text: string): Promise<string> {
     const { text: translated } = await generateText({
       model: 'anthropic/claude-opus-4-7',
       prompt: `Translate the following Hebrew text to English. Preserve all factual details, dates, names, and quotes exactly. Return only the translation, no explanations.\n\n${text}`,
+      abortSignal: signal,
     });
 
     return translated;
   } catch (err) {
+    // A caller-initiated cancel must propagate — don't mask it as a
+    // successful (untranslated) result.
+    if (signal?.aborted) throw err;
     // On translation error, return original text and let the script writer flag uncertainty
     console.error('Translation failed:', err);
     return text;
