@@ -22,6 +22,7 @@ import {
   GripVertical,
   X,
   Search,
+  AtSign,
 } from 'lucide-react';
 import {
   DndContext,
@@ -361,6 +362,20 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
     [chatId],
   );
 
+  // Pulling X posts is read-only too — same as keyword search, it returns
+  // candidates the writer can add but doesn't touch the run itself, so the
+  // X panel owns its own loading state.
+  const pullXPosts = useCallback(async (): Promise<Candidate[]> => {
+    const res = await fetch('/api/news/orchestrator/x-posts', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chatId }),
+    });
+    const data = await res.json();
+    if ('error' in data) throw new Error(data.detail || data.error);
+    return data.hits as Candidate[];
+  }, [chatId]);
+
   // Adding a search hit is just an append — extraction is deferred to /group —
   // so it updates optimistically like reorder and remove.
   const addArticle = useCallback(
@@ -574,7 +589,7 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
           {busy === 'start' && !showCheckpoint && !showTriage ? (
             <ProgressCard
               label="Setting up your run…"
-              detail="Discovery + extraction can take 60–120 seconds."
+              detail="Pulling today's stories is quick. Seeding from your own URLs or topics also reads each source, which takes a little longer."
             />
           ) : null}
 
@@ -584,6 +599,7 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
               onReorder={reorderArticles}
               onRemove={removeArticle}
               onSearch={searchArticles}
+              onPullXPosts={pullXPosts}
               onAddCandidate={addArticle}
               onGroup={group}
               busy={busy}
@@ -891,6 +907,7 @@ function TriageView({
   onReorder,
   onRemove,
   onSearch,
+  onPullXPosts,
   onAddCandidate,
   onGroup,
   busy,
@@ -899,6 +916,7 @@ function TriageView({
   onReorder: (next: Candidate[]) => void;
   onRemove: (url: string) => void;
   onSearch: (query: string) => Promise<Candidate[]>;
+  onPullXPosts: () => Promise<Candidate[]>;
   onAddCandidate: (candidate: Candidate) => void;
   onGroup: () => void;
   busy: BusyState;
@@ -969,6 +987,13 @@ function TriageView({
       <TriageSearchPanel
         existingUrls={existingUrls}
         onSearch={onSearch}
+        onAdd={onAddCandidate}
+        busy={busy}
+      />
+
+      <TriageXPanel
+        existingUrls={existingUrls}
+        onPull={onPullXPosts}
         onAdd={onAddCandidate}
         busy={busy}
       />
@@ -1111,8 +1136,8 @@ function TriageSearchPanel({
       <div className="mb-1 text-sm font-semibold text-fg">Search approved outlets</div>
       <p className="mb-3 text-xs text-fg/45">
         Keyword search across the approved news sites and think tanks — use it when the
-        automatic pull came up short. The 15 X/Twitter accounts aren&rsquo;t searchable this
-        way; those stay discovery-only.
+        automatic pull came up short. X/Twitter posts aren&rsquo;t searchable this way; use
+        the X panel below for those.
       </p>
       <div className="flex gap-2">
         <input
@@ -1153,50 +1178,147 @@ function TriageSearchPanel({
             No results from approved outlets for that query.
           </p>
         ) : (
-          <div className="mt-3 flex flex-col gap-1.5">
-            {hits.map((hit) => {
-              const added = existingUrls.has(hit.url);
-              return (
-                <div
-                  key={hit.url}
-                  className="flex items-start gap-3 rounded-md border border-overlay/[0.06] bg-overlay/[0.02] px-3 py-2"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[0.7rem] uppercase tracking-wider text-fg/45">
-                        {hit.source}
-                      </span>
-                      {hit.publicationDate ? (
-                        <span className="text-[0.7rem] text-fg/35">
-                          {hit.publicationDate.slice(0, 10)}
-                        </span>
-                      ) : null}
-                    </div>
-                    <a
-                      href={hit.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="block truncate text-sm text-fg/85 transition hover:text-fg"
-                    >
-                      {hit.title}
-                    </a>
-                  </div>
-                  <button
-                    onClick={() => onAdd(hit)}
-                    disabled={added || busy !== null}
-                    className="mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-md border border-overlay/15 px-2 py-1 text-xs text-fg/70 transition hover:border-overlay/30 hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {added ? (
-                      <CheckCircle2 className="h-3 w-3" />
-                    ) : (
-                      <Plus className="h-3 w-3" />
-                    )}
-                    {added ? 'Added' : 'Add'}
-                  </button>
-                </div>
-              );
-            })}
+          <HitList hits={hits} existingUrls={existingUrls} onAdd={onAdd} busy={busy} />
+        )
+      ) : null}
+    </div>
+  );
+}
+
+// Shared result list for the two triage-stage source finders — keyword search
+// and the X-posts pull. Each hit is a Candidate the writer can append to the
+// triage pool; adding goes through /triage, hence the global `busy` lock on
+// the Add button (the panels themselves stay off the lock — they're read-only).
+function HitList({
+  hits,
+  existingUrls,
+  onAdd,
+  busy,
+}: {
+  hits: Candidate[];
+  existingUrls: Set<string>;
+  onAdd: (candidate: Candidate) => void;
+  busy: BusyState;
+}) {
+  return (
+    <div className="mt-3 flex flex-col gap-1.5">
+      {hits.map((hit) => {
+        const added = existingUrls.has(hit.url);
+        return (
+          <div
+            key={hit.url}
+            className="flex items-start gap-3 rounded-md border border-overlay/[0.06] bg-overlay/[0.02] px-3 py-2"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="text-[0.7rem] uppercase tracking-wider text-fg/45">
+                  {hit.source}
+                </span>
+                {hit.publicationDate ? (
+                  <span className="text-[0.7rem] text-fg/35">
+                    {hit.publicationDate.slice(0, 10)}
+                  </span>
+                ) : null}
+                {hit.isFlagged ? (
+                  <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[0.65rem] uppercase tracking-wider text-amber-200">
+                    older story
+                  </span>
+                ) : null}
+              </div>
+              <a
+                href={hit.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block truncate text-sm text-fg/85 transition hover:text-fg"
+              >
+                {hit.title}
+              </a>
+            </div>
+            <button
+              onClick={() => onAdd(hit)}
+              disabled={added || busy !== null}
+              className="mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-md border border-overlay/15 px-2 py-1 text-xs text-fg/70 transition hover:border-overlay/30 hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {added ? (
+                <CheckCircle2 className="h-3 w-3" />
+              ) : (
+                <Plus className="h-3 w-3" />
+              )}
+              {added ? 'Added' : 'Add'}
+            </button>
           </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Pull recent posts from the approved X/Twitter handles. Unlike keyword search
+// this takes no query — it's a one-button grounded-model search over the 15
+// handles — but it's the same read-only, owns-its-own-loading-state pattern.
+function TriageXPanel({
+  existingUrls,
+  onPull,
+  onAdd,
+  busy,
+}: {
+  existingUrls: Set<string>;
+  onPull: () => Promise<Candidate[]>;
+  onAdd: (candidate: Candidate) => void;
+  busy: BusyState;
+}) {
+  const [hits, setHits] = useState<Candidate[] | null>(null);
+  const [pulling, setPulling] = useState(false);
+  const [pullError, setPullError] = useState<string | null>(null);
+
+  const runPull = async () => {
+    if (pulling) return;
+    setPulling(true);
+    setPullError(null);
+    try {
+      setHits(await onPull());
+    } catch (err) {
+      setPullError(String(err).slice(0, 200));
+      setHits(null);
+    } finally {
+      setPulling(false);
+    }
+  };
+
+  return (
+    <div className="rounded-2xl border border-overlay/10 bg-overlay/[0.03] p-5">
+      <div className="mb-1 text-sm font-semibold text-fg">Pull recent X posts</div>
+      <p className="mb-3 text-xs text-fg/45">
+        Searches the 15 approved X/Twitter accounts for recent posts on the beat.
+        This one runs a grounded model search, so it takes longer than the keyword
+        search above.
+      </p>
+      <button
+        onClick={runPull}
+        disabled={pulling}
+        className="inline-flex items-center gap-1.5 rounded-md bg-sky-brand/20 px-3 py-2 text-xs text-sky-brand transition hover:bg-sky-brand/30 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {pulling ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <AtSign className="h-3.5 w-3.5" />
+        )}
+        {pulling ? 'Pulling X posts…' : 'Pull recent X posts'}
+      </button>
+
+      {pullError ? (
+        <div className="mt-3 rounded-md border border-red-400/30 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+          {pullError}
+        </div>
+      ) : null}
+
+      {hits !== null && !pullError ? (
+        hits.length === 0 ? (
+          <p className="mt-3 text-xs text-fg/45">
+            No recent posts found from the approved X accounts.
+          </p>
+        ) : (
+          <HitList hits={hits} existingUrls={existingUrls} onAdd={onAdd} busy={busy} />
         )
       ) : null}
     </div>

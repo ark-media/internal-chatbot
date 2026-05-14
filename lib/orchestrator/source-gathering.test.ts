@@ -3,6 +3,7 @@ import { generateText } from 'ai';
 
 import {
   discoverCandidates,
+  discoverXPosts,
   keywordSearch,
   parseCandidates,
   verifyOrRecover,
@@ -232,6 +233,26 @@ describe('keywordSearch', () => {
     ]);
   });
 
+  it("normalizes Tavily's RFC date string to YYYY-MM-DD", async () => {
+    // The `news` topic returns published_date as an RFC-2822-ish string;
+    // inAcceptableRange and the UI badge both need a plain calendar date.
+    installFetchMock(() =>
+      jsonResponse({
+        results: [
+          {
+            url: 'https://www.timesofisrael.com/story',
+            title: 'Dated story',
+            source_name: 'Times of Israel',
+            published_date: 'Wed, 13 May 2026 14:28:00 GMT',
+          },
+        ],
+      }),
+    );
+
+    const hits = await keywordSearch('anything');
+    expect(hits[0].publicationDate).toBe('2026-05-13');
+  });
+
   it('drops results from non-approved domains and dedupes by URL', async () => {
     installFetchMock(() =>
       jsonResponse({
@@ -338,12 +359,120 @@ describe('parseCandidates', () => {
 });
 
 describe('discoverCandidates', () => {
+  beforeEach(() => {
+    vi.stubEnv('TAVILY_API_KEY', 'test-key');
+    // Silence the per-query diagnostic logging.
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it('fans out the beat queries scoped to the freshness window and merges deduped hits', async () => {
+    const seenQueries: string[] = [];
+    let calls = 0;
+    installFetchMock((url, init) => {
+      expect(url).toBe('https://api.tavily.com/search');
+      const body = JSON.parse(init?.body as string);
+      seenQueries.push(body.query);
+      // 2026-05-14 is a Thursday, so the window is [yesterday, today].
+      expect(body.topic).toBe('news');
+      expect(body.start_date).toBe('2026-05-13');
+      expect(body.end_date).toBe('2026-05-14');
+      calls += 1;
+      // A per-query story plus one URL repeated across every query, to
+      // exercise the cross-query dedupe in the merge.
+      return jsonResponse({
+        results: [
+          {
+            url: `https://www.timesofisrael.com/story-${calls}`,
+            title: `Story ${calls}`,
+            published_date: '2026-05-14',
+            source_name: 'Times of Israel',
+          },
+          {
+            url: 'https://www.reuters.com/shared',
+            title: 'Shared story',
+            published_date: '2026-05-14',
+            source_name: 'Reuters',
+          },
+        ],
+      });
+    });
+
+    const result = await discoverCandidates('2026-05-14', '');
+
+    // All nine beat queries fanned out.
+    expect(seenQueries).toHaveLength(9);
+    const urls = result.map((c) => c.url);
+    // The shared URL is merged down to one; each per-query story survives.
+    expect(urls.filter((u) => u === 'https://www.reuters.com/shared')).toHaveLength(1);
+    expect(urls).toHaveLength(10);
+  });
+
+  it('uses extraGuidance as a single query when provided', async () => {
+    const seenQueries: string[] = [];
+    installFetchMock((_url, init) => {
+      seenQueries.push(JSON.parse(init?.body as string).query);
+      return jsonResponse({ results: [] });
+    });
+
+    await discoverCandidates('2026-05-14', 'Lebanon ceasefire talks');
+
+    expect(seenQueries).toEqual(['Lebanon ceasefire talks']);
+  });
+
+  it('tolerates a partial query failure and returns the hits that came back', async () => {
+    let calls = 0;
+    installFetchMock(() => {
+      calls += 1;
+      // The first query 500s; the rest succeed.
+      if (calls === 1) return new Response('nope', { status: 500 });
+      return jsonResponse({
+        results: [
+          {
+            url: `https://www.jpost.com/story-${calls}`,
+            title: `Story ${calls}`,
+            published_date: '2026-05-14',
+            source_name: 'Jerusalem Post',
+          },
+        ],
+      });
+    });
+
+    const result = await discoverCandidates('2026-05-14', '');
+    // Nine queries, one failed → eight hits.
+    expect(result).toHaveLength(8);
+  });
+
+  it('throws when every query fails, so /start can report the real failure', async () => {
+    installFetchMock(() => new Response('down', { status: 503 }));
+    await expect(discoverCandidates('2026-05-14', '')).rejects.toThrow(/Tavily search 503/);
+  });
+
+  it('propagates a caller-initiated abort instead of swallowing it', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    installFetchMock(() => {
+      throw new DOMException('Aborted', 'AbortError');
+    });
+    await expect(
+      discoverCandidates('2026-05-14', '', controller.signal),
+    ).rejects.toThrow();
+  });
+});
+
+describe('discoverXPosts', () => {
+  // A valid status URL from an approved handle (@BarakRavid is on the list).
   const validArray = JSON.stringify([
     {
-      title: 'A story',
-      url: 'https://www.timesofisrael.com/a-story/',
+      title: 'Barak Ravid reports on ceasefire talks',
+      url: 'https://x.com/BarakRavid/status/1234567890',
       publicationDate: '2026-05-14',
-      source: 'Times of Israel',
+      source: 'Barak Ravid',
     },
   ]);
 
@@ -357,58 +486,76 @@ describe('discoverCandidates', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns parsed candidates on the first successful attempt', async () => {
+  it('returns parsed X-post candidates on the first successful attempt', async () => {
     vi.mocked(generateText).mockResolvedValueOnce({
       text: validArray,
       finishReason: 'stop',
     } as never);
 
-    const result = await discoverCandidates('2026-05-14', 'ctx', '');
+    const result = await discoverXPosts('2026-05-14');
     expect(result.map((c) => c.url)).toEqual([
-      'https://www.timesofisrael.com/a-story/',
+      'https://x.com/BarakRavid/status/1234567890',
     ]);
     expect(generateText).toHaveBeenCalledTimes(1);
   });
 
-  it('retries when an attempt returns text with no parseable array', async () => {
-    vi.mocked(generateText)
-      .mockResolvedValueOnce({ text: '', finishReason: 'stop' } as never)
-      .mockResolvedValueOnce({ text: validArray, finishReason: 'stop' } as never);
-
-    const result = await discoverCandidates('2026-05-14', 'ctx', '');
-    expect(result).toHaveLength(1);
-    expect(generateText).toHaveBeenCalledTimes(2);
-  });
-
-  it('retries when an attempt throws (e.g. a gateway timeout)', async () => {
-    vi.mocked(generateText)
-      .mockRejectedValueOnce(new Error('GatewayTimeoutError: timed out'))
-      .mockResolvedValueOnce({ text: validArray, finishReason: 'stop' } as never);
-
-    const result = await discoverCandidates('2026-05-14', 'ctx', '');
-    expect(result).toHaveLength(1);
-    expect(generateText).toHaveBeenCalledTimes(2);
-  });
-
-  it('returns [] when every attempt completes but yields nothing', async () => {
-    vi.mocked(generateText).mockResolvedValue({
-      text: 'no json here',
+  it('drops posts that are not canonical status URLs from approved handles', async () => {
+    const mixed = JSON.stringify([
+      {
+        title: 'Approved handle, real post',
+        url: 'https://x.com/BarakRavid/status/111',
+        publicationDate: '2026-05-14',
+        source: 'Barak Ravid',
+      },
+      {
+        title: 'Unlisted handle',
+        url: 'https://x.com/SomeRandom/status/222',
+        publicationDate: '2026-05-14',
+        source: 'Random',
+      },
+      {
+        title: 'Bare profile, not a post',
+        url: 'https://x.com/AmitSegal',
+        publicationDate: null,
+        source: 'Amit Segal',
+      },
+    ]);
+    vi.mocked(generateText).mockResolvedValueOnce({
+      text: mixed,
       finishReason: 'stop',
     } as never);
 
-    const result = await discoverCandidates('2026-05-14', 'ctx', '');
+    const result = await discoverXPosts('2026-05-14');
+    expect(result.map((c) => c.url)).toEqual(['https://x.com/BarakRavid/status/111']);
+  });
+
+  it('retries when an attempt yields no usable handle URLs', async () => {
+    vi.mocked(generateText)
+      .mockResolvedValueOnce({ text: 'no json here', finishReason: 'stop' } as never)
+      .mockResolvedValueOnce({ text: validArray, finishReason: 'stop' } as never);
+
+    const result = await discoverXPosts('2026-05-14');
+    expect(result).toHaveLength(1);
+    expect(generateText).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns [] when every attempt completes but yields nothing usable', async () => {
+    vi.mocked(generateText).mockResolvedValue({
+      text: 'nothing parseable here',
+      finishReason: 'stop',
+    } as never);
+
+    const result = await discoverXPosts('2026-05-14');
     expect(result).toEqual([]);
     expect(generateText).toHaveBeenCalledTimes(3);
   });
 
-  it('throws when every attempt throws, so /start can report the real failure', async () => {
+  it('throws when every attempt throws, so the route can report the real failure', async () => {
     vi.mocked(generateText).mockRejectedValue(
       new Error('GatewayTimeoutError: timed out'),
     );
 
-    await expect(discoverCandidates('2026-05-14', 'ctx', '')).rejects.toThrow(
-      /GatewayTimeoutError/,
-    );
+    await expect(discoverXPosts('2026-05-14')).rejects.toThrow(/GatewayTimeoutError/);
     expect(generateText).toHaveBeenCalledTimes(3);
   });
 
@@ -419,9 +566,7 @@ describe('discoverCandidates', () => {
       new DOMException('Aborted', 'AbortError'),
     );
 
-    await expect(
-      discoverCandidates('2026-05-14', 'ctx', '', controller.signal),
-    ).rejects.toThrow();
+    await expect(discoverXPosts('2026-05-14', controller.signal)).rejects.toThrow();
     expect(generateText).toHaveBeenCalledTimes(1);
   });
 });

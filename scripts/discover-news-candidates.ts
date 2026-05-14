@@ -1,8 +1,9 @@
 /**
- * Dumps the raw Gemini discovery output for the news orchestrator — the list
- * of article candidates Gemini surfaces *before* approval filtering, URL
+ * Dumps the raw discovery output for the news orchestrator — the list of
+ * article candidates Tavily surfaces *before* approval filtering, URL
  * verification, and Tavily extraction. Use it to preview what a run would
- * pull right now without spending Tavily calls.
+ * pull right now. (X/Twitter posts come from a separate `discoverXPosts`
+ * pass and aren't shown here.)
  *
  * Prints to the terminal and writes `scripts/articles.json` next to this file.
  *
@@ -36,7 +37,7 @@ async function main() {
   // Dynamic imports so `.env.local` is loaded before these modules evaluate —
   // `source-gathering` transitively pulls in `lib/db`, which throws at import
   // time if `DATABASE_URL` is unset.
-  const { discoverCandidates, freshnessContext } = await import(
+  const { discoverCandidates } = await import(
     '../lib/orchestrator/source-gathering'
   );
   const { isApprovedSource } = await import('../lib/news-sources');
@@ -44,14 +45,10 @@ async function main() {
   console.log(`Discovering candidates for ${today}`);
   if (extraGuidance) console.log(`Extra guidance: ${extraGuidance}`);
   console.log(
-    '(raw Gemini output — before approval filter / URL verify / extraction)\n',
+    '(raw Tavily output — before approval filter / URL verify / extraction)\n',
   );
 
-  const candidates = await discoverCandidates(
-    today,
-    freshnessContext(today),
-    extraGuidance,
-  );
+  const candidates = await discoverCandidates(today, extraGuidance);
 
   const articles = candidates.map((c) => ({
     title: c.title,
