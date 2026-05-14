@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { isApprovedSource } from '@/lib/news-sources';
 import { inAcceptableRange } from '@/lib/orchestrator/source-gathering';
 import {
   ensureOrchestratorTables,
@@ -92,6 +93,17 @@ export async function POST(req: Request) {
     // add — append a writer-chosen search hit, deduped by URL. No extraction:
     // verification + Tavily extract happen at /group with every other
     // candidate. Freshness is re-flagged server-side against the run's date.
+    //
+    // Re-check the source here even though /search only ever surfaces approved
+    // hits — this route is independently reachable, and `gatherCandidates` and
+    // `keywordSearch` both apply the same backstop. Keeps the "approved
+    // outlets only" invariant true no matter how a candidate enters the pool.
+    if (!isApprovedSource(body.candidate.url)) {
+      return Response.json(
+        { error: 'not_approved', detail: 'URL is not from an approved outlet.' },
+        { status: 422 },
+      );
+    }
     if (run.candidates.some((c) => c.url === body.candidate.url)) {
       return Response.json({
         stage: 'triage',

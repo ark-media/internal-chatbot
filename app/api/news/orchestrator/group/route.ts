@@ -118,10 +118,12 @@ export async function POST(req: Request) {
     }
 
     const exampleScripts = await getNewsExamples();
-    const distill = await distillTopics(articles, exampleScripts);
+    const distill = await distillTopics(articles, exampleScripts, req.signal);
 
     // Extraction + distill are the slow part — the writer may have walked
-    // away. Don't persist a result they'll never see.
+    // away. The signal is threaded into both, so a cancel mid-distill throws
+    // (caught below); this guards the narrow window where the abort lands
+    // after distill resolves but before the commit.
     if (req.signal.aborted) {
       return new Response('client closed request', { status: 499 });
     }
