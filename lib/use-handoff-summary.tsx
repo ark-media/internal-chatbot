@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { SummaryModal } from '@/components/SummaryModal';
 import type { Source } from '@/components/chat-types';
@@ -36,7 +36,7 @@ export function useHandoffSummary({
 
   // Stable empty Map for surfaces that don't supply sources, so MessageText
   // gets a non-null reference without forcing each caller to construct one.
-  const emptySources = useRef<Map<string, Source>>(new Map()).current;
+  const emptySources = useMemo(() => new Map<string, Source>(), []);
 
   // Read messagesLength inside onStart via a ref so the callback identity
   // stays stable — otherwise SummaryModal's fetch effect would restart on

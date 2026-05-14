@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ChangeEvent,
@@ -36,6 +37,10 @@ import { chatFetch } from '@/lib/chat-fetch';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
 import { useFlash } from '@/lib/use-flash';
 import { useHandoffSummary } from '@/lib/use-handoff-summary';
+import {
+  NEWS_DEFAULT_TEMPERATURE_PRESET,
+  type TemperaturePresetId,
+} from '@/lib/temperature';
 import {
   MAX_FILES,
   MAX_FILE_BYTES,
@@ -97,6 +102,8 @@ function NewsBody({
   initialMessages: NewsUIMessage[];
 }) {
   const [selectedModel, setSelectedModel] = useState(MODELS[1].id);
+  const [selectedTemperature, setSelectedTemperature] =
+    useState<TemperaturePresetId>(NEWS_DEFAULT_TEMPERATURE_PRESET);
   const [input, setInput] = useState('');
   const [files, setFiles] = useState<AttachedFile[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -156,18 +163,29 @@ function NewsBody({
     [editingMessageId],
   );
 
-  const { messages, sendMessage, status, stop, error, regenerate, clearError } =
-    useChat<NewsUIMessage>({
-      id: chatId,
-      messages: initialMessages,
-      transport: new DefaultChatTransport({
+  // Rebuilt only when something it carries changes — not on every render —
+  // so a keystroke elsewhere doesn't churn a fresh transport. The header
+  // values (model, temperature) are captured here, so a change to either
+  // flows through on the next send.
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport({
         api: '/api/news',
         fetch: customFetch,
         headers: {
           'x-model': selectedModel,
+          'x-temperature': selectedTemperature,
         },
         body: { chatId },
       }),
+    [customFetch, selectedModel, selectedTemperature, chatId],
+  );
+
+  const { messages, sendMessage, status, stop, error, regenerate, clearError } =
+    useChat<NewsUIMessage>({
+      id: chatId,
+      messages: initialMessages,
+      transport,
       onFinish: () => {
         notifyChatUpdated();
         setEditingMessageId(null);
@@ -538,6 +556,8 @@ function NewsBody({
           placeholder="Story outline with article links"
           selectedModel={selectedModel}
           onModelChange={setSelectedModel}
+          selectedTemperature={selectedTemperature}
+          onTemperatureChange={setSelectedTemperature}
           busy={busy}
           canSubmit={input.trim().length > 0 || files.length > 0}
           footerHint={`Enter to send · Shift + Enter for newline · Up to ${MAX_FILES} files, ${formatBytes(MAX_FILE_BYTES)} each`}

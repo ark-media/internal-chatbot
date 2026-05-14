@@ -3,8 +3,10 @@
 import { ChangeEvent, FormEvent, ReactNode, useEffect, useRef } from 'react';
 import { ArrowUp, Loader2, Paperclip } from 'lucide-react';
 import { ModelSelector } from '@/components/ModelSelector';
+import { TemperatureSelector } from '@/components/TemperatureSelector';
 import { IconButton } from '@/components/ui/IconButton';
 import { cn } from '@/lib/cn';
+import type { TemperaturePresetId } from '@/lib/temperature';
 
 type FileAttachConfig = {
   accept: string;
@@ -21,6 +23,11 @@ type ChatComposerProps = {
   placeholder: string;
   selectedModel: string;
   onModelChange: (modelId: string) => void;
+  // Temperature is opt-in per surface: pass both to show the selector, omit
+  // both to hide it. The main chat omits them (fixed temperature for RAG
+  // reliability); news and prep pass them.
+  selectedTemperature?: TemperaturePresetId;
+  onTemperatureChange?: (presetId: TemperaturePresetId) => void;
   busy: boolean;
   canSubmit: boolean;
   footerHint: ReactNode;
@@ -35,6 +42,8 @@ export function ChatComposer({
   placeholder,
   selectedModel,
   onModelChange,
+  selectedTemperature,
+  onTemperatureChange,
   busy,
   canSubmit,
   footerHint,
@@ -114,6 +123,13 @@ export function ChatComposer({
           )}
 
           <ModelSelector selectedModel={selectedModel} onModelChange={onModelChange} />
+
+          {selectedTemperature !== undefined && onTemperatureChange ? (
+            <TemperatureSelector
+              selectedTemperature={selectedTemperature}
+              onTemperatureChange={onTemperatureChange}
+            />
+          ) : null}
 
           <div className="flex min-w-0 flex-1 items-center">
             <textarea
