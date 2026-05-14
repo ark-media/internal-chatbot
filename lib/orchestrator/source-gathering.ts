@@ -222,32 +222,76 @@ ${extraGuidance ? `Additional guidance from the writer:\n${extraGuidance}\n\n` :
 
 The "source" field must match the outlet name from the approved list. Use the google_search tool to find articles. Cite real URLs only.`;
 
-const candidateArrayRegex = /\[[\s\S]*\]/;
+// Gemini's grounded-search tool sometimes hands back its own redirect URLs
+// (https://vertexaisearch.cloud.google.com/grounding-api-redirect/...) instead
+// of the real article links. They're unusable downstream — `isApprovedSource`
+// rejects the Google host, so a run full of them silently filters to zero.
+// Drop them at parse time; `discoverCandidates` retries when discovery comes
+// up short.
+const GROUNDING_REDIRECT_HOST = 'vertexaisearch.cloud.google.com';
 
-function parseCandidates(raw: string): Candidate[] {
-  const match = raw.match(candidateArrayRegex);
-  if (!match) return [];
+// Pull the first balanced top-level JSON array out of `raw`. Gemini wraps the
+// array in markdown fences and sometimes trails it with grounding prose that
+// itself contains brackets ("Sources: [1], [2]"); a greedy /\[[\s\S]*\]/
+// over-captures that trailing text and JSON.parse throws. Scan from the first
+// `[` to its matching `]`, tracking string literals so brackets inside titles
+// don't skew the depth count.
+function extractJsonArray(raw: string): string | null {
+  const start = raw.indexOf('[');
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < raw.length; i++) {
+    const ch = raw[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '[') depth++;
+    else if (ch === ']' && --depth === 0) return raw.slice(start, i + 1);
+  }
+  return null;
+}
+
+// Exported for unit testing.
+export function parseCandidates(raw: string): Candidate[] {
+  const json = extractJsonArray(raw);
+  if (!json) return [];
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(match[0]) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap((c): Candidate[] => {
-      if (!c || typeof c !== 'object') return [];
-      const o = c as Record<string, unknown>;
-      const url = typeof o.url === 'string' ? o.url : null;
-      const title = typeof o.title === 'string' ? o.title : null;
-      if (!url || !title) return [];
-      try { new URL(url); } catch { return []; }
-      return [{
-        title,
-        url,
-        publicationDate: typeof o.publicationDate === 'string' ? o.publicationDate : null,
-        source: typeof o.source === 'string' ? o.source : new URL(url).hostname,
-      }];
-    });
+    parsed = JSON.parse(json);
   } catch {
     return [];
   }
+  if (!Array.isArray(parsed)) return [];
+  return parsed.flatMap((c): Candidate[] => {
+    if (!c || typeof c !== 'object') return [];
+    const o = c as Record<string, unknown>;
+    const url = typeof o.url === 'string' ? o.url : null;
+    const title = typeof o.title === 'string' ? o.title : null;
+    if (!url || !title) return [];
+    let parsedUrl: URL;
+    try { parsedUrl = new URL(url); } catch { return []; }
+    if (parsedUrl.hostname === GROUNDING_REDIRECT_HOST) return [];
+    return [{
+      title,
+      url,
+      publicationDate: typeof o.publicationDate === 'string' ? o.publicationDate : null,
+      source: typeof o.source === 'string' ? o.source : parsedUrl.hostname,
+    }];
+  });
 }
+
+// Discovery is non-deterministic and fails several silent ways: the AI
+// Gateway times out, Gemini ends a grounded turn with no text to parse, or it
+// returns only redirect URLs (dropped in parseCandidates). Each yields zero
+// candidates, which the caller would otherwise surface as "no articles." Retry
+// a few times — a fresh call usually succeeds.
+const DISCOVERY_MAX_ATTEMPTS = 3;
 
 // Exported for the `scripts/discover-news-candidates.ts` preview tool — it
 // dumps this raw output before approval filtering / verification / extraction.
@@ -270,16 +314,64 @@ export async function discoverCandidates(
   // satisfy ai v6's stricter Tool<never, never> tools-record constraint —
   // narrow the cast rather than disabling type checking on the whole call.
   const googleSearchTool = google.tools.googleSearch({}) as unknown as Tool;
-  const { text } = await generateText({
-    model: 'google/gemini-2.5-flash',
-    tools: { google_search: googleSearchTool },
-    prompt,
-    // 0 to discourage URL paraphrasing — the model still hallucinates
-    // sometimes, which is why we verify each candidate URL below.
-    temperature: 0,
-    abortSignal: signal,
-  });
-  return parseCandidates(text);
+
+  let lastError: unknown = null;
+  let anyCompleted = false;
+  for (let attempt = 1; attempt <= DISCOVERY_MAX_ATTEMPTS; attempt++) {
+    try {
+      const { text, finishReason } = await generateText({
+        model: 'google/gemini-2.5-flash',
+        tools: { google_search: googleSearchTool },
+        prompt,
+        // 0 to discourage URL paraphrasing — the model still hallucinates
+        // sometimes, which is why we verify each candidate URL below.
+        temperature: 0,
+        abortSignal: signal,
+      });
+      anyCompleted = true;
+      const candidates = parseCandidates(text);
+      if (candidates.length > 0) {
+        if (attempt > 1) {
+          console.warn(
+            JSON.stringify({
+              event: 'orchestrator.discover.recovered',
+              attempt,
+              candidateCount: candidates.length,
+            }),
+          );
+        }
+        return candidates;
+      }
+      // Completed, but empty/unparseable text or all-redirect URLs — log the
+      // miss so the failure mode is visible, then retry.
+      console.warn(
+        JSON.stringify({
+          event: 'orchestrator.discover.empty',
+          attempt,
+          finishReason,
+          textLength: text.length,
+        }),
+      );
+    } catch (err) {
+      // A cancelled gather must abort the whole run — don't retry past it.
+      if (signal?.aborted) throw err;
+      lastError = err;
+      console.warn(
+        JSON.stringify({
+          event: 'orchestrator.discover.error',
+          attempt,
+          err: String(err).slice(0, 300),
+        }),
+      );
+    }
+  }
+
+  // Every attempt threw (gateway down, etc.) — surface it so /start reports
+  // the real failure instead of a generic empty-result message. If at least
+  // one attempt completed but returned nothing, that's a genuine empty
+  // discovery: return [] and let the caller handle it.
+  if (!anyCompleted && lastError) throw lastError;
+  return [];
 }
 
 // Exported for testing.
@@ -436,7 +528,6 @@ export async function gatherCandidates(opts: {
   const dateContext = freshnessContext(today);
 
   const candidates = await discoverCandidates(today, dateContext, extraGuidance, signal);
-  if (candidates.length === 0) return [];
 
   // Drop anything Gemini returned from outside the approved outlet list —
   // belt-and-suspenders backup to the prompt-level constraint.
@@ -452,6 +543,19 @@ export async function gatherCandidates(opts: {
     deduped.push({ ...c, isFlagged: !inAcceptableRange(today, c.publicationDate) });
     if (deduped.length >= maxArticles) break;
   }
+
+  // Log the funnel so a zero result is diagnosable from the logs alone —
+  // distinguishes "discovery came up empty" (rawCount 0) from "found articles
+  // but all from non-approved outlets" (rawCount > 0, approvedCount 0).
+  console.log(
+    JSON.stringify({
+      event: 'orchestrator.gather_candidates',
+      rawCount: candidates.length,
+      approvedCount: approved.length,
+      candidateCount: deduped.length,
+    }),
+  );
+
   return deduped;
 }
 

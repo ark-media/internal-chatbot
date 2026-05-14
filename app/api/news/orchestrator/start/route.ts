@@ -233,6 +233,11 @@ export async function POST(req: Request) {
     // `triage`. No URL verification, no Tavily extraction here: the writer
     // ranks/prunes the candidate list, then /group verifies + extracts the
     // survivors and runs distillTopics().
+    //
+    // gatherCandidates throws (not returns []) when every discovery attempt
+    // hits an infrastructure error — that's caught below and surfaces the real
+    // error. A returned [] means discovery completed but came up empty, which
+    // is almost always a transient search-provider issue, not a date problem.
     const candidates = await gatherCandidates({ today });
 
     if (candidates.length === 0) {
@@ -240,7 +245,7 @@ export async function POST(req: Request) {
         ...initial,
         stage: 'error',
         errorMessage:
-          'No articles found for the acceptable date range. Try again or seed manually.',
+          'News discovery came up empty after several tries. This is usually a transient issue with the search provider — try again in a moment, or seed the run manually with article URLs.',
         updatedAt: new Date().toISOString(),
       };
       await saveRun(errored);
