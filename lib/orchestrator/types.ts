@@ -32,6 +32,16 @@ export type TopicWithSources = {
   articles: RatedArticle[];
 };
 
+// A lightweight keyword-search result — title/url/source only, no extracted
+// content. The orchestrator's /search route returns these; extraction into a
+// full Article happens only when the writer clicks "Add" in triage.
+export type SearchHit = {
+  title: string;
+  url: string;
+  source: string;
+  publicationDate: string | null;
+};
+
 export type DistillResult = {
   topics: TopicWithSources[];
   rationale: string;
@@ -67,6 +77,7 @@ export type ReviewResult = {
 
 export type OrchestratorStage =
   | 'gathering'
+  | 'triage'
   | 'checkpoint'
   | 'crafting'
   | 'complete'
@@ -128,6 +139,32 @@ export function renumberIndicesAfterDelete(
     // Equal: drop.
   }
   return next;
+}
+
+// Reorder a URL-keyed article array to match `urlOrder`. Articles appear in
+// the sequence `urlOrder` gives; any article whose URL is missing from
+// `urlOrder` is appended at the end in its original relative order — a
+// defensive fallback, since a well-formed triage reorder is an exact
+// permutation. URLs in `urlOrder` that match no article are ignored.
+// Used by the /triage `reorder` action; exported for unit testing.
+export function reorderArticlesByUrl(
+  articles: Article[],
+  urlOrder: string[],
+): Article[] {
+  const byUrl = new Map(articles.map((a) => [a.url, a]));
+  const seen = new Set<string>();
+  const ordered: Article[] = [];
+  for (const url of urlOrder) {
+    const a = byUrl.get(url);
+    if (a && !seen.has(url)) {
+      ordered.push(a);
+      seen.add(url);
+    }
+  }
+  for (const a of articles) {
+    if (!seen.has(a.url)) ordered.push(a);
+  }
+  return ordered;
 }
 
 // Materialize the approved topic snapshot from the current distill against

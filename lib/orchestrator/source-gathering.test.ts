@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { verifyOrRecover } from './source-gathering';
+import { keywordSearch, verifyOrRecover } from './source-gathering';
 
 type FetchMock = ReturnType<typeof vi.fn>;
 
@@ -167,5 +167,98 @@ describe('verifyOrRecover — cancellation', () => {
     const controller = new AbortController();
     const result = await verifyOrRecover(candidate, controller.signal);
     expect(result).toEqual(candidate);
+  });
+});
+
+describe('keywordSearch', () => {
+  beforeEach(() => {
+    vi.stubEnv('TAVILY_API_KEY', 'test-key');
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it('scopes the Tavily query to the approved hostnames', async () => {
+    const fetchMock = installFetchMock((url, init) => {
+      expect(url).toBe('https://api.tavily.com/search');
+      const body = JSON.parse(init?.body as string);
+      expect(Array.isArray(body.include_domains)).toBe(true);
+      expect(body.include_domains).toContain('reuters.com');
+      expect(body.query).toBe('hezbollah ceasefire');
+      return jsonResponse({ results: [] });
+    });
+
+    const hits = await keywordSearch('hezbollah ceasefire');
+    expect(hits).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps results to hits and carries through the publication date', async () => {
+    installFetchMock(() =>
+      jsonResponse({
+        results: [
+          {
+            url: 'https://www.reuters.com/world/middle-east/story',
+            title: 'A Reuters story',
+            source_name: 'Reuters',
+            published_date: '2026-05-13',
+          },
+        ],
+      }),
+    );
+
+    const hits = await keywordSearch('anything');
+    expect(hits).toEqual([
+      {
+        title: 'A Reuters story',
+        url: 'https://www.reuters.com/world/middle-east/story',
+        source: 'Reuters',
+        publicationDate: '2026-05-13',
+      },
+    ]);
+  });
+
+  it('drops results from non-approved domains and dedupes by URL', async () => {
+    installFetchMock(() =>
+      jsonResponse({
+        results: [
+          { url: 'https://www.bbc.com/news/story', title: 'Not approved' },
+          { url: 'https://www.timesofisrael.com/story', title: 'Approved' },
+          { url: 'https://www.timesofisrael.com/story', title: 'Approved duplicate' },
+        ],
+      }),
+    );
+
+    const hits = await keywordSearch('anything');
+    expect(hits.map((h) => h.url)).toEqual(['https://www.timesofisrael.com/story']);
+    expect(hits[0].publicationDate).toBeNull();
+  });
+
+  it('skips malformed results missing a url or title', async () => {
+    installFetchMock(() =>
+      jsonResponse({
+        results: [
+          { title: 'No url' },
+          { url: 'https://www.jpost.com/story' },
+          { url: 'https://www.jpost.com/good', title: 'Good' },
+        ],
+      }),
+    );
+
+    const hits = await keywordSearch('anything');
+    expect(hits.map((h) => h.url)).toEqual(['https://www.jpost.com/good']);
+  });
+
+  it('throws when TAVILY_API_KEY is missing', async () => {
+    vi.stubEnv('TAVILY_API_KEY', '');
+    await expect(keywordSearch('anything')).rejects.toThrow(/TAVILY_API_KEY/);
+  });
+
+  it('throws when Tavily returns a non-OK response', async () => {
+    installFetchMock(() => new Response('nope', { status: 500 }));
+    await expect(keywordSearch('anything')).rejects.toThrow(/Tavily search 500/);
   });
 });

@@ -3,8 +3,8 @@ import { google } from '@ai-sdk/google';
 
 import { ensureEnglish } from '../translate';
 import { cacheKey, getCached, setCached } from '../tool-cache';
-import { isApprovedSource, newsSources } from '../news-sources';
-import type { Article } from './types';
+import { approvedHostnames, isApprovedSource, newsSources } from '../news-sources';
+import type { Article, SearchHit } from './types';
 
 // -- Freshness window --------------------------------------------------------
 // `today` is YYYY-MM-DD anchored in the writer's local timezone — the client
@@ -362,6 +362,70 @@ export async function extractUrlToArticle(
     content: result.text,
     isFlagged: !inAcceptableRange(today, result.date),
   };
+}
+
+// Multi-domain keyword search across the approved outlets — the writer-facing
+// escape hatch for triage when Gemini discovery comes up short. Generalizes
+// `searchByTitle` (single-domain, used for URL recovery) to query every
+// approved hostname at once. Returns lightweight hits only; extraction is
+// deferred to `extractUrlToArticle` when the writer clicks "Add", so a search
+// that surfaces 12 results doesn't pay for 12 Tavily extracts.
+//
+// Limitation: Tavily `include_domains` can't target specific X/Twitter
+// handles, so this covers the news sites and think tanks but not the 15 X
+// accounts — those stay Gemini-discovery-only. The UI surfaces this.
+export async function keywordSearch(
+  query: string,
+  signal?: AbortSignal,
+): Promise<SearchHit[]> {
+  const apiKey = process.env.TAVILY_API_KEY;
+  if (!apiKey) throw new Error('TAVILY_API_KEY missing');
+
+  const resp = await fetch('https://api.tavily.com/search', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      api_key: apiKey,
+      query,
+      include_domains: approvedHostnames,
+      max_results: 12,
+    }),
+    signal,
+  });
+  if (!resp.ok) throw new Error(`Tavily search ${resp.status}`);
+
+  const data = (await resp.json()) as {
+    results?: Array<{
+      url?: string;
+      title?: string;
+      published_date?: string | null;
+      source_name?: string;
+    }>;
+  };
+
+  const seen = new Set<string>();
+  const hits: SearchHit[] = [];
+  for (const r of data.results ?? []) {
+    if (typeof r.url !== 'string' || typeof r.title !== 'string') continue;
+    if (seen.has(r.url)) continue;
+    // `include_domains` is a soft scope — re-check against the approved list,
+    // the same belt-and-suspenders backstop gatherSources applies to Gemini.
+    if (!isApprovedSource(r.url)) continue;
+    let source: string;
+    try {
+      source = r.source_name ?? new URL(r.url).hostname;
+    } catch {
+      continue;
+    }
+    seen.add(r.url);
+    hits.push({
+      title: r.title,
+      url: r.url,
+      source,
+      publicationDate: r.published_date ?? null,
+    });
+  }
+  return hits;
 }
 
 export async function gatherSources(opts: {

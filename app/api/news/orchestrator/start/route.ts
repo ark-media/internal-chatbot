@@ -227,11 +227,10 @@ export async function POST(req: Request) {
       });
     }
 
-    // mode === 'discover' (the original flow)
-    const [articles, exampleScripts] = await Promise.all([
-      gatherSources({ today, timezone }),
-      getNewsExamples(),
-    ]);
+    // mode === 'discover' — gather the raw article pool and stop at `triage`.
+    // The writer ranks/prunes the list, then explicitly groups via POST
+    // /group, which is where distillTopics() now runs (lifted out of /start).
+    const articles = await gatherSources({ today, timezone });
 
     if (articles.length === 0) {
       const errored: OrchestratorRun = {
@@ -248,13 +247,10 @@ export async function POST(req: Request) {
       );
     }
 
-    const distill = await distillTopics(articles, exampleScripts);
-
     const run: OrchestratorRun = {
       ...initial,
-      stage: 'checkpoint',
+      stage: 'triage',
       articles,
-      distill,
       updatedAt: new Date().toISOString(),
     };
     await saveRun(run);
@@ -266,13 +262,12 @@ export async function POST(req: Request) {
         chatId,
         ms: Date.now() - started,
         articleCount: articles.length,
-        topicCount: distill.topics.length,
+        stage: 'triage',
       }),
     );
 
     return Response.json({
-      stage: 'checkpoint',
-      distill,
+      stage: 'triage',
       articleCount: articles.length,
     });
   } catch (err) {

@@ -3,8 +3,18 @@ import { describe, expect, it } from 'vitest';
 import {
   deriveApprovedTopics,
   renumberIndicesAfterDelete,
+  reorderArticlesByUrl,
+  type Article,
   type TopicWithSources,
 } from './types';
+
+const article = (url: string): Article => ({
+  title: `title ${url}`,
+  url,
+  publicationDate: '2026-05-04',
+  source: 'example.com',
+  content: 'body',
+});
 
 const topic = (
   name: string,
@@ -86,5 +96,41 @@ describe('deriveApprovedTopics', () => {
   it('preserves index order even if not ascending', () => {
     const result = deriveApprovedTopics(distill, [3, 0, 2]);
     expect(result.map((t) => t.topic)).toEqual(['d', 'a', 'c']);
+  });
+});
+
+describe('reorderArticlesByUrl', () => {
+  it('reorders to match the given URL order', () => {
+    const articles = [article('a'), article('b'), article('c')];
+    const result = reorderArticlesByUrl(articles, ['c', 'a', 'b']);
+    expect(result.map((a) => a.url)).toEqual(['c', 'a', 'b']);
+  });
+
+  it('appends articles missing from the order, preserving original order', () => {
+    const articles = [article('a'), article('b'), article('c')];
+    const result = reorderArticlesByUrl(articles, ['c']);
+    expect(result.map((a) => a.url)).toEqual(['c', 'a', 'b']);
+  });
+
+  it('ignores URLs in the order that match no article', () => {
+    const articles = [article('a'), article('b')];
+    const result = reorderArticlesByUrl(articles, ['b', 'ghost', 'a']);
+    expect(result.map((a) => a.url)).toEqual(['b', 'a']);
+  });
+
+  it('ignores duplicate URLs in the order', () => {
+    const articles = [article('a'), article('b')];
+    const result = reorderArticlesByUrl(articles, ['b', 'b', 'a']);
+    expect(result.map((a) => a.url)).toEqual(['b', 'a']);
+  });
+
+  it('returns an empty array when there are no articles', () => {
+    expect(reorderArticlesByUrl([], ['a'])).toEqual([]);
+  });
+
+  it('does not mutate the input array', () => {
+    const articles = [article('a'), article('b')];
+    reorderArticlesByUrl(articles, ['b', 'a']);
+    expect(articles.map((a) => a.url)).toEqual(['a', 'b']);
   });
 });

@@ -60,8 +60,10 @@ export const newsSources = {
 };
 
 // Hostnames mapped to outlets above. Suffix-matched, so subdomains
-// (news.walla.co.il, www.haaretz.com) are covered automatically.
-const approvedHostnames = [
+// (news.walla.co.il, www.haaretz.com) are covered automatically. Exported
+// for the orchestrator's keyword search, which scopes Tavily queries to
+// `include_domains: approvedHostnames`.
+export const approvedHostnames = [
   'timesofisrael.com',
   'wsj.com',
   'nytimes.com',

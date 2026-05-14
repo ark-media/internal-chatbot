@@ -19,7 +19,27 @@ import {
   Send,
   Undo2,
   BookOpenCheck,
+  GripVertical,
+  X,
+  Search,
 } from 'lucide-react';
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 import type { Components } from 'react-markdown';
 
@@ -30,18 +50,35 @@ import { notifyChatUpdated } from '@/lib/chat-refresh';
 import { cn } from '@/lib/cn';
 import {
   renumberIndicesAfterDelete,
+  type Article,
   type DistillResult,
   type OrchestratorRun,
   type RatedArticle,
   type RefineEntry,
   type Script,
+  type SearchHit,
   type TopicWithSources,
 } from '@/lib/orchestrator/types';
 
 type StartMode = 'discover' | 'urls' | 'topics';
 
+// Which in-flight request, if any, is blocking the orchestrator UI. `null`
+// means idle — only one orchestrator request runs at a time, so this doubles
+// as a global lock.
+type BusyState =
+  | null
+  | 'start'
+  | 'refetch'
+  | 'generate'
+  | 'topics'
+  | 'attach'
+  | 'group'
+  | 'regroup'
+  | 'triage';
+
 type StartResponse =
   | { stage: 'checkpoint'; distill: DistillResult; articleCount: number }
+  | { stage: 'triage'; articleCount: number }
   | { stage: 'error'; errorMessage: string };
 
 type GenerateResponse =
@@ -54,6 +91,8 @@ function stageLabel(stage: OrchestratorRun['stage'] | undefined): string {
   switch (stage) {
     case 'gathering':
       return 'Pulling stories';
+    case 'triage':
+      return 'Triage articles';
     case 'checkpoint':
       return 'Pick topics';
     case 'crafting':
@@ -140,9 +179,7 @@ export default function OrchestratorPage() {
 function OrchestratorBody({ chatId }: { chatId: string }) {
   const [run, setRun] = useState<OrchestratorRun | null>(null);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<
-    null | 'start' | 'refetch' | 'generate' | 'topics' | 'attach'
-  >(null);
+  const [busy, setBusy] = useState<BusyState>(null);
   const generateInFlightRef = useRef(false);
   // Tracks the in-flight /topics request so a writer can cancel a slow
   // source-gather. One controller is enough — `busy` is global, so only one
@@ -207,6 +244,147 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
       }
     },
     [chatId, today, refresh],
+  );
+
+  // Triage → checkpoint: run the AI grouping pass over the surviving articles.
+  const group = useCallback(async () => {
+    setBusy('group');
+    setError(null);
+    try {
+      const res = await fetch('/api/news/orchestrator/group', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ chatId, mode: 'group' }),
+      });
+      const data = await res.json();
+      if ('error' in data) {
+        setError(data.detail || data.error);
+        return;
+      }
+      await refresh();
+      setRejectedTopics(new Set());
+    } catch (err) {
+      setError(String(err).slice(0, 300));
+    } finally {
+      setBusy(null);
+    }
+  }, [chatId, refresh]);
+
+  // Checkpoint → triage: drop the grouping and go back to the raw pool. Fast
+  // (no model call), so no ProgressCard — `'regroup'` just holds the lock.
+  const regroup = useCallback(async () => {
+    setBusy('regroup');
+    setError(null);
+    try {
+      const res = await fetch('/api/news/orchestrator/group', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ chatId, mode: 'regroup' }),
+      });
+      const data = await res.json();
+      if ('error' in data) {
+        setError(data.detail || data.error);
+        return;
+      }
+      await refresh();
+      setRejectedTopics(new Set());
+    } catch (err) {
+      setError(String(err).slice(0, 300));
+    } finally {
+      setBusy(null);
+    }
+  }, [chatId, refresh]);
+
+  // Triage edits update the local article list optimistically for snappy drag
+  // feedback, then persist. The /triage route CAS-writes, so a lost race
+  // surfaces as an error and the follow-up refresh pulls the server truth.
+  const triageEdit = useCallback(
+    async (
+      optimistic: Article[],
+      payload:
+        | { action: 'reorder'; order: string[] }
+        | { action: 'remove'; url: string },
+    ) => {
+      setError(null);
+      setRun((prev) => (prev ? { ...prev, articles: optimistic } : prev));
+      setBusy('triage');
+      try {
+        const res = await fetch('/api/news/orchestrator/triage', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ chatId, ...payload }),
+        });
+        const data = await res.json();
+        if ('error' in data) {
+          setError(data.detail || data.error);
+        }
+        // Either way, resync to the persisted truth — corrects a rejected
+        // optimistic update and refreshes `updatedAt` for the next edit.
+        await refresh();
+      } catch (err) {
+        setError(String(err).slice(0, 300));
+        await refresh();
+      } finally {
+        setBusy(null);
+      }
+    },
+    [chatId, refresh],
+  );
+
+  const reorderArticles = useCallback(
+    (next: Article[]) =>
+      triageEdit(next, { action: 'reorder', order: next.map((a) => a.url) }),
+    [triageEdit],
+  );
+
+  const removeArticle = useCallback(
+    (url: string) => {
+      const next = (run?.articles ?? []).filter((a) => a.url !== url);
+      return triageEdit(next, { action: 'remove', url });
+    },
+    [run, triageEdit],
+  );
+
+  // Keyword search is read-only — it doesn't touch the run, so it stays off
+  // the global busy lock and the search panel owns its own loading state.
+  const searchArticles = useCallback(
+    async (query: string): Promise<SearchHit[]> => {
+      const res = await fetch('/api/news/orchestrator/search', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ chatId, query }),
+      });
+      const data = await res.json();
+      if ('error' in data) throw new Error(data.detail || data.error);
+      return data.hits as SearchHit[];
+    },
+    [chatId],
+  );
+
+  // Adding a hit extracts it server-side, so the new article only exists after
+  // the refresh — no optimistic insert. It still holds the busy lock so it
+  // can't race a reorder.
+  const addArticle = useCallback(
+    async (url: string) => {
+      setError(null);
+      setBusy('triage');
+      try {
+        const res = await fetch('/api/news/orchestrator/triage', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ action: 'add', chatId, url }),
+        });
+        const data = await res.json();
+        if ('error' in data) setError(data.detail || data.error);
+        await refresh();
+      } catch (err) {
+        setError(String(err).slice(0, 300));
+        await refresh();
+      } finally {
+        setBusy(null);
+      }
+    },
+    [chatId, refresh],
   );
 
   const refetch = useCallback(
@@ -362,6 +540,7 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
 
   // Decide which view to show.
   const showStart = run === null || run.stage === 'error';
+  const showTriage = !showStart && run !== null && run.stage === 'triage';
   const showCheckpoint =
     !showStart &&
     run !== null &&
@@ -407,10 +586,29 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
             />
           ) : null}
 
-          {busy === 'start' && !showCheckpoint ? (
+          {busy === 'start' && !showCheckpoint && !showTriage ? (
             <ProgressCard
               label="Setting up your run…"
               detail="Discovery + extraction can take 60–120 seconds."
+            />
+          ) : null}
+
+          {showTriage && run ? (
+            <TriageView
+              articles={run.articles}
+              onReorder={reorderArticles}
+              onRemove={removeArticle}
+              onSearch={searchArticles}
+              onAddUrl={addArticle}
+              onGroup={group}
+              busy={busy}
+            />
+          ) : null}
+
+          {busy === 'group' ? (
+            <ProgressCard
+              label="Grouping articles into topics…"
+              detail="Reading each survivor, clustering into topics, scoring sources, and pulling quotes. Typically 30–90 seconds."
             />
           ) : null}
 
@@ -434,6 +632,7 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
               busy={busy}
               regenerating={editingFromComplete}
               onCancelEdit={editingFromComplete ? () => setEditingFromComplete(false) : null}
+              onRegroup={editingFromComplete ? null : regroup}
             />
           ) : null}
 
@@ -582,7 +781,8 @@ function StartCard({
 
       {mode === 'discover' ? (
         <p className="mb-4 text-sm text-fg/55">
-          Pull today&rsquo;s top stories, group them into topics, and rate the sources.
+          Pull today&rsquo;s top stories into a raw list you can triage — rank, prune, and
+          search for more — then group what&rsquo;s left into topics.
         </p>
       ) : null}
 
@@ -699,6 +899,326 @@ function ProgressCard({ label, detail }: { label: string; detail: string }) {
   );
 }
 
+// ---------- Triage ----------
+
+function TriageView({
+  articles,
+  onReorder,
+  onRemove,
+  onSearch,
+  onAddUrl,
+  onGroup,
+  busy,
+}: {
+  articles: Article[];
+  onReorder: (next: Article[]) => void;
+  onRemove: (url: string) => void;
+  onSearch: (query: string) => Promise<SearchHit[]>;
+  onAddUrl: (url: string) => void;
+  onGroup: () => void;
+  busy: BusyState;
+}) {
+  const existingUrls = useMemo(
+    () => new Set(articles.map((a) => a.url)),
+    [articles],
+  );
+  const sensors = useSensors(
+    // A small distance threshold so a click on the title link isn't swallowed
+    // as a drag.
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  // The global busy lock serializes triage writes — drag and remove are
+  // disabled while any request is in flight.
+  const locked = busy !== null;
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = articles.findIndex((a) => a.url === active.id);
+    const newIndex = articles.findIndex((a) => a.url === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
+    onReorder(arrayMove(articles, oldIndex, newIndex));
+  };
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="rounded-lg border border-overlay/10 bg-overlay/[0.02] px-4 py-3 text-sm text-fg/70">
+        <span className="font-semibold text-fg">
+          {articles.length} article{articles.length === 1 ? '' : 's'} gathered.
+        </span>{' '}
+        Drag to rank, remove what you don&rsquo;t want, then group what&rsquo;s left into
+        topics.
+      </div>
+
+      {articles.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-overlay/15 bg-overlay/[0.01] p-6 text-center text-sm text-fg/55">
+          No articles left in the pool. Start a new run to pull stories.
+        </div>
+      ) : (
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
+        >
+          <SortableContext
+            items={articles.map((a) => a.url)}
+            strategy={verticalListSortingStrategy}
+          >
+            <div className="flex flex-col gap-2">
+              {articles.map((article, i) => (
+                <TriageRow
+                  key={article.url}
+                  article={article}
+                  index={i}
+                  onRemove={() => onRemove(article.url)}
+                  locked={locked}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
+      )}
+
+      <TriageSearchPanel
+        existingUrls={existingUrls}
+        onSearch={onSearch}
+        onAdd={onAddUrl}
+        busy={busy}
+      />
+
+      <div className="sticky bottom-0 -mx-6 mt-2 border-t border-overlay/10 bg-canvas/90 px-6 py-4 backdrop-blur">
+        <button
+          onClick={onGroup}
+          disabled={busy !== null || articles.length === 0}
+          className={cn(
+            'w-full rounded-lg bg-sky-brand px-4 py-3 text-sm font-semibold text-ink-950',
+            'transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50',
+          )}
+        >
+          {busy === 'group' ? (
+            <span className="inline-flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" /> Grouping articles…
+            </span>
+          ) : (
+            `Group into topics (${articles.length})`
+          )}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function TriageRow({
+  article,
+  index,
+  onRemove,
+  locked,
+}: {
+  article: Article;
+  index: number;
+  onRemove: () => void;
+  locked: boolean;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: article.url, disabled: locked });
+  const style = { transform: CSS.Transform.toString(transform), transition };
+  const flagged = article.isFlagged || article.fetchError;
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={cn(
+        'flex items-start gap-2 rounded-md border border-overlay/[0.06] bg-overlay/[0.02] px-2 py-2',
+        isDragging && 'relative z-10 opacity-80 shadow-lg',
+      )}
+    >
+      <button
+        type="button"
+        aria-label={`Reorder ${article.title}`}
+        disabled={locked}
+        className={cn(
+          'mt-0.5 shrink-0 rounded p-1 text-fg/30 transition',
+          locked
+            ? 'cursor-not-allowed opacity-40'
+            : 'cursor-grab hover:text-fg/60 active:cursor-grabbing',
+        )}
+        {...attributes}
+        {...listeners}
+      >
+        <GripVertical className="h-4 w-4" />
+      </button>
+      <span className="mt-1.5 w-5 shrink-0 text-right font-mono text-xs text-fg/35">
+        {index + 1}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="text-[0.7rem] uppercase tracking-wider text-fg/45">
+            {article.source}
+          </span>
+          {article.publicationDate ? (
+            <span className="text-[0.7rem] text-fg/35">
+              {article.publicationDate.slice(0, 10)}
+            </span>
+          ) : null}
+          {flagged ? (
+            <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[0.65rem] uppercase tracking-wider text-amber-200">
+              {article.fetchError ? 'couldn’t open' : 'older story'}
+            </span>
+          ) : null}
+        </div>
+        <a
+          href={article.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block truncate text-sm text-fg/85 transition hover:text-fg"
+        >
+          {article.title}
+        </a>
+      </div>
+      <button
+        type="button"
+        onClick={onRemove}
+        disabled={locked}
+        aria-label={`Remove ${article.title}`}
+        className="mt-0.5 shrink-0 rounded p-1 text-fg/30 transition hover:bg-red-500/15 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        <X className="h-4 w-4" />
+      </button>
+    </div>
+  );
+}
+
+function TriageSearchPanel({
+  existingUrls,
+  onSearch,
+  onAdd,
+  busy,
+}: {
+  existingUrls: Set<string>;
+  onSearch: (query: string) => Promise<SearchHit[]>;
+  onAdd: (url: string) => void;
+  busy: BusyState;
+}) {
+  const [query, setQuery] = useState('');
+  const [hits, setHits] = useState<SearchHit[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+
+  const runSearch = async () => {
+    const q = query.trim();
+    if (q.length < 2 || searching) return;
+    setSearching(true);
+    setSearchError(null);
+    try {
+      setHits(await onSearch(q));
+    } catch (err) {
+      setSearchError(String(err).slice(0, 200));
+      setHits(null);
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  return (
+    <div className="rounded-2xl border border-overlay/10 bg-overlay/[0.03] p-5">
+      <div className="mb-1 text-sm font-semibold text-fg">Search approved outlets</div>
+      <p className="mb-3 text-xs text-fg/45">
+        Keyword search across the approved news sites and think tanks — use it when the
+        automatic pull came up short. The 15 X/Twitter accounts aren&rsquo;t searchable this
+        way; those stay discovery-only.
+      </p>
+      <div className="flex gap-2">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              runSearch();
+            }
+          }}
+          placeholder="e.g. Hezbollah ceasefire"
+          className="flex-1 rounded-md border border-overlay/15 ark-recessed px-3 py-2 text-sm text-fg placeholder:text-fg/30"
+        />
+        <button
+          onClick={runSearch}
+          disabled={searching || query.trim().length < 2}
+          className="inline-flex items-center gap-1.5 rounded-md bg-sky-brand/20 px-3 py-2 text-xs text-sky-brand transition hover:bg-sky-brand/30 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {searching ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Search className="h-3.5 w-3.5" />
+          )}
+          Search
+        </button>
+      </div>
+
+      {searchError ? (
+        <div className="mt-3 rounded-md border border-red-400/30 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+          {searchError}
+        </div>
+      ) : null}
+
+      {hits !== null && !searchError ? (
+        hits.length === 0 ? (
+          <p className="mt-3 text-xs text-fg/45">
+            No results from approved outlets for that query.
+          </p>
+        ) : (
+          <div className="mt-3 flex flex-col gap-1.5">
+            {hits.map((hit) => {
+              const added = existingUrls.has(hit.url);
+              return (
+                <div
+                  key={hit.url}
+                  className="flex items-start gap-3 rounded-md border border-overlay/[0.06] bg-overlay/[0.02] px-3 py-2"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[0.7rem] uppercase tracking-wider text-fg/45">
+                        {hit.source}
+                      </span>
+                      {hit.publicationDate ? (
+                        <span className="text-[0.7rem] text-fg/35">
+                          {hit.publicationDate.slice(0, 10)}
+                        </span>
+                      ) : null}
+                    </div>
+                    <a
+                      href={hit.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block truncate text-sm text-fg/85 transition hover:text-fg"
+                    >
+                      {hit.title}
+                    </a>
+                  </div>
+                  <button
+                    onClick={() => onAdd(hit.url)}
+                    disabled={added || busy !== null}
+                    className="mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-md border border-overlay/15 px-2 py-1 text-xs text-fg/70 transition hover:border-overlay/30 hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {added ? (
+                      <CheckCircle2 className="h-3 w-3" />
+                    ) : (
+                      <Plus className="h-3 w-3" />
+                    )}
+                    {added ? 'Added' : 'Add'}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )
+      ) : null}
+    </div>
+  );
+}
+
 // ---------- Checkpoint ----------
 
 type TopicAction =
@@ -719,6 +1239,7 @@ function CheckpointView({
   busy,
   regenerating,
   onCancelEdit,
+  onRegroup,
 }: {
   distill: DistillResult;
   rejectedTopics: Set<number>;
@@ -728,9 +1249,12 @@ function CheckpointView({
   onTopicAction: (p: TopicAction) => Promise<boolean>;
   onCancelTopicAction: () => void;
   onAttach: (topicIndex: number, urls: string[]) => void;
-  busy: null | 'start' | 'refetch' | 'generate' | 'topics' | 'attach';
+  busy: BusyState;
   regenerating: boolean;
   onCancelEdit: (() => void) | null;
+  // Back to triage. Null when re-grouping doesn't apply — e.g. editing topics
+  // from an already-complete run, where the run's stage isn't `checkpoint`.
+  onRegroup: (() => void) | null;
 }) {
   const [showAdd, setShowAdd] = useState(false);
   const approvedCount = distill.topics.filter(
@@ -754,6 +1278,22 @@ function CheckpointView({
             </button>
           ) : null}
         </div>
+      ) : null}
+
+      {onRegroup ? (
+        <button
+          onClick={onRegroup}
+          disabled={busy !== null}
+          title="Go back to the raw article list to re-rank, prune, or search for more"
+          className="inline-flex items-center gap-1.5 self-start rounded-md border border-overlay/15 px-2.5 py-1 text-xs text-fg/60 transition hover:border-overlay/30 hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {busy === 'regroup' ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <ArrowLeft className="h-3 w-3" />
+          )}
+          Re-group articles
+        </button>
       ) : null}
 
       {distill.rationale ? (
@@ -919,7 +1459,7 @@ function TopicCard({
   onTopicAction: (p: TopicAction) => Promise<boolean>;
   onCancelTopicAction: () => void;
   onAttach: (urls: string[]) => void;
-  busy: null | 'start' | 'refetch' | 'generate' | 'topics' | 'attach';
+  busy: BusyState;
 }) {
   const [showRefetch, setShowRefetch] = useState(false);
   const [showAttach, setShowAttach] = useState(false);
