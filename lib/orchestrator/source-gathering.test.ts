@@ -1,18 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { generateText } from 'ai';
 
 import {
   discoverCandidates,
-  discoverXPosts,
   keywordSearch,
-  parseCandidates,
   verifyOrRecover,
 } from './source-gathering';
-
-vi.mock('ai', () => ({ generateText: vi.fn() }));
-vi.mock('@ai-sdk/google', () => ({
-  google: { tools: { googleSearch: () => ({}) } },
-}));
 
 type FetchMock = ReturnType<typeof vi.fn>;
 
@@ -295,69 +287,6 @@ describe('keywordSearch', () => {
   });
 });
 
-describe('parseCandidates', () => {
-  const one = {
-    title: 'A story',
-    url: 'https://www.timesofisrael.com/a-story/',
-    publicationDate: '2026-05-14',
-    source: 'Times of Israel',
-  };
-
-  it('parses a bare JSON array', () => {
-    expect(parseCandidates(JSON.stringify([one]))).toEqual([one]);
-  });
-
-  it('parses an array wrapped in a markdown code fence', () => {
-    const raw = '```json\n' + JSON.stringify([one], null, 2) + '\n```';
-    expect(parseCandidates(raw)).toEqual([one]);
-  });
-
-  it('parses past leading prose before the array', () => {
-    expect(parseCandidates(`Here are the articles:\n\n${JSON.stringify([one])}`)).toEqual([
-      one,
-    ]);
-  });
-
-  it('ignores trailing prose with bracket characters after the array', () => {
-    // The old greedy /\[[\s\S]*\]/ over-captured this and JSON.parse threw,
-    // collapsing the whole run to zero candidates.
-    const raw = `${JSON.stringify([one])}\n\nSources: [1] timesofisrael.com, [2] jpost.com`;
-    expect(parseCandidates(raw)).toEqual([one]);
-  });
-
-  it('handles bracket characters inside a title string', () => {
-    const tricky = { ...one, title: 'Report [updated]: the story ]' };
-    expect(parseCandidates(JSON.stringify([tricky]))[0].title).toBe(
-      'Report [updated]: the story ]',
-    );
-  });
-
-  it('drops Gemini grounding-redirect URLs', () => {
-    const redirect = {
-      ...one,
-      url: 'https://vertexaisearch.cloud.google.com/grounding-api-redirect/AbC123',
-    };
-    expect(parseCandidates(JSON.stringify([redirect, one]))).toEqual([one]);
-  });
-
-  it('returns [] when there is no array at all', () => {
-    expect(parseCandidates('I could not find any articles today.')).toEqual([]);
-  });
-
-  it('returns [] when the array is malformed JSON', () => {
-    expect(parseCandidates('[{ "title": "x", url: missing-quotes }]')).toEqual([]);
-  });
-
-  it('skips entries missing a url or title', () => {
-    const raw = JSON.stringify([
-      { title: 'no url' },
-      { url: 'https://www.jpost.com/x' },
-      one,
-    ]);
-    expect(parseCandidates(raw).map((c) => c.url)).toEqual([one.url]);
-  });
-});
-
 describe('discoverCandidates', () => {
   beforeEach(() => {
     vi.stubEnv('TAVILY_API_KEY', 'test-key');
@@ -462,111 +391,5 @@ describe('discoverCandidates', () => {
     await expect(
       discoverCandidates('2026-05-14', '', controller.signal),
     ).rejects.toThrow();
-  });
-});
-
-describe('discoverXPosts', () => {
-  // A valid status URL from an approved handle (@BarakRavid is on the list).
-  const validArray = JSON.stringify([
-    {
-      title: 'Barak Ravid reports on ceasefire talks',
-      url: 'https://x.com/BarakRavid/status/1234567890',
-      publicationDate: '2026-05-14',
-      source: 'Barak Ravid',
-    },
-  ]);
-
-  beforeEach(() => {
-    vi.mocked(generateText).mockReset();
-    // Silence the per-attempt diagnostic logging.
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it('returns parsed X-post candidates on the first successful attempt', async () => {
-    vi.mocked(generateText).mockResolvedValueOnce({
-      text: validArray,
-      finishReason: 'stop',
-    } as never);
-
-    const result = await discoverXPosts('2026-05-14');
-    expect(result.map((c) => c.url)).toEqual([
-      'https://x.com/BarakRavid/status/1234567890',
-    ]);
-    expect(generateText).toHaveBeenCalledTimes(1);
-  });
-
-  it('drops posts that are not canonical status URLs from approved handles', async () => {
-    const mixed = JSON.stringify([
-      {
-        title: 'Approved handle, real post',
-        url: 'https://x.com/BarakRavid/status/111',
-        publicationDate: '2026-05-14',
-        source: 'Barak Ravid',
-      },
-      {
-        title: 'Unlisted handle',
-        url: 'https://x.com/SomeRandom/status/222',
-        publicationDate: '2026-05-14',
-        source: 'Random',
-      },
-      {
-        title: 'Bare profile, not a post',
-        url: 'https://x.com/AmitSegal',
-        publicationDate: null,
-        source: 'Amit Segal',
-      },
-    ]);
-    vi.mocked(generateText).mockResolvedValueOnce({
-      text: mixed,
-      finishReason: 'stop',
-    } as never);
-
-    const result = await discoverXPosts('2026-05-14');
-    expect(result.map((c) => c.url)).toEqual(['https://x.com/BarakRavid/status/111']);
-  });
-
-  it('retries when an attempt yields no usable handle URLs', async () => {
-    vi.mocked(generateText)
-      .mockResolvedValueOnce({ text: 'no json here', finishReason: 'stop' } as never)
-      .mockResolvedValueOnce({ text: validArray, finishReason: 'stop' } as never);
-
-    const result = await discoverXPosts('2026-05-14');
-    expect(result).toHaveLength(1);
-    expect(generateText).toHaveBeenCalledTimes(2);
-  });
-
-  it('returns [] when every attempt completes but yields nothing usable', async () => {
-    vi.mocked(generateText).mockResolvedValue({
-      text: 'nothing parseable here',
-      finishReason: 'stop',
-    } as never);
-
-    const result = await discoverXPosts('2026-05-14');
-    expect(result).toEqual([]);
-    expect(generateText).toHaveBeenCalledTimes(3);
-  });
-
-  it('throws when every attempt throws, so the route can report the real failure', async () => {
-    vi.mocked(generateText).mockRejectedValue(
-      new Error('GatewayTimeoutError: timed out'),
-    );
-
-    await expect(discoverXPosts('2026-05-14')).rejects.toThrow(/GatewayTimeoutError/);
-    expect(generateText).toHaveBeenCalledTimes(3);
-  });
-
-  it('does not retry past a caller-initiated abort', async () => {
-    const controller = new AbortController();
-    controller.abort();
-    vi.mocked(generateText).mockRejectedValue(
-      new DOMException('Aborted', 'AbortError'),
-    );
-
-    await expect(discoverXPosts('2026-05-14', controller.signal)).rejects.toThrow();
-    expect(generateText).toHaveBeenCalledTimes(1);
   });
 });

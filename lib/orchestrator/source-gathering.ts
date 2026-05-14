@@ -1,9 +1,6 @@
-import { generateText, type Tool } from 'ai';
-import { google } from '@ai-sdk/google';
-
 import { ensureEnglish } from '../translate';
 import { cacheKey, getCached, setCached } from '../tool-cache';
-import { approvedHostnames, isApprovedSource, newsSources } from '../news-sources';
+import { approvedHostnames, isApprovedSource } from '../news-sources';
 import type { Article, Candidate } from './types';
 
 // -- Freshness window --------------------------------------------------------
@@ -26,25 +23,16 @@ function offsetDay(anchor: Date, delta: number): string {
   return x.toISOString().slice(0, 10);
 }
 
-// Acceptable publication dates, in writer-local calendar terms.
-function freshnessWindow(today: string): string[] {
+// Acceptable publication dates, in writer-local calendar terms. Exported so
+// the X API client (`lib/x-api.ts`) can derive a `start_time` from the same
+// window the rest of the orchestrator flags freshness against.
+export function freshnessWindow(today: string): string[] {
   const anchor = parseLocalDate(today);
   const dates = [offsetDay(anchor, 0), offsetDay(anchor, -1)];
   // On Monday, also accept Saturday so the show catches the full weekend
   // (Sunday is already covered by yesterday).
   if (anchor.getUTCDay() === 1) dates.push(offsetDay(anchor, -2));
   return dates;
-}
-
-export function freshnessContext(today: string): string {
-  const anchor = parseLocalDate(today);
-  const dow = anchor.getUTCDay();
-  const isMonday = dow === 1;
-  const window = freshnessWindow(today);
-  const list = isMonday
-    ? `${window[2]} (Saturday), ${window[1]} (Sunday), or ${window[0]} (today, Monday)`
-    : `${window[1]} (yesterday) or ${window[0]} (today)`;
-  return `Today is ${today}.\n\nAcceptable publication dates: ${list}. Prioritize the freshest stories — articles from the last ~24 hours.`;
 }
 
 // The freshness window as a Tavily `start_date`/`end_date` pair. `window[0]`
@@ -202,188 +190,6 @@ function titleSimilarity(a: string, b: string): number {
   return intersection / (ta.size + tb.size - intersection);
 }
 
-// -- Gemini X/Twitter discovery ----------------------------------------------
-// Article discovery moved to Tavily (see `discoverCandidates` below) — fast,
-// and it returns real date-filtered URLs. But Tavily's `include_domains`
-// can't target specific X/Twitter handles, so posts from the approved
-// handles still need grounded Gemini search. This prompt is scoped to *only*
-// those handles, so it's far narrower than the old all-outlet discovery.
-
-const X_DISCOVERY_PROMPT = (
-  today: string,
-  dateContext: string,
-  handleList: string,
-) => `You are a news researcher gathering recent X/Twitter posts for the *Ark News Daily* briefing — a 6–10 minute show on Israel, Jews, and the Middle East. Today is ${today}.
-
-${dateContext}
-
-Find the most newsworthy recent posts from ONLY these X/Twitter accounts:
-${handleList}
-
-Hard constraints:
-- ONLY return posts from the handles listed above. Do not include posts from any other account, however relevant.
-- Return individual post URLs — status links of the form https://x.com/{handle}/status/{id}. Not profile pages, not search pages.
-- Prioritize posts that break news, add original reporting, or give sharp analysis on Israel, Jews, and the Middle East.
-- Posts must fall within the acceptable date range above.
-
-Return a strict JSON array. No prose, no markdown fencing — just valid JSON. Each element:
-
-{ "title": string, "url": string, "publicationDate": "YYYY-MM-DD" or null, "source": string }
-
-"title" is a one-line summary of what the post says. "source" is the account's display name. Use the google_search tool to find posts. Cite real status URLs only.`;
-
-// Gemini's grounded-search tool sometimes hands back its own redirect URLs
-// (https://vertexaisearch.cloud.google.com/grounding-api-redirect/...) instead
-// of the real article links. They're unusable downstream — `isApprovedSource`
-// rejects the Google host, so a run full of them silently filters to zero.
-// Drop them at parse time; `discoverCandidates` retries when discovery comes
-// up short.
-const GROUNDING_REDIRECT_HOST = 'vertexaisearch.cloud.google.com';
-
-// Pull the first balanced top-level JSON array out of `raw`. Gemini wraps the
-// array in markdown fences and sometimes trails it with grounding prose that
-// itself contains brackets ("Sources: [1], [2]"); a greedy /\[[\s\S]*\]/
-// over-captures that trailing text and JSON.parse throws. Scan from the first
-// `[` to its matching `]`, tracking string literals so brackets inside titles
-// don't skew the depth count.
-function extractJsonArray(raw: string): string | null {
-  const start = raw.indexOf('[');
-  if (start === -1) return null;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < raw.length; i++) {
-    const ch = raw[i];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (ch === '\\') escaped = true;
-      else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') inString = true;
-    else if (ch === '[') depth++;
-    else if (ch === ']' && --depth === 0) return raw.slice(start, i + 1);
-  }
-  return null;
-}
-
-// Exported for unit testing.
-export function parseCandidates(raw: string): Candidate[] {
-  const json = extractJsonArray(raw);
-  if (!json) return [];
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(json);
-  } catch {
-    return [];
-  }
-  if (!Array.isArray(parsed)) return [];
-  return parsed.flatMap((c): Candidate[] => {
-    if (!c || typeof c !== 'object') return [];
-    const o = c as Record<string, unknown>;
-    const url = typeof o.url === 'string' ? o.url : null;
-    const title = typeof o.title === 'string' ? o.title : null;
-    if (!url || !title) return [];
-    let parsedUrl: URL;
-    try { parsedUrl = new URL(url); } catch { return []; }
-    if (parsedUrl.hostname === GROUNDING_REDIRECT_HOST) return [];
-    return [{
-      title,
-      url,
-      publicationDate: typeof o.publicationDate === 'string' ? o.publicationDate : null,
-      source: typeof o.source === 'string' ? o.source : parsedUrl.hostname,
-    }];
-  });
-}
-
-// Grounded Gemini is non-deterministic and fails several silent ways: the AI
-// Gateway times out, Gemini ends a grounded turn with no text to parse, or it
-// returns only redirect URLs (dropped in parseCandidates). Each yields zero
-// candidates, which the caller would otherwise surface as "no posts." Retry a
-// few times — a fresh call usually succeeds.
-const DISCOVERY_MAX_ATTEMPTS = 3;
-
-// Recent posts from the approved X/Twitter handles. Kept on grounded Gemini
-// because Tavily can't target specific handles — but scoped to *only* the 15
-// handles instead of the full outlet list, so it's far narrower (and faster)
-// than the old all-source discovery. Runs behind its own triage-stage button,
-// off the main "pull today's stories" path.
-export async function discoverXPosts(
-  today: string,
-  signal?: AbortSignal,
-): Promise<Candidate[]> {
-  const dateContext = freshnessContext(today);
-  const handleList = newsSources.xAccounts
-    .map((a) => `  - ${a.handle} (${a.name}${a.role ? `, ${a.role}` : ''})`)
-    .join('\n');
-  const prompt = X_DISCOVERY_PROMPT(today, dateContext, handleList);
-
-  // @ai-sdk/google's googleSearch tool returns Tool<{}, never> which doesn't
-  // satisfy ai v6's stricter Tool<never, never> tools-record constraint —
-  // narrow the cast rather than disabling type checking on the whole call.
-  const googleSearchTool = google.tools.googleSearch({}) as unknown as Tool;
-
-  let lastError: unknown = null;
-  let anyCompleted = false;
-  for (let attempt = 1; attempt <= DISCOVERY_MAX_ATTEMPTS; attempt++) {
-    try {
-      const { text, finishReason } = await generateText({
-        model: 'google/gemini-2.5-flash',
-        tools: { google_search: googleSearchTool },
-        prompt,
-        // 0 to discourage URL paraphrasing — the model still hallucinates
-        // sometimes, which is why isApprovedSource re-checks every URL.
-        temperature: 0,
-        abortSignal: signal,
-      });
-      anyCompleted = true;
-      // parseCandidates drops grounding-redirect URLs; isApprovedSource then
-      // rejects anything that isn't a canonical /{handle}/status/{id} URL from
-      // a listed handle — the backstop for Gemini straying off the handle list.
-      const candidates = parseCandidates(text).filter((c) => isApprovedSource(c.url));
-      if (candidates.length > 0) {
-        if (attempt > 1) {
-          console.warn(
-            JSON.stringify({
-              event: 'orchestrator.discover_x.recovered',
-              attempt,
-              candidateCount: candidates.length,
-            }),
-          );
-        }
-        return candidates;
-      }
-      // Completed, but empty/unparseable text or no usable handle URLs — log
-      // the miss so the failure mode is visible, then retry.
-      console.warn(
-        JSON.stringify({
-          event: 'orchestrator.discover_x.empty',
-          attempt,
-          finishReason,
-          textLength: text.length,
-        }),
-      );
-    } catch (err) {
-      // A cancelled gather must abort the whole run — don't retry past it.
-      if (signal?.aborted) throw err;
-      lastError = err;
-      console.warn(
-        JSON.stringify({
-          event: 'orchestrator.discover_x.error',
-          attempt,
-          err: String(err).slice(0, 300),
-        }),
-      );
-    }
-  }
-
-  // Every attempt threw (gateway down, etc.) — surface it so the route reports
-  // the real failure. If at least one attempt completed but returned nothing,
-  // that's a genuine empty result: return [] and let the caller handle it.
-  if (!anyCompleted && lastError) throw lastError;
-  return [];
-}
-
 // -- Tavily article discovery ------------------------------------------------
 // Article discovery used to be a single grounded Gemini call that ran dozens
 // of internal google_search round-trips to satisfy "12-15 articles across the
@@ -474,7 +280,8 @@ async function tavilySearch(opts: {
 // doubles as the weighting knob: discoverCandidates merges these round-robin,
 // so the three Israel queries hand the show's core beat ~1/3 of the triaged
 // pool. Tune the set here if coverage gaps show up. X/Twitter is intentionally
-// absent — it comes in through `discoverXPosts`.
+// absent — recent posts from the 15 X handles come in via the X API client
+// (`lib/x-api.ts`), behind the triage-stage "Pull recent X posts" button.
 const DISCOVERY_QUERIES = [
   'Israel',
   'Israeli politics',
@@ -650,7 +457,8 @@ export async function extractUrlToArticle(
 //
 // Limitation: Tavily `include_domains` can't target specific X/Twitter
 // handles, so this covers the news sites and think tanks but not the 15 X
-// accounts — those come in through `discoverXPosts`. The UI surfaces this.
+// accounts — those come in via the X API client (`lib/x-api.ts`). The UI
+// surfaces this.
 export async function keywordSearch(
   query: string,
   signal?: AbortSignal,

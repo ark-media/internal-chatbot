@@ -1,18 +1,23 @@
 // Behavioral tests for the /x-posts route — the triage-stage X/Twitter pull.
-// The grounded-Gemini discovery, the freshness helper, persistence, and the
-// rate limiter are mocked so the handler runs in isolation. The focus is
-// stage gating, freshness flagging of the returned hits, and that a cancelled
-// pull unwinds with 499 rather than a 500.
+// The X API client, the freshness helper, persistence, and the rate limiter
+// are mocked so the handler runs in isolation. The focus is the not-configured
+// gate, stage gating, freshness flagging of the returned hits, and that a
+// cancelled pull unwinds with 499 rather than a 500.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Candidate, OrchestratorRun } from '@/lib/orchestrator/types';
 
-const discoverXPosts = vi.fn();
+const discoverXPostsViaApi = vi.fn();
+const isXApiConfigured = vi.fn();
+vi.mock('@/lib/x-api', () => ({
+  discoverXPostsViaApi: (...args: unknown[]) => discoverXPostsViaApi(...args),
+  isXApiConfigured: () => isXApiConfigured(),
+}));
+
 // inAcceptableRange is pure; this stand-in makes only the '2026-05-13' date
 // "fresh" so the flagging assertion has something to bite on.
 vi.mock('@/lib/orchestrator/source-gathering', () => ({
-  discoverXPosts: (...args: unknown[]) => discoverXPosts(...args),
   inAcceptableRange: (_today: string, date: string | null) => date === '2026-05-13',
 }));
 
@@ -71,8 +76,9 @@ function makeRequest(body: unknown, opts: { aborted?: boolean } = {}): Request {
 
 describe('POST /api/news/orchestrator/x-posts', () => {
   beforeEach(() => {
+    isXApiConfigured.mockReturnValue(true);
     loadRun.mockResolvedValue(makeRun());
-    discoverXPosts.mockResolvedValue([]);
+    discoverXPostsViaApi.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -94,14 +100,26 @@ describe('POST /api/news/orchestrator/x-posts', () => {
         publicationDate: '2026-04-01',
       },
     ];
-    discoverXPosts.mockResolvedValue(hits);
+    discoverXPostsViaApi.mockResolvedValue(hits);
 
     const res = await POST(makeRequest({ chatId: CHAT_ID }));
 
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.hits.map((h: Candidate) => h.isFlagged)).toEqual([false, true]);
-    expect(discoverXPosts).toHaveBeenCalledTimes(1);
+    expect(discoverXPostsViaApi).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns 503 not_configured when the X API key is absent', async () => {
+    isXApiConfigured.mockReturnValue(false);
+
+    const res = await POST(makeRequest({ chatId: CHAT_ID }));
+
+    expect(res.status).toBe(503);
+    await expect(res.json()).resolves.toMatchObject({ error: 'not_configured' });
+    // The capability gate short-circuits before any run-specific work.
+    expect(loadRun).not.toHaveBeenCalled();
+    expect(discoverXPostsViaApi).not.toHaveBeenCalled();
   });
 
   it('rejects a pull against a run that is not in triage', async () => {
@@ -110,7 +128,7 @@ describe('POST /api/news/orchestrator/x-posts', () => {
     const res = await POST(makeRequest({ chatId: CHAT_ID }));
 
     expect(res.status).toBe(409);
-    expect(discoverXPosts).not.toHaveBeenCalled();
+    expect(discoverXPostsViaApi).not.toHaveBeenCalled();
   });
 
   it('returns 404 when the run does not exist', async () => {
@@ -119,11 +137,11 @@ describe('POST /api/news/orchestrator/x-posts', () => {
     const res = await POST(makeRequest({ chatId: CHAT_ID }));
 
     expect(res.status).toBe(404);
-    expect(discoverXPosts).not.toHaveBeenCalled();
+    expect(discoverXPostsViaApi).not.toHaveBeenCalled();
   });
 
   it('surfaces a discovery failure as 500', async () => {
-    discoverXPosts.mockRejectedValue(new Error('GatewayTimeoutError: timed out'));
+    discoverXPostsViaApi.mockRejectedValue(new Error('X API 401 on /2/users/by'));
 
     const res = await POST(makeRequest({ chatId: CHAT_ID }));
 
@@ -132,7 +150,7 @@ describe('POST /api/news/orchestrator/x-posts', () => {
   });
 
   it('returns 499 when the pull is cancelled mid-flight', async () => {
-    discoverXPosts.mockRejectedValue(new DOMException('Aborted', 'AbortError'));
+    discoverXPostsViaApi.mockRejectedValue(new DOMException('Aborted', 'AbortError'));
 
     const res = await POST(makeRequest({ chatId: CHAT_ID }, { aborted: true }));
 
@@ -143,6 +161,6 @@ describe('POST /api/news/orchestrator/x-posts', () => {
     const res = await POST(makeRequest({}));
 
     expect(res.status).toBe(400);
-    expect(discoverXPosts).not.toHaveBeenCalled();
+    expect(discoverXPostsViaApi).not.toHaveBeenCalled();
   });
 });

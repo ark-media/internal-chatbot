@@ -1,17 +1,15 @@
 import { z } from 'zod';
 
-import {
-  discoverXPosts,
-  inAcceptableRange,
-} from '@/lib/orchestrator/source-gathering';
+import { inAcceptableRange } from '@/lib/orchestrator/source-gathering';
 import { ensureOrchestratorTables, loadRun } from '@/lib/orchestrator/state';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { discoverXPostsViaApi, isXApiConfigured } from '@/lib/x-api';
 
 export const runtime = 'nodejs';
-// Grounded Gemini search scoped to the 15 approved X handles, with the same
-// retry-on-empty loop discovery uses — narrower than the old all-outlet pull,
-// but still a model call that can retry, so give it the full budget.
-export const maxDuration = 300;
+// The X API path is a handful of fast HTTP calls — one handle→id lookup plus
+// the per-handle timeline reads, fanned out in parallel — not a retrying model
+// call, so 60s is ample.
+export const maxDuration = 60;
 
 const bodySchema = z.object({
   chatId: z.string().min(1),
@@ -39,6 +37,19 @@ export async function POST(req: Request) {
     }
   }
 
+  // X API credentials aren't wired up yet. The triage UI hides this behind a
+  // disabled "Coming soon" button, but guard here too — a direct call should
+  // fail cleanly with a known shape, not throw deep in `discoverXPostsViaApi`.
+  if (!isXApiConfigured()) {
+    return Response.json(
+      {
+        error: 'not_configured',
+        detail: 'Pulling X posts is coming soon — the X API is not configured yet.',
+      },
+      { status: 503 },
+    );
+  }
+
   let body: z.infer<typeof bodySchema>;
   try {
     body = bodySchema.parse(await req.json());
@@ -55,7 +66,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const hits = await discoverXPosts(run.today, req.signal);
+    const hits = await discoverXPostsViaApi(run.today, req.signal);
     // Flag freshness against the run's date so X hits show the same "older
     // story" badge the triage list and keyword search do.
     const flagged = hits.map((h) => ({

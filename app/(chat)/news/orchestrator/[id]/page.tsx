@@ -1253,8 +1253,14 @@ function HitList({
   );
 }
 
-// Pull recent posts from the approved X/Twitter handles. Unlike keyword search
-// this takes no query — it's a one-button grounded-model search over the 15
+// X post pulling is gated until the X API has credentials. While this is
+// false the panel renders a disabled "Coming soon" button and never calls the
+// route; the /x-posts route guards independently on `X_API_BEARER_TOKEN`. To
+// enable: set X_API_BEARER_TOKEN in the deployment env, then flip this to true.
+const X_POSTS_ENABLED = false;
+
+// Pull recent posts from the approved X/Twitter handles via the X API. Unlike
+// keyword search this takes no query — it's a one-button pull over the 15
 // handles — but it's the same read-only, owns-its-own-loading-state pattern.
 function TriageXPanel({
   existingUrls,
@@ -1272,7 +1278,7 @@ function TriageXPanel({
   const [pullError, setPullError] = useState<string | null>(null);
 
   const runPull = async () => {
-    if (pulling) return;
+    if (!X_POSTS_ENABLED || pulling) return;
     setPulling(true);
     setPullError(null);
     try {
@@ -1289,13 +1295,13 @@ function TriageXPanel({
     <div className="rounded-2xl border border-overlay/10 bg-overlay/[0.03] p-5">
       <div className="mb-1 text-sm font-semibold text-fg">Pull recent X posts</div>
       <p className="mb-3 text-xs text-fg/45">
-        Searches the 15 approved X/Twitter accounts for recent posts on the beat.
-        This one runs a grounded model search, so it takes longer than the keyword
-        search above.
+        {X_POSTS_ENABLED
+          ? 'Pulls recent posts from the 15 approved X/Twitter accounts via the X API.'
+          : 'Pulls recent posts from the 15 approved X/Twitter accounts — coming soon, once the X API is connected.'}
       </p>
       <button
         onClick={runPull}
-        disabled={pulling}
+        disabled={!X_POSTS_ENABLED || pulling}
         className="inline-flex items-center gap-1.5 rounded-md bg-sky-brand/20 px-3 py-2 text-xs text-sky-brand transition hover:bg-sky-brand/30 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {pulling ? (
@@ -1303,7 +1309,11 @@ function TriageXPanel({
         ) : (
           <AtSign className="h-3.5 w-3.5" />
         )}
-        {pulling ? 'Pulling X posts…' : 'Pull recent X posts'}
+        {!X_POSTS_ENABLED
+          ? 'Coming soon'
+          : pulling
+            ? 'Pulling X posts…'
+            : 'Pull recent X posts'}
       </button>
 
       {pullError ? (
