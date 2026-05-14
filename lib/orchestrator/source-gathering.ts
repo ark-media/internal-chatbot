@@ -36,7 +36,7 @@ function freshnessWindow(today: string): string[] {
   return dates;
 }
 
-function freshnessContext(today: string): string {
+export function freshnessContext(today: string): string {
   const anchor = parseLocalDate(today);
   const dow = anchor.getUTCDay();
   const isMonday = dow === 1;
@@ -53,7 +53,7 @@ type ExtractResult =
   | { ok: true; title: string; text: string; date: string | null; source: string }
   | { ok: false; note: string };
 
-async function extractArticle(url: string): Promise<ExtractResult> {
+async function extractArticle(url: string, signal?: AbortSignal): Promise<ExtractResult> {
   const apiKey = process.env.TAVILY_API_KEY;
   if (!apiKey) return { ok: false, note: 'TAVILY_API_KEY missing' };
 
@@ -66,6 +66,7 @@ async function extractArticle(url: string): Promise<ExtractResult> {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ api_key: apiKey, urls: [url], extract_depth: 'advanced' }),
+      signal,
     });
     if (!resp.ok) {
       return { ok: false, note: `Tavily ${resp.status}` };
@@ -82,7 +83,7 @@ async function extractArticle(url: string): Promise<ExtractResult> {
     const r = data.results?.[0];
     if (!r) return { ok: false, note: 'no content' };
 
-    const text = await ensureEnglish(r.raw_content ?? '');
+    const text = await ensureEnglish(r.raw_content ?? '', signal);
     const result: ExtractResult = {
       ok: true,
       title: r.title ?? 'Untitled',
@@ -93,6 +94,9 @@ async function extractArticle(url: string): Promise<ExtractResult> {
     await setCached(key, result);
     return result;
   } catch (err) {
+    // A cancelled gather must abort the whole run — don't bury it as a
+    // per-article failure.
+    if (signal?.aborted) throw err;
     return { ok: false, note: String(err).slice(0, 200) };
   }
 }
@@ -110,15 +114,19 @@ const VERIFY_TIMEOUT_MS = 5000;
 // articles that happen to mention shared keywords.
 const TITLE_SIMILARITY_THRESHOLD = 0.4;
 
-async function headStatus(url: string): Promise<number> {
+async function headStatus(url: string, signal?: AbortSignal): Promise<number> {
+  const timeout = AbortSignal.timeout(VERIFY_TIMEOUT_MS);
   try {
     const r = await fetch(url, {
       method: 'HEAD',
       redirect: 'follow',
-      signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
+      signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
     });
     return r.status;
-  } catch {
+  } catch (err) {
+    // The 5s timeout aborting is an expected dead-URL signal — fall through
+    // to 0. A caller-initiated abort means the whole gather was cancelled.
+    if (signal?.aborted) throw err;
     return 0;
   }
 }
@@ -126,9 +134,11 @@ async function headStatus(url: string): Promise<number> {
 async function searchByTitle(
   title: string,
   domain: string,
+  signal?: AbortSignal,
 ): Promise<{ url: string; title: string } | null> {
   const apiKey = process.env.TAVILY_API_KEY;
   if (!apiKey) return null;
+  const timeout = AbortSignal.timeout(VERIFY_TIMEOUT_MS);
   try {
     const resp = await fetch('https://api.tavily.com/search', {
       method: 'POST',
@@ -139,7 +149,7 @@ async function searchByTitle(
         include_domains: [domain],
         max_results: 3,
       }),
-      signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
+      signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
     });
     if (!resp.ok) return null;
     const data = (await resp.json()) as {
@@ -151,7 +161,9 @@ async function searchByTitle(
       url: top.url,
       title: typeof top.title === 'string' ? top.title : '',
     };
-  } catch {
+  } catch (err) {
+    // Timeout → treat as no recovery found. Caller-initiated abort → propagate.
+    if (signal?.aborted) throw err;
     return null;
   }
 }
@@ -244,10 +256,13 @@ function parseCandidates(raw: string): Candidate[] {
   }
 }
 
-async function discoverCandidates(
+// Exported for the `scripts/discover-news-candidates.ts` preview tool — it
+// dumps this raw output before approval filtering / verification / extraction.
+export async function discoverCandidates(
   today: string,
   dateContext: string,
   extraGuidance: string,
+  signal?: AbortSignal,
 ): Promise<Candidate[]> {
   const outletList = [
     `English-language outlets:\n${newsSources.englishSites.map((s) => `  - ${s}`).join('\n')}`,
@@ -269,14 +284,18 @@ async function discoverCandidates(
     // 0 to discourage URL paraphrasing — the model still hallucinates
     // sometimes, which is why we verify each candidate URL below.
     temperature: 0,
+    abortSignal: signal,
   });
   return parseCandidates(text);
 }
 
 // Exported for testing. The Candidate type is file-local; tests pass a plain
 // object with the same shape.
-export async function verifyOrRecover(c: Candidate): Promise<Candidate | null> {
-  const status = await headStatus(c.url);
+export async function verifyOrRecover(
+  c: Candidate,
+  signal?: AbortSignal,
+): Promise<Candidate | null> {
+  const status = await headStatus(c.url, signal);
   // Treat only a definitive 404 as a hallucinated URL. 405 (HEAD not allowed),
   // network errors (status 0), and 5xx responses fall through to extract,
   // which has its own retry/timeout semantics and a structured failure path.
@@ -289,7 +308,7 @@ export async function verifyOrRecover(c: Candidate): Promise<Candidate | null> {
     return null;
   }
 
-  const recovered = await searchByTitle(c.title, domain);
+  const recovered = await searchByTitle(c.title, domain, signal);
   if (!recovered || recovered.url === c.url) {
     console.warn(`[gatherSources] dropping unrecoverable 404: ${c.url}`);
     return null;
@@ -350,11 +369,12 @@ export async function gatherSources(opts: {
   timezone?: string;
   extraGuidance?: string;
   maxArticles?: number;
+  signal?: AbortSignal;
 }): Promise<Article[]> {
-  const { today, extraGuidance = '', maxArticles = 15 } = opts;
+  const { today, extraGuidance = '', maxArticles = 15, signal } = opts;
   const dateContext = freshnessContext(today);
 
-  const candidates = await discoverCandidates(today, dateContext, extraGuidance);
+  const candidates = await discoverCandidates(today, dateContext, extraGuidance, signal);
   if (candidates.length === 0) return [];
 
   // Drop anything Gemini returned from outside the approved outlet list —
@@ -378,9 +398,12 @@ export async function gatherSources(opts: {
   // collapse the entire run to zero articles.
   const verifiedSeen = new Set<string>();
   const verified: Candidate[] = [];
-  const settled = await Promise.allSettled(deduped.map(verifyOrRecover));
+  const settled = await Promise.allSettled(deduped.map((c) => verifyOrRecover(c, signal)));
   for (const s of settled) {
     if (s.status === 'rejected') {
+      // A cancelled gather surfaces here as a rejected settle — propagate it
+      // instead of skipping, so the run actually stops.
+      if (signal?.aborted) throw s.reason;
       console.warn(`[gatherSources] verify threw, skipping: ${String(s.reason)}`);
       continue;
     }
@@ -392,7 +415,7 @@ export async function gatherSources(opts: {
 
   const extracted = await Promise.all(
     verified.map(async (c): Promise<Article | null> => {
-      const result = await extractArticle(c.url);
+      const result = await extractArticle(c.url, signal);
       const isFlagged = !inAcceptableRange(today, c.publicationDate);
       if (!result.ok) {
         // Backstop: even after URL verification, Tavily can fail (paywall,

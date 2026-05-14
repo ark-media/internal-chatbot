@@ -128,3 +128,44 @@ describe('verifyOrRecover', () => {
     expect(result).toEqual(candidate);
   });
 });
+
+describe('verifyOrRecover — cancellation', () => {
+  beforeEach(() => {
+    vi.stubEnv('TAVILY_API_KEY', 'test-key');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it('rejects instead of swallowing when the caller signal is aborted', async () => {
+    installFetchMock((_url, init) => {
+      // Real fetch rejects on an aborted signal — mirror that so the
+      // signal-aware catch in headStatus has something to observe.
+      if (init?.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      return new Response(null, { status: 200 });
+    });
+
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(verifyOrRecover(candidate, controller.signal)).rejects.toThrow();
+  });
+
+  it('still swallows the internal 5s verify timeout (not a caller abort)', async () => {
+    // The verify timeout aborts with a TimeoutError, distinct from the
+    // caller's signal — headStatus should treat it as a dead URL (status 0)
+    // and pass the candidate through for extract to retry, not propagate.
+    installFetchMock((_url, init) => {
+      if (init?.method === 'HEAD') throw new DOMException('Timed out', 'TimeoutError');
+      throw new Error('Tavily search should not be called');
+    });
+
+    const controller = new AbortController();
+    const result = await verifyOrRecover(candidate, controller.signal);
+    expect(result).toEqual(candidate);
+  });
+});

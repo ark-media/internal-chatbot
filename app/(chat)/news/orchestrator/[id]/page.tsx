@@ -144,6 +144,10 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
     null | 'start' | 'refetch' | 'generate' | 'topics' | 'attach'
   >(null);
   const generateInFlightRef = useRef(false);
+  // Tracks the in-flight /topics request so a writer can cancel a slow
+  // source-gather. One controller is enough — `busy` is global, so only one
+  // /topics request runs at a time.
+  const topicAbortRef = useRef<AbortController | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [today, setToday] = useState<string>(todayISO());
   const [rejectedTopics, setRejectedTopics] = useState<Set<number>>(new Set());
@@ -243,11 +247,14 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
     ): Promise<boolean> => {
       setBusy('topics');
       setError(null);
+      const controller = new AbortController();
+      topicAbortRef.current = controller;
       try {
         const res = await fetch('/api/news/orchestrator/topics', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ chatId, ...payload }),
+          signal: controller.signal,
         });
         const data = (await res.json()) as TopicsResponse;
         if ('error' in data) {
@@ -264,14 +271,23 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
         }
         return true;
       } catch (err) {
+        // A writer-initiated cancel isn't an error — unwind quietly. The
+        // server bails before committing, so there's nothing to refresh.
+        if (controller.signal.aborted) return false;
         setError(String(err).slice(0, 300));
         return false;
       } finally {
+        topicAbortRef.current = null;
         setBusy(null);
       }
     },
     [chatId, refresh],
   );
+
+  // Aborts an in-flight /topics gather. No-op when nothing is running.
+  const cancelTopicAction = useCallback(() => {
+    topicAbortRef.current?.abort();
+  }, []);
 
   const attachUrls = useCallback(
     async (topicIndex: number, urls: string[]) => {
@@ -413,6 +429,7 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
               onRefetch={refetch}
               onGenerate={generate}
               onTopicAction={topicAction}
+              onCancelTopicAction={cancelTopicAction}
               onAttach={attachUrls}
               busy={busy}
               regenerating={editingFromComplete}
@@ -697,6 +714,7 @@ function CheckpointView({
   onRefetch,
   onGenerate,
   onTopicAction,
+  onCancelTopicAction,
   onAttach,
   busy,
   regenerating,
@@ -708,6 +726,7 @@ function CheckpointView({
   onRefetch: (index: number, guidance: string) => void;
   onGenerate: () => void;
   onTopicAction: (p: TopicAction) => Promise<boolean>;
+  onCancelTopicAction: () => void;
   onAttach: (topicIndex: number, urls: string[]) => void;
   busy: null | 'start' | 'refetch' | 'generate' | 'topics' | 'attach';
   regenerating: boolean;
@@ -759,6 +778,7 @@ function CheckpointView({
           onToggleReject={() => onToggleReject(i)}
           onRefetch={(guidance) => onRefetch(i, guidance)}
           onTopicAction={onTopicAction}
+          onCancelTopicAction={onCancelTopicAction}
           onAttach={(urls) => onAttach(i, urls)}
           busy={busy}
         />
@@ -766,7 +786,12 @@ function CheckpointView({
 
       {showAdd ? (
         <AddTopicCard
-          onCancel={() => setShowAdd(false)}
+          onCancel={() => {
+            // Abort an in-flight gather (no-op if idle) before unmounting,
+            // so cancelling actually stops the server-side work.
+            onCancelTopicAction();
+            setShowAdd(false);
+          }}
           onSubmit={async (payload) => {
             // Keep the card mounted (and showing its busy state) until the
             // add — which auto-gathers sources server-side — actually lands.
@@ -861,8 +886,7 @@ function AddTopicCard({
         </button>
         <button
           onClick={onCancel}
-          disabled={busy}
-          className="rounded-md px-3 py-1.5 text-xs text-fg/60 hover:bg-overlay/5 hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-md px-3 py-1.5 text-xs text-fg/60 hover:bg-overlay/5 hover:text-fg"
         >
           Cancel
         </button>
@@ -883,6 +907,7 @@ function TopicCard({
   onToggleReject,
   onRefetch,
   onTopicAction,
+  onCancelTopicAction,
   onAttach,
   busy,
 }: {
@@ -892,6 +917,7 @@ function TopicCard({
   onToggleReject: () => void;
   onRefetch: (guidance: string) => void;
   onTopicAction: (p: TopicAction) => Promise<boolean>;
+  onCancelTopicAction: () => void;
   onAttach: (urls: string[]) => void;
   busy: null | 'start' | 'refetch' | 'generate' | 'topics' | 'attach';
 }) {
@@ -1086,6 +1112,14 @@ function TopicCard({
                       )}
                       {gathering ? 'Finding sources…' : 'Auto-gather for this topic'}
                     </button>
+                    {gathering ? (
+                      <button
+                        onClick={onCancelTopicAction}
+                        className="text-xs text-fg/55 transition hover:text-fg"
+                      >
+                        Cancel
+                      </button>
+                    ) : null}
                   </>
                 ) : null}
               </>

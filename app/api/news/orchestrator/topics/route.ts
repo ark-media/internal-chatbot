@@ -124,6 +124,12 @@ export async function POST(req: Request) {
     updated: OrchestratorRun,
     extra: Record<string, unknown> = {},
   ): Promise<Response> => {
+    // If the client walked away mid-request (e.g. cancelled a slow gather),
+    // don't persist — they won't see the result and it would surprise them
+    // on the next reload.
+    if (req.signal.aborted) {
+      return new Response('client closed request', { status: 499 });
+    }
     const ok = await saveRunIfUnchanged(updated, baseUpdatedAt);
     if (!ok) {
       return Response.json(
@@ -142,12 +148,23 @@ export async function POST(req: Request) {
     let articles: RatedArticle[] = [];
     let allArticles = run.articles;
     if (body.autoGather) {
-      const fresh = await gatherSources({
-        today: run.today,
-        timezone: run.timezone,
-        extraGuidance: `Specifically find articles on this topic: "${body.topic}". ${body.description}`,
-        maxArticles: 6,
-      });
+      let fresh: Article[];
+      try {
+        fresh = await gatherSources({
+          today: run.today,
+          timezone: run.timezone,
+          extraGuidance: `Specifically find articles on this topic: "${body.topic}". ${body.description}`,
+          maxArticles: 6,
+          signal: req.signal,
+        });
+      } catch (err) {
+        // Writer cancelled the gather — nothing has been persisted yet, so
+        // just unwind. Any other failure is a real error; let it bubble.
+        if (req.signal.aborted) {
+          return new Response('client closed request', { status: 499 });
+        }
+        throw err;
+      }
       const seen = new Set(run.articles.map((a) => a.url));
       const deduped = fresh.filter((a) => !seen.has(a.url));
       articles = deduped.map((article) => ({
@@ -232,12 +249,22 @@ export async function POST(req: Request) {
     return Response.json({ error: 'invalid_topic_index' }, { status: 400 });
   }
   const target = distill.topics[body.topicIndex];
-  const fresh = await gatherSources({
-    today: run.today,
-    timezone: run.timezone,
-    extraGuidance: `Specifically find articles on this topic: "${target.topic}". ${target.description}`,
-    maxArticles: 6,
-  });
+  let fresh: Article[];
+  try {
+    fresh = await gatherSources({
+      today: run.today,
+      timezone: run.timezone,
+      extraGuidance: `Specifically find articles on this topic: "${target.topic}". ${target.description}`,
+      maxArticles: 6,
+      signal: req.signal,
+    });
+  } catch (err) {
+    // Writer cancelled the gather — nothing persisted yet, just unwind.
+    if (req.signal.aborted) {
+      return new Response('client closed request', { status: 499 });
+    }
+    throw err;
+  }
   const existingUrls = new Set(run.articles.map((a) => a.url));
   const deduped = fresh.filter((a: Article) => !existingUrls.has(a.url));
   const augmented: RatedArticle[] = deduped.map((article) => ({
