@@ -230,6 +230,9 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
     [chatId, refresh],
   );
 
+  // Resolves to `true` on success so callers can defer UI teardown (e.g. the
+  // add-topic form) until the request — which for `add`/`gather` includes a
+  // slow source-gathering pass — actually finishes.
   const topicAction = useCallback(
     async (
       payload:
@@ -237,7 +240,7 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
         | { action: 'update'; topicIndex: number; topic?: string; description?: string }
         | { action: 'delete'; topicIndex: number }
         | { action: 'gather'; topicIndex: number },
-    ) => {
+    ): Promise<boolean> => {
       setBusy('topics');
       setError(null);
       try {
@@ -249,7 +252,7 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
         const data = (await res.json()) as TopicsResponse;
         if ('error' in data) {
           setError(data.error);
-          return;
+          return false;
         }
         await refresh();
         if (payload.action === 'delete') {
@@ -259,8 +262,10 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
             new Set(renumberIndicesAfterDelete(Array.from(prev), payload.topicIndex)),
           );
         }
+        return true;
       } catch (err) {
         setError(String(err).slice(0, 300));
+        return false;
       } finally {
         setBusy(null);
       }
@@ -702,7 +707,7 @@ function CheckpointView({
   onToggleReject: (index: number) => void;
   onRefetch: (index: number, guidance: string) => void;
   onGenerate: () => void;
-  onTopicAction: (p: TopicAction) => void;
+  onTopicAction: (p: TopicAction) => Promise<boolean>;
   onAttach: (topicIndex: number, urls: string[]) => void;
   busy: null | 'start' | 'refetch' | 'generate' | 'topics' | 'attach';
   regenerating: boolean;
@@ -762,9 +767,12 @@ function CheckpointView({
       {showAdd ? (
         <AddTopicCard
           onCancel={() => setShowAdd(false)}
-          onSubmit={(payload) => {
-            onTopicAction({ action: 'add', ...payload });
-            setShowAdd(false);
+          onSubmit={async (payload) => {
+            // Keep the card mounted (and showing its busy state) until the
+            // add — which auto-gathers sources server-side — actually lands.
+            // Dismiss only on success so a failure leaves the form intact.
+            const ok = await onTopicAction({ action: 'add', ...payload });
+            if (ok) setShowAdd(false);
           }}
           busy={busy === 'topics'}
         />
@@ -821,21 +829,24 @@ function AddTopicCard({
         value={topic}
         onChange={(e) => setTopic(e.target.value)}
         placeholder="Short topic name"
-        className="mb-2 w-full rounded-md border border-overlay/15 ark-recessed px-3 py-2 text-sm text-fg placeholder:text-fg/30"
+        disabled={busy}
+        className="mb-2 w-full rounded-md border border-overlay/15 ark-recessed px-3 py-2 text-sm text-fg placeholder:text-fg/30 disabled:opacity-60"
       />
       <textarea
         value={description}
         onChange={(e) => setDescription(e.target.value)}
         placeholder="1–2 sentence description"
         rows={2}
-        className="mb-3 w-full rounded-md border border-overlay/15 ark-recessed px-3 py-2 text-sm text-fg placeholder:text-fg/30"
+        disabled={busy}
+        className="mb-3 w-full rounded-md border border-overlay/15 ark-recessed px-3 py-2 text-sm text-fg placeholder:text-fg/30 disabled:opacity-60"
       />
       <label className="mb-3 flex items-center gap-2 text-xs text-fg/55">
         <input
           type="checkbox"
           checked={autoGather}
           onChange={(e) => setAutoGather(e.target.checked)}
-          className="rounded border-overlay/20 ark-recessed"
+          disabled={busy}
+          className="rounded border-overlay/20 ark-recessed disabled:opacity-60"
         />
         Find sources for this topic now
       </label>
@@ -846,15 +857,21 @@ function AddTopicCard({
           className="inline-flex items-center gap-1.5 rounded-md bg-sky-brand/20 px-3 py-1.5 text-xs text-sky-brand transition hover:bg-sky-brand/30 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
-          Add topic
+          {busy ? (autoGather ? 'Finding sources…' : 'Adding…') : 'Add topic'}
         </button>
         <button
           onClick={onCancel}
-          className="rounded-md px-3 py-1.5 text-xs text-fg/60 hover:bg-overlay/5 hover:text-fg"
+          disabled={busy}
+          className="rounded-md px-3 py-1.5 text-xs text-fg/60 hover:bg-overlay/5 hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
         >
           Cancel
         </button>
       </div>
+      {busy && autoGather ? (
+        <p className="mt-3 text-xs text-fg/45">
+          Searching approved outlets for sources on this topic — this usually takes up to a minute.
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -874,12 +891,15 @@ function TopicCard({
   rejected: boolean;
   onToggleReject: () => void;
   onRefetch: (guidance: string) => void;
-  onTopicAction: (p: TopicAction) => void;
+  onTopicAction: (p: TopicAction) => Promise<boolean>;
   onAttach: (urls: string[]) => void;
   busy: null | 'start' | 'refetch' | 'generate' | 'topics' | 'attach';
 }) {
   const [showRefetch, setShowRefetch] = useState(false);
   const [showAttach, setShowAttach] = useState(false);
+  // Local to this card so only the topic the writer clicked shows the
+  // gather spinner — `busy` is global and disables every card's actions.
+  const [gathering, setGathering] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(topic.topic);
   const [descDraft, setDescDraft] = useState(topic.description);
@@ -1048,17 +1068,36 @@ function TopicCard({
                   <>
                     <span className="text-xs text-fg/20">·</span>
                     <button
-                      onClick={() => onTopicAction({ action: 'gather', topicIndex: index })}
+                      onClick={async () => {
+                        setGathering(true);
+                        // `topicAction` clears the global busy flag in its
+                        // own `finally`; the local flag just scopes the
+                        // spinner to this card.
+                        await onTopicAction({ action: 'gather', topicIndex: index });
+                        setGathering(false);
+                      }}
                       disabled={busy !== null}
                       className="inline-flex items-center gap-1.5 text-xs text-sky-brand-soft transition hover:text-fg disabled:opacity-50"
                     >
-                      <RefreshCw className="h-3 w-3" /> Auto-gather for this topic
+                      {gathering ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-3 w-3" />
+                      )}
+                      {gathering ? 'Finding sources…' : 'Auto-gather for this topic'}
                     </button>
                   </>
                 ) : null}
               </>
             ) : null}
           </div>
+
+          {gathering ? (
+            <p className="text-xs text-fg/45">
+              Searching approved outlets for sources on this topic — this usually takes up to a
+              minute.
+            </p>
+          ) : null}
 
           {showRefetch ? (
             <div className="flex flex-col gap-2">
