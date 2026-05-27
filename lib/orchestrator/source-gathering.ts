@@ -47,13 +47,16 @@ export function freshnessContext(today: string): string {
   return `Today is ${today}.\n\nAcceptable publication dates: ${list}. Prioritize the freshest stories — articles from the last ~24 hours.`;
 }
 
-// The freshness window as a Tavily `start_date`/`end_date` pair. `window[0]`
-// is today; the last element is the earliest acceptable date (yesterday, or
-// Saturday on Mondays). Tavily filters on publish/update date — `inAcceptableRange`
-// still does the authoritative per-candidate flagging downstream.
-function freshnessRange(today: string): { startDate: string; endDate: string } {
-  const window = freshnessWindow(today);
-  return { startDate: window[window.length - 1], endDate: window[0] };
+// The freshness window expressed as Tavily's `days` parameter — how many days
+// back from "now" to include. Tavily's `start_date`/`end_date` filter is anchored
+// to midnight UTC and ranks the window by relevance, which means yesterday's
+// articles (which have had ~24h longer to accumulate relevance signals) crowd
+// out today's stories before our per-query cap is hit. `days` is anchored to
+// "now" and weights toward the freshest indexed content, so today's articles
+// actually surface. `inAcceptableRange` still does the authoritative per-candidate
+// flagging downstream.
+function freshnessDays(today: string): number {
+  return freshnessWindow(today).length;
 }
 
 // -- Tavily Extract (full-text fetch) ----------------------------------------
@@ -414,13 +417,15 @@ function toIsoDate(raw: string | null | undefined): string | null {
 // A single Tavily /search call scoped to the approved outlets, mapped to a
 // deduped Candidate[]. `include_domains` is a soft scope, so every result is
 // re-checked against the approved list — the same belt-and-suspenders backstop
-// applied everywhere a candidate can enter the pool. `startDate`/`endDate` are
-// optional: discovery scopes to the freshness window, keyword search doesn't.
+// applied everywhere a candidate can enter the pool. `days` is optional:
+// discovery scopes to the freshness window, keyword search and WSJ mirror
+// lookups don't. `includeDomains` overrides the default approved-list scope —
+// used by the WSJ mirror lookup to search every approved outlet *except* WSJ.
 async function tavilySearch(opts: {
   query: string;
   maxResults: number;
-  startDate?: string;
-  endDate?: string;
+  days?: number;
+  includeDomains?: string[];
   signal?: AbortSignal;
 }): Promise<Candidate[]> {
   const apiKey = process.env.TAVILY_API_KEY;
@@ -433,10 +438,9 @@ async function tavilySearch(opts: {
       api_key: apiKey,
       query: opts.query,
       topic: 'news',
-      include_domains: approvedHostnames,
+      include_domains: opts.includeDomains ?? approvedHostnames,
       max_results: opts.maxResults,
-      ...(opts.startDate ? { start_date: opts.startDate } : {}),
-      ...(opts.endDate ? { end_date: opts.endDate } : {}),
+      ...(opts.days ? { days: opts.days } : {}),
     }),
     signal: opts.signal,
   });
@@ -464,6 +468,115 @@ async function tavilySearch(opts: {
     });
   }
   return hits;
+}
+
+// -- WSJ → free-mirror substitution ------------------------------------------
+// WSJ is a hard paywall — Tavily Extract returns the headline + a teaser, not
+// the body, so the writer can't actually cite it. WSJ scoops typically get
+// re-reported by Reuters/Bloomberg/AP/Times of Israel within hours, so when
+// discovery surfaces a WSJ URL we search the other approved outlets for the
+// same story by title and substitute the free version. If no mirror is found,
+// the WSJ candidate is dropped — better than letting the writer triage an
+// article we can't read. Only runs during automatic discovery, not the
+// writer's manual `keywordSearch` escape hatch (where a WSJ URL is opt-in).
+
+function isWsjHost(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === 'wsj.com' || host.endsWith('.wsj.com');
+  } catch {
+    return false;
+  }
+}
+
+// Same-event window for cross-outlet mirror matching. Re-reports usually drop
+// within hours; ±1 day catches late filings on either side of midnight UTC
+// without admitting a related-but-different story from later in the week.
+const MIRROR_DATE_WINDOW_DAYS = 1;
+
+function withinMirrorDateWindow(a: string | null, b: string | null): boolean {
+  // If either side is dateless, don't enforce — Tavily occasionally omits
+  // published_date on otherwise-good results, and the relevance ranking is
+  // still a strong same-event signal.
+  if (!a || !b) return true;
+  const aMs = new Date(a).getTime();
+  const bMs = new Date(b).getTime();
+  if (Number.isNaN(aMs) || Number.isNaN(bMs)) return true;
+  return Math.abs(aMs - bMs) / 86_400_000 <= MIRROR_DATE_WINDOW_DAYS;
+}
+
+// Look up a free mirror of a WSJ article by title. Tavily news-topic relevance
+// ranking on the title query handles same-event matching; we trust the top
+// result that's within the date window. Returns null when no candidate
+// survives — caller drops the WSJ entry.
+async function findFreeMirror(
+  wsj: Candidate,
+  signal?: AbortSignal,
+): Promise<Candidate | null> {
+  const nonWsjHostnames = approvedHostnames.filter((h) => h !== 'wsj.com');
+  let mirrors: Candidate[];
+  try {
+    mirrors = await tavilySearch({
+      query: wsj.title,
+      maxResults: 5,
+      includeDomains: nonWsjHostnames,
+      signal,
+    });
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    return null;
+  }
+  for (const m of mirrors) {
+    // Defense-in-depth: tavilySearch already excludes WSJ via include_domains,
+    // but the post-fetch isApprovedSource check would still accept a WSJ URL
+    // returned by mistake.
+    if (isWsjHost(m.url)) continue;
+    if (!withinMirrorDateWindow(wsj.publicationDate, m.publicationDate)) continue;
+    return m;
+  }
+  return null;
+}
+
+// Map WSJ candidates to their free-outlet mirrors. Non-WSJ entries pass
+// through. Mirror lookups run in parallel; the result is deduped by URL since
+// a mirror might already exist in the pool from another beat query.
+export async function substituteWsjMirrors(
+  candidates: Candidate[],
+  signal?: AbortSignal,
+): Promise<Candidate[]> {
+  const resolved = await Promise.all(
+    candidates.map(async (c) => {
+      if (!isWsjHost(c.url)) return c;
+      const mirror = await findFreeMirror(c, signal);
+      if (mirror) {
+        console.log(
+          JSON.stringify({
+            event: 'orchestrator.wsj_mirror.substituted',
+            wsjUrl: c.url,
+            mirrorUrl: mirror.url,
+          }),
+        );
+      } else {
+        console.warn(
+          JSON.stringify({
+            event: 'orchestrator.wsj_mirror.dropped',
+            wsjUrl: c.url,
+            title: c.title.slice(0, 120),
+          }),
+        );
+      }
+      return mirror;
+    }),
+  );
+
+  const seen = new Set<string>();
+  const out: Candidate[] = [];
+  for (const c of resolved) {
+    if (!c || seen.has(c.url)) continue;
+    seen.add(c.url);
+    out.push(c);
+  }
+  return out;
 }
 
 // The show's beat — Israel, Jews, and the Middle East — as durable thematic
@@ -501,7 +614,7 @@ export async function discoverCandidates(
   extraGuidance: string,
   signal?: AbortSignal,
 ): Promise<Candidate[]> {
-  const { startDate, endDate } = freshnessRange(today);
+  const days = freshnessDays(today);
   // Topic gathers (/start topics, /topics, /refetch) pass the topic as
   // extraGuidance — search for exactly that. Plain discovery fans out across
   // the show's beat.
@@ -512,8 +625,7 @@ export async function discoverCandidates(
       tavilySearch({
         query,
         maxResults: DISCOVERY_RESULTS_PER_QUERY,
-        startDate,
-        endDate,
+        days,
         signal,
       }),
     ),
@@ -574,7 +686,10 @@ export async function discoverCandidates(
   // reports the real failure instead of a generic empty-result message. A
   // fulfilled-but-empty run is a genuine empty discovery: return [].
   if (!anyFulfilled && lastError) throw lastError;
-  return merged;
+
+  // WSJ articles can't be extracted (hard paywall); swap them for free-outlet
+  // mirrors before the survivors hit triage. See substituteWsjMirrors above.
+  return substituteWsjMirrors(merged, signal);
 }
 
 // Exported for testing.

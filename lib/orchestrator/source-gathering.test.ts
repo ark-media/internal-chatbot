@@ -6,6 +6,7 @@ import {
   discoverXPosts,
   keywordSearch,
   parseCandidates,
+  substituteWsjMirrors,
   verifyOrRecover,
 } from './source-gathering';
 
@@ -378,10 +379,11 @@ describe('discoverCandidates', () => {
       expect(url).toBe('https://api.tavily.com/search');
       const body = JSON.parse(init?.body as string);
       seenQueries.push(body.query);
-      // 2026-05-14 is a Thursday, so the window is [yesterday, today].
+      // 2026-05-14 is a Thursday, so the window is 2 days (today + yesterday).
       expect(body.topic).toBe('news');
-      expect(body.start_date).toBe('2026-05-13');
-      expect(body.end_date).toBe('2026-05-14');
+      expect(body.days).toBe(2);
+      expect(body.start_date).toBeUndefined();
+      expect(body.end_date).toBeUndefined();
       calls += 1;
       // A per-query story plus one URL repeated across every query, to
       // exercise the cross-query dedupe in the merge.
@@ -463,6 +465,18 @@ describe('discoverCandidates', () => {
     const idxAYesterday = result.findIndex((c) => c.url === 'https://www.jpost.com/a-yesterday');
     expect(idxAToday).toBeLessThan(idxAYesterday);
     expect(idxBToday).toBeLessThan(idxAYesterday);
+  });
+
+  it('widens the Tavily `days` window to 3 on Mondays so the weekend is covered', async () => {
+    let observed: number | undefined;
+    installFetchMock((_url, init) => {
+      const body = JSON.parse(init?.body as string);
+      observed = body.days;
+      return jsonResponse({ results: [] });
+    });
+    // 2026-05-18 is a Monday.
+    await discoverCandidates('2026-05-18', '');
+    expect(observed).toBe(3);
   });
 
   it('prefers today over yesterday within the round-robin merge', async () => {
@@ -551,6 +565,173 @@ describe('discoverCandidates', () => {
     await expect(
       discoverCandidates('2026-05-14', '', controller.signal),
     ).rejects.toThrow();
+  });
+
+  it('substitutes WSJ candidates with free-outlet mirrors at the end of the merge', async () => {
+    // Mock distinguishes beat-query calls (days set, include_domains contains
+    // wsj.com) from mirror lookups (no days, no wsj.com).
+    installFetchMock((_url, init) => {
+      const body = JSON.parse(init?.body as string);
+      const isBeatQuery = typeof body.days === 'number';
+      if (isBeatQuery) {
+        // One beat query happens to surface a WSJ scoop.
+        if (body.query === 'Israel') {
+          return jsonResponse({
+            results: [
+              {
+                url: 'https://www.wsj.com/world/middle-east/israel-scoop',
+                title: 'Big Israel scoop',
+                published_date: '2026-05-14',
+                source_name: 'Wall Street Journal',
+              },
+            ],
+          });
+        }
+        return jsonResponse({ results: [] });
+      }
+      // Mirror lookup — verify scope excludes WSJ, then return a free mirror.
+      expect(body.include_domains).not.toContain('wsj.com');
+      expect(body.query).toBe('Big Israel scoop');
+      return jsonResponse({
+        results: [
+          {
+            url: 'https://www.reuters.com/world/middle-east/israel-mirror',
+            title: 'Reuters rewrite of Israel scoop',
+            published_date: '2026-05-14',
+            source_name: 'Reuters',
+          },
+        ],
+      });
+    });
+
+    const result = await discoverCandidates('2026-05-14', '');
+    const urls = result.map((c) => c.url);
+    expect(urls).toContain('https://www.reuters.com/world/middle-east/israel-mirror');
+    expect(urls).not.toContain('https://www.wsj.com/world/middle-east/israel-scoop');
+  });
+});
+
+describe('substituteWsjMirrors', () => {
+  beforeEach(() => {
+    vi.stubEnv('TAVILY_API_KEY', 'test-key');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  const wsjCandidate = {
+    title: 'Netanyahu Cabinet Approves Iran Sanctions Package',
+    url: 'https://www.wsj.com/world/middle-east/netanyahu-iran-sanctions',
+    publicationDate: '2026-05-14',
+    source: 'Wall Street Journal',
+  };
+
+  it('replaces a WSJ candidate with a Reuters mirror found on title', async () => {
+    installFetchMock((url, init) => {
+      expect(url).toBe('https://api.tavily.com/search');
+      const body = JSON.parse(init?.body as string);
+      expect(body.query).toBe(wsjCandidate.title);
+      expect(body.include_domains).not.toContain('wsj.com');
+      expect(body.include_domains).toContain('reuters.com');
+      return jsonResponse({
+        results: [
+          {
+            url: 'https://www.reuters.com/world/middle-east/iran-sanctions',
+            title: 'Israel backs Iran sanctions in cabinet vote',
+            published_date: '2026-05-14',
+            source_name: 'Reuters',
+          },
+        ],
+      });
+    });
+
+    const result = await substituteWsjMirrors([wsjCandidate]);
+    expect(result).toHaveLength(1);
+    expect(result[0].url).toBe('https://www.reuters.com/world/middle-east/iran-sanctions');
+    expect(result[0].source).toBe('Reuters');
+  });
+
+  it('drops a WSJ candidate when no mirror is found', async () => {
+    installFetchMock(() => jsonResponse({ results: [] }));
+
+    const result = await substituteWsjMirrors([wsjCandidate]);
+    expect(result).toEqual([]);
+  });
+
+  it('drops a WSJ candidate when the top mirror is outside the date window', async () => {
+    // Mirror dated three days off — likely a different story sharing keywords.
+    installFetchMock(() =>
+      jsonResponse({
+        results: [
+          {
+            url: 'https://www.reuters.com/old',
+            title: 'Old Iran sanctions story',
+            published_date: '2026-05-11',
+            source_name: 'Reuters',
+          },
+        ],
+      }),
+    );
+
+    const result = await substituteWsjMirrors([wsjCandidate]);
+    expect(result).toEqual([]);
+  });
+
+  it('passes non-WSJ candidates through without a mirror lookup', async () => {
+    const fetchMock = installFetchMock(() => {
+      throw new Error('Tavily should not be called for non-WSJ candidates');
+    });
+
+    const reutersCandidate = {
+      title: 'Reuters story',
+      url: 'https://www.reuters.com/world/middle-east/story',
+      publicationDate: '2026-05-14',
+      source: 'Reuters',
+    };
+    const result = await substituteWsjMirrors([reutersCandidate]);
+    expect(result).toEqual([reutersCandidate]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('dedupes when the WSJ mirror collides with a sibling candidate already in the pool', async () => {
+    const reutersUrl = 'https://www.reuters.com/world/middle-east/iran-sanctions';
+    installFetchMock(() =>
+      jsonResponse({
+        results: [
+          {
+            url: reutersUrl,
+            title: 'Reuters take',
+            published_date: '2026-05-14',
+            source_name: 'Reuters',
+          },
+        ],
+      }),
+    );
+
+    const sibling = {
+      title: 'Reuters take',
+      url: reutersUrl,
+      publicationDate: '2026-05-14',
+      source: 'Reuters',
+    };
+    const result = await substituteWsjMirrors([sibling, wsjCandidate]);
+    expect(result.map((c) => c.url)).toEqual([reutersUrl]);
+  });
+
+  it('rejects WSJ subdomain hosts too (not just bare wsj.com)', async () => {
+    installFetchMock(() => jsonResponse({ results: [] }));
+
+    const subdomain = {
+      ...wsjCandidate,
+      url: 'https://blogs.wsj.com/world/middle-east/post',
+    };
+    const result = await substituteWsjMirrors([subdomain]);
+    expect(result).toEqual([]);
   });
 });
 
