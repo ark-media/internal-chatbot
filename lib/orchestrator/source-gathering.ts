@@ -539,7 +539,17 @@ export async function discoverCandidates(
       continue;
     }
     anyFulfilled = true;
-    lists.push(s.value);
+    // Sort each query's hits newest-first before the round-robin merge below.
+    // Tavily ranks results by relevance, not date, so yesterday's top story
+    // can sit at index 0 of multiple lists and crowd out today's coverage
+    // before gatherCandidates hits its 20-article cap. YYYY-MM-DD compares
+    // correctly as a string; null dates sort last.
+    const sorted = [...s.value].sort((a, b) => {
+      const da = a.publicationDate ?? '';
+      const db = b.publicationDate ?? '';
+      return db.localeCompare(da);
+    });
+    lists.push(sorted);
   }
 
   // Interleave round-robin — hit 0 from every query, then hit 1, and so on —

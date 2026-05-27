@@ -130,7 +130,13 @@ export async function POST(req: Request) {
         );
       }
       const exampleScripts = await getNewsExamples();
-      const distill = await distillTopics(usable, exampleScripts);
+      // The writer hand-picked these URLs — pass `isUserSupplied` so the
+      // distill prompt trusts the selection instead of filtering for the
+      // show's editorial scope. Without this it rejects writer requests
+      // with rationales like "these articles fall outside the show's beat."
+      const distill = await distillTopics(usable, exampleScripts, undefined, {
+        isUserSupplied: true,
+      });
       const run: OrchestratorRun = {
         ...initial,
         stage: 'checkpoint',

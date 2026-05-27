@@ -413,6 +413,43 @@ describe('discoverCandidates', () => {
     expect(urls).toHaveLength(10);
   });
 
+  it('prefers today over yesterday within the round-robin merge', async () => {
+    // Tavily ranks by relevance, not date, so a yesterday-dated top hit can
+    // crowd today's coverage out of the 20-article cap. discoverCandidates
+    // sorts each list newest-first to keep today's stories near the front.
+    installFetchMock(() =>
+      jsonResponse({
+        results: [
+          {
+            url: 'https://www.timesofisrael.com/yesterday',
+            title: 'Yesterday top hit',
+            published_date: '2026-05-13',
+            source_name: 'Times of Israel',
+          },
+          {
+            url: 'https://www.reuters.com/today',
+            title: 'Today story',
+            published_date: '2026-05-14',
+            source_name: 'Reuters',
+          },
+          {
+            url: 'https://www.jpost.com/undated',
+            title: 'No date',
+            published_date: null,
+            source_name: 'Jerusalem Post',
+          },
+        ],
+      }),
+    );
+
+    const result = await discoverCandidates('2026-05-14', 'single query');
+    expect(result.map((c) => c.url)).toEqual([
+      'https://www.reuters.com/today',
+      'https://www.timesofisrael.com/yesterday',
+      'https://www.jpost.com/undated',
+    ]);
+  });
+
   it('uses extraGuidance as a single query when provided', async () => {
     const seenQueries: string[] = [];
     installFetchMock((_url, init) => {

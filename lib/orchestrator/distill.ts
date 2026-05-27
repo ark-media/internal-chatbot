@@ -70,6 +70,24 @@ For every (article, topic) pair, also produce a summary: 2–4 sentences capturi
 
 Return the top 3 topics ordered by newsworthiness (primary), source quality (secondary), completeness (tertiary). Return fewer than 3 only if the source pool genuinely doesn't support it.`;
 
+// Used when the writer hand-picks the URLs (the "bring your own URLs" path).
+// The scope/newsworthiness filter doesn't apply — the writer already decided
+// these stories are worth covering — so the model's job is purely to organize
+// what it's given: group, rate, summarize. Without this swap the editor
+// prompt produces rejection rationales ("these fall outside the show's
+// editorial scope") on perfectly valid writer requests.
+const STAGE1_USER_SUPPLIED_SYSTEM_PROMPT = `You are helping a writer for *Ark News Daily*, a daily briefing on Israel, Jews, and the Middle East. The writer has hand-picked the articles below and wants them organized for the script.
+
+Trust the writer's selection. Do not filter, reject, or second-guess whether an article fits the show's editorial scope — the writer has already decided. Every article belongs to at least one topic in your output.
+
+Group the articles into 1–3 natural topics (use fewer if a single topic covers them all). For every (article, topic) pair, return:
+- relevance 0–100: how directly the article addresses the topic.
+- credibility 0–100: outlet reputation for this kind of coverage. Mainstream wires and major Israeli/US/Hebrew outlets score high.
+- completeness 0–100: how much the article adds vs. repeats other coverage.
+- summary: 2–4 sentences capturing facts, actors, numbers, and dates the script writer needs. No quoted material — verbatim quotes come in a separate pass.
+
+For the rationale field, briefly describe the topic groupings you formed (1–2 sentences). Do not comment on whether the articles fit the show's beat.`;
+
 const STAGE2_SYSTEM_PROMPT = `You extract quotable soundbites from news articles for a daily broadcast script. The quotes you return will be attributed and read on air, so verbatim fidelity is critical.
 
 Rules:
@@ -114,10 +132,18 @@ function buildStage2Articles(articles: Article[], indices: number[]): string {
     .join('\n\n');
 }
 
+export type DistillOptions = {
+  // The writer hand-supplied these URLs (the "bring your own URLs" path).
+  // Swaps the stage-1 system prompt to one that trusts the writer's selection
+  // instead of filtering for editorial fit.
+  isUserSupplied?: boolean;
+};
+
 export async function distillTopics(
   articles: Article[],
   exampleScripts: string,
   signal?: AbortSignal,
+  options: DistillOptions = {},
 ): Promise<DistillResult> {
   if (articles.length === 0) {
     return { topics: [], rationale: 'No articles available to distill.' };
@@ -127,7 +153,10 @@ export async function distillTopics(
   // The system block (system prompt + tone reference) is stable across runs
   // and cached so consecutive runs in a session hit the prompt cache instead
   // of re-paying full input price for ~8k tokens of examples.
-  const stage1CachedSystem = `${STAGE1_SYSTEM_PROMPT}
+  const stage1Base = options.isUserSupplied
+    ? STAGE1_USER_SUPPLIED_SYSTEM_PROMPT
+    : STAGE1_SYSTEM_PROMPT;
+  const stage1CachedSystem = `${stage1Base}
 
 Tone reference (recent Ark News Daily scripts — match this register when judging newsworthiness):
 
