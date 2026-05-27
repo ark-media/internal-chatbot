@@ -413,6 +413,58 @@ describe('discoverCandidates', () => {
     expect(urls).toHaveLength(10);
   });
 
+  it('lets today-from-one-query beat yesterday-from-another in the round-robin merge', async () => {
+    // Each beat query gets its own sorted list, then the round-robin merge
+    // interleaves index 0 from every list before moving to index 1. Within a
+    // list the per-query sort already puts today first, but we also want
+    // today-from-list-B to outrank yesterday-from-list-A — otherwise a beat
+    // that happens to have a yesterday top hit blocks every fresher beat
+    // until the second pass.
+    let call = 0;
+    installFetchMock(() => {
+      call += 1;
+      if (call === 1) {
+        return jsonResponse({
+          results: [
+            {
+              url: 'https://www.jpost.com/a-yesterday',
+              title: 'Query A yesterday top',
+              published_date: '2026-05-13',
+              source_name: 'Jerusalem Post',
+            },
+            {
+              url: 'https://www.jpost.com/a-today',
+              title: 'Query A today',
+              published_date: '2026-05-14',
+              source_name: 'Jerusalem Post',
+            },
+          ],
+        });
+      }
+      return jsonResponse({
+        results: [
+          {
+            url: 'https://www.reuters.com/b-today',
+            title: 'Query B today top',
+            published_date: '2026-05-14',
+            source_name: 'Reuters',
+          },
+        ],
+      });
+    });
+
+    // No extraGuidance + a fetch mock that fans out across all nine beat
+    // queries (replies are independent of the query string).
+    const result = await discoverCandidates('2026-05-14', '');
+    // Both today-dated stories must precede yesterday's top hit — even
+    // though it was the relevance-ranked #1 of its query.
+    const idxAToday = result.findIndex((c) => c.url === 'https://www.jpost.com/a-today');
+    const idxBToday = result.findIndex((c) => c.url === 'https://www.reuters.com/b-today');
+    const idxAYesterday = result.findIndex((c) => c.url === 'https://www.jpost.com/a-yesterday');
+    expect(idxAToday).toBeLessThan(idxAYesterday);
+    expect(idxBToday).toBeLessThan(idxAYesterday);
+  });
+
   it('prefers today over yesterday within the round-robin merge', async () => {
     // Tavily ranks by relevance, not date, so a yesterday-dated top hit can
     // crowd today's coverage out of the 20-article cap. discoverCandidates

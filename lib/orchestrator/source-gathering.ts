@@ -543,7 +543,9 @@ export async function discoverCandidates(
     // Tavily ranks results by relevance, not date, so yesterday's top story
     // can sit at index 0 of multiple lists and crowd out today's coverage
     // before gatherCandidates hits its 20-article cap. YYYY-MM-DD compares
-    // correctly as a string; null dates sort last.
+    // correctly as a string; null-dated entries sort below the oldest dated
+    // one (a deliberate trade — freshness wins over preserving Tavily's
+    // relevance order for undated stragglers).
     const sorted = [...s.value].sort((a, b) => {
       const da = a.publicationDate ?? '';
       const db = b.publicationDate ?? '';
