@@ -32,6 +32,7 @@ type RunStatePayload = Omit<OrchestratorRun, 'chatId' | 'stage' | 'today' | 'tim
 function buildPayload(run: OrchestratorRun): RunStatePayload {
   return {
     candidates: run.candidates,
+    extraCandidates: run.extraCandidates,
     articles: run.articles,
     distill: run.distill,
     approvedTopics: run.approvedTopics,
@@ -137,6 +138,7 @@ export async function loadRun(chatId: string): Promise<OrchestratorRun | null> {
     today: row.today,
     timezone: row.timezone,
     candidates: row.state.candidates ?? [],
+    extraCandidates: row.state.extraCandidates ?? [],
     articles: row.state.articles ?? [],
     distill: row.state.distill ?? null,
     approvedTopics: row.state.approvedTopics ?? null,

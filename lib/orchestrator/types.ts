@@ -104,6 +104,11 @@ export type OrchestratorRun = {
   // and `topics` modes, which skip triage. Survivors are verified + extracted
   // into `articles` by /group.
   candidates: Candidate[];
+  // Overflow from discovery — candidates that ranked below the top-N triage
+  // list. The writer can browse and promote any of these into `candidates`
+  // via a "See more" panel in the triage UI. Optional for backwards compat
+  // with runs that pre-date this field.
+  extraCandidates?: Candidate[];
   // Extracted article pool. Populated at /group for `discover` runs, at
   // /start for `urls`/`topics`. Checkpoint-stage gathers (attach/refetch/
   // topics) append here.

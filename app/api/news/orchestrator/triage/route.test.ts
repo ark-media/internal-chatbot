@@ -131,6 +131,28 @@ describe('POST /api/news/orchestrator/triage', () => {
     expect(saveRunIfUnchanged).not.toHaveBeenCalled();
   });
 
+  it('add — promotes a candidate from extraCandidates and drops it from the overflow list', async () => {
+    const extraUrl = 'https://www.jpost.com/extra-story';
+    loadRun.mockResolvedValue(
+      makeRun({
+        extraCandidates: [candidate(extraUrl), candidate('https://www.reuters.com/other-extra')],
+      }),
+    );
+    const res = await POST(
+      makeRequest({
+        action: 'add',
+        chatId: CHAT_ID,
+        candidate: { title: 'Extra', url: extraUrl, source: 'JPost', publicationDate: null },
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(savedRun().candidates.map((c) => c.url)).toContain(extraUrl);
+    expect(savedRun().extraCandidates?.map((c) => c.url)).toEqual([
+      'https://www.reuters.com/other-extra',
+    ]);
+  });
+
   it('add — short-circuits a duplicate URL without persisting', async () => {
     const res = await POST(
       makeRequest({

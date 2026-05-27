@@ -23,6 +23,7 @@ import {
   X,
   Search,
   AtSign,
+  ChevronDown,
 } from 'lucide-react';
 import {
   DndContext,
@@ -377,11 +378,22 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
   }, [chatId]);
 
   // Adding a search hit is just an append — extraction is deferred to /group —
-  // so it updates optimistically like reorder and remove.
+  // so it updates optimistically like reorder and remove. When the candidate
+  // came from the "See more" overflow, drop it from `extraCandidates` in the
+  // same optimistic step so it doesn't briefly render in both lists; the
+  // server-side `add` handler does the same on the persisted run.
   const addArticle = useCallback(
     (candidate: Candidate) => {
       const existing = run?.candidates ?? [];
       if (existing.some((c) => c.url === candidate.url)) return Promise.resolve();
+      setRun((prev) => {
+        if (!prev || !prev.extraCandidates) return prev;
+        if (!prev.extraCandidates.some((c) => c.url === candidate.url)) return prev;
+        return {
+          ...prev,
+          extraCandidates: prev.extraCandidates.filter((c) => c.url !== candidate.url),
+        };
+      });
       return triageEdit([...existing, candidate], { action: 'add', candidate });
     },
     [run, triageEdit],
@@ -596,6 +608,7 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
           {showTriage && run ? (
             <TriageView
               candidates={run.candidates}
+              extraCandidates={run.extraCandidates ?? []}
               onReorder={reorderArticles}
               onRemove={removeArticle}
               onSearch={searchArticles}
@@ -904,6 +917,7 @@ function ProgressCard({ label, detail }: { label: string; detail: string }) {
 
 function TriageView({
   candidates,
+  extraCandidates,
   onReorder,
   onRemove,
   onSearch,
@@ -913,6 +927,7 @@ function TriageView({
   busy,
 }: {
   candidates: Candidate[];
+  extraCandidates: Candidate[];
   onReorder: (next: Candidate[]) => void;
   onRemove: (url: string) => void;
   onSearch: (query: string) => Promise<Candidate[]>;
@@ -983,6 +998,15 @@ function TriageView({
           </SortableContext>
         </DndContext>
       )}
+
+      {extraCandidates.length > 0 ? (
+        <TriageExtrasPanel
+          extras={extraCandidates}
+          existingUrls={existingUrls}
+          onAdd={onAddCandidate}
+          busy={busy}
+        />
+      ) : null}
 
       <TriageSearchPanel
         existingUrls={existingUrls}
@@ -1096,6 +1120,55 @@ function TriageRow({
       >
         <X className="h-4 w-4" />
       </button>
+    </div>
+  );
+}
+
+// Overflow pool from discovery — the candidates that ranked below the top-N
+// triage list. Collapsed by default so the writer isn't overwhelmed; expanded
+// it's a fixed-height scroll container so a 60+ item list can be browsed
+// without pushing the rest of the page off-screen. Promoting an extra goes
+// through the same `onAdd` (→ /triage add) as the keyword search panel.
+function TriageExtrasPanel({
+  extras,
+  existingUrls,
+  onAdd,
+  busy,
+}: {
+  extras: Candidate[];
+  existingUrls: Set<string>;
+  onAdd: (candidate: Candidate) => void;
+  busy: BusyState;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="rounded-lg border border-overlay/10 bg-overlay/[0.02]">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between px-4 py-3 text-left text-sm text-fg/70 transition hover:text-fg"
+      >
+        <span>
+          <span className="font-semibold text-fg">See more candidates</span>{' '}
+          <span className="text-fg/45">({extras.length})</span>{' '}
+          <span className="text-fg/45">
+            — extra stories from discovery you can browse and add.
+          </span>
+        </span>
+        <ChevronDown
+          className={cn(
+            'h-4 w-4 shrink-0 text-fg/45 transition-transform',
+            open && 'rotate-180',
+          )}
+        />
+      </button>
+      {open ? (
+        <div className="max-h-96 overflow-y-auto border-t border-overlay/10 px-4 py-3">
+          <HitList hits={extras} existingUrls={existingUrls} onAdd={onAdd} busy={busy} />
+        </div>
+      ) : null}
     </div>
   );
 }

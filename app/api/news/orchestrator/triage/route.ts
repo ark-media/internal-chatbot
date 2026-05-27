@@ -85,6 +85,7 @@ export async function POST(req: Request) {
   }
 
   let candidates = run.candidates;
+  let extraCandidates = run.extraCandidates;
   if (body.action === 'reorder') {
     candidates = reorderByUrl(run.candidates, body.order);
   } else if (body.action === 'remove') {
@@ -119,11 +120,18 @@ export async function POST(req: Request) {
       isFlagged: !inAcceptableRange(run.today, body.candidate.publicationDate),
     };
     candidates = [...run.candidates, added];
+    // Promote from the "See more" overflow pile if it lived there. Without
+    // this the same candidate would render in both lists until the next page
+    // load: the UI shows extras straight from `run.extraCandidates`.
+    if (extraCandidates?.some((c) => c.url === added.url)) {
+      extraCandidates = extraCandidates.filter((c) => c.url !== added.url);
+    }
   }
 
   const updated: OrchestratorRun = {
     ...run,
     candidates,
+    extraCandidates,
     updatedAt: new Date().toISOString(),
   };
 

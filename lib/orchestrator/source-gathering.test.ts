@@ -4,6 +4,7 @@ import { generateText } from 'ai';
 import {
   discoverCandidates,
   discoverXPosts,
+  gatherCandidates,
   keywordSearch,
   parseCandidates,
   substituteWsjMirrors,
@@ -608,6 +609,75 @@ describe('discoverCandidates', () => {
     const urls = result.map((c) => c.url);
     expect(urls).toContain('https://www.reuters.com/world/middle-east/israel-mirror');
     expect(urls).not.toContain('https://www.wsj.com/world/middle-east/israel-scoop');
+  });
+});
+
+describe('gatherCandidates', () => {
+  beforeEach(() => {
+    vi.stubEnv('TAVILY_API_KEY', 'test-key');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it('splits the discovery pool into a top-N triage list and an overflow pile', async () => {
+    // Single Tavily query that fans 5 hits back. With maxArticles=2 and
+    // maxExtras=2, the first two go to `top` and the next two to `extras`.
+    // The fifth gets dropped because both caps are full.
+    installFetchMock(() =>
+      jsonResponse({
+        results: Array.from({ length: 5 }).map((_, i) => ({
+          url: `https://www.reuters.com/story-${i}`,
+          title: `Story ${i}`,
+          published_date: '2026-05-14',
+          source_name: 'Reuters',
+        })),
+      }),
+    );
+
+    const { top, extras } = await gatherCandidates({
+      today: '2026-05-14',
+      extraGuidance: 'single query so only one fetch',
+      maxArticles: 2,
+      maxExtras: 2,
+    });
+
+    expect(top.map((c) => c.url)).toEqual([
+      'https://www.reuters.com/story-0',
+      'https://www.reuters.com/story-1',
+    ]);
+    expect(extras.map((c) => c.url)).toEqual([
+      'https://www.reuters.com/story-2',
+      'https://www.reuters.com/story-3',
+    ]);
+  });
+
+  it('returns an empty extras pile when maxExtras is 0 (checkpoint topic gathers)', async () => {
+    installFetchMock(() =>
+      jsonResponse({
+        results: Array.from({ length: 5 }).map((_, i) => ({
+          url: `https://www.reuters.com/story-${i}`,
+          title: `Story ${i}`,
+          published_date: '2026-05-14',
+          source_name: 'Reuters',
+        })),
+      }),
+    );
+
+    const { top, extras } = await gatherCandidates({
+      today: '2026-05-14',
+      extraGuidance: 'single query',
+      maxArticles: 3,
+      maxExtras: 0,
+    });
+
+    expect(top).toHaveLength(3);
+    expect(extras).toEqual([]);
   });
 });
 

@@ -793,9 +793,10 @@ export async function gatherCandidates(opts: {
   today: string;
   extraGuidance?: string;
   maxArticles?: number;
+  maxExtras?: number;
   signal?: AbortSignal;
-}): Promise<Candidate[]> {
-  const { today, extraGuidance = '', maxArticles = 20, signal } = opts;
+}): Promise<{ top: Candidate[]; extras: Candidate[] }> {
+  const { today, extraGuidance = '', maxArticles = 20, maxExtras = 80, signal } = opts;
 
   const candidates = await discoverCandidates(today, extraGuidance, signal);
 
@@ -804,15 +805,20 @@ export async function gatherCandidates(opts: {
   // keeps `rawCount` vs `approvedCount` meaningful in the log below.
   const approved = candidates.filter((c) => isApprovedSource(c.url));
 
-  // Dedupe by URL and cap. Freshness is flagged from Tavily's claimed date;
+  // Dedupe by URL. The first `maxArticles` survivors become the active triage
+  // list; the next `maxExtras` go into the "See more" overflow pile the writer
+  // can browse and promote. Freshness is flagged from Tavily's claimed date;
   // extraction can refine it later against the real publish date.
   const seen = new Set<string>();
-  const deduped: Candidate[] = [];
+  const top: Candidate[] = [];
+  const extras: Candidate[] = [];
   for (const c of approved) {
     if (seen.has(c.url)) continue;
     seen.add(c.url);
-    deduped.push({ ...c, isFlagged: !inAcceptableRange(today, c.publicationDate) });
-    if (deduped.length >= maxArticles) break;
+    const flagged = { ...c, isFlagged: !inAcceptableRange(today, c.publicationDate) };
+    if (top.length < maxArticles) top.push(flagged);
+    else if (extras.length < maxExtras) extras.push(flagged);
+    else break;
   }
 
   // Log the funnel so a zero result is diagnosable from the logs alone —
@@ -823,11 +829,12 @@ export async function gatherCandidates(opts: {
       event: 'orchestrator.gather_candidates',
       rawCount: candidates.length,
       approvedCount: approved.length,
-      candidateCount: deduped.length,
+      candidateCount: top.length,
+      extraCount: extras.length,
     }),
   );
 
-  return deduped;
+  return { top, extras };
 }
 
 // Verify (and recover hallucinated 404s), then Tavily-extract a candidate list
@@ -899,11 +906,15 @@ export async function gatherSources(opts: {
   maxArticles?: number;
   signal?: AbortSignal;
 }): Promise<Article[]> {
-  const candidates = await gatherCandidates({
+  // gatherSources covers the checkpoint topic gathers — extraction runs on
+  // the survivors, no triage in between — so the overflow pool isn't used here.
+  // Pass `maxExtras: 0` to skip building it and only take the top candidates.
+  const { top } = await gatherCandidates({
     today: opts.today,
     extraGuidance: opts.extraGuidance,
     maxArticles: opts.maxArticles,
+    maxExtras: 0,
     signal: opts.signal,
   });
-  return extractCandidates(candidates, opts.today, opts.signal);
+  return extractCandidates(top, opts.today, opts.signal);
 }

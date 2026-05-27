@@ -242,9 +242,11 @@ export async function POST(req: Request) {
     //
     // gatherCandidates throws (not returns []) when every discovery attempt
     // hits an infrastructure error — that's caught below and surfaces the real
-    // error. A returned [] means discovery completed but came up empty, which
-    // is almost always a transient search-provider issue, not a date problem.
-    const candidates = await gatherCandidates({ today });
+    // error. A returned empty `top` means discovery completed but came up empty,
+    // which is almost always a transient search-provider issue, not a date
+    // problem. `extras` is the overflow pool the writer can browse via the
+    // "See more" panel — keep it stashed on the run alongside the active list.
+    const { top: candidates, extras } = await gatherCandidates({ today });
 
     if (candidates.length === 0) {
       const errored: OrchestratorRun = {
@@ -265,6 +267,7 @@ export async function POST(req: Request) {
       ...initial,
       stage: 'triage',
       candidates,
+      extraCandidates: extras,
       updatedAt: new Date().toISOString(),
     };
     await saveRun(run);
@@ -276,6 +279,7 @@ export async function POST(req: Request) {
         chatId,
         ms: Date.now() - started,
         candidateCount: candidates.length,
+        extraCount: extras.length,
         stage: 'triage',
       }),
     );
@@ -283,6 +287,7 @@ export async function POST(req: Request) {
     return Response.json({
       stage: 'triage',
       candidateCount: candidates.length,
+      extraCount: extras.length,
     });
   } catch (err) {
     const errored = await loadRun(chatId);
