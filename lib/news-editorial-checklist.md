@@ -14,6 +14,8 @@ Use this checklist when reviewing generated scripts before recording.
 - [ ] Does this sound like Deborah? (Clear-headed but warm, authoritative but accessible, conversational not formal)
 - [ ] Does it feel like a smart friend catching you up, not a news anchor?
 - [ ] Does the writing have personality (not AI-voiced or robotic)?
+- [ ] Free of AI-cadence tells? (No "Here's the problem.", "And that's the real tension.", "Here's the thing.", rhetorical-question-then-one-word-answer, "not X — it's Y" punchlines, "Make no mistake," dramatic one-clause fragments)
+- [ ] Em-dashes used sparingly? (Roughly one per block at most; not two in a sentence or back-to-back sentences)
 - [ ] Are transitions smooth? (No jarring pivots between blocks; guided by clear transitions)
 - [ ] Is pacing natural for audio? (Short sentences, clear pauses, rhythm that can be followed on first hearing?)
 - [ ] Are there moments of humanity/empathy where appropriate? (Holiday references, recognition of stakes)

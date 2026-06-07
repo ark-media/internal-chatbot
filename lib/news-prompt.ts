@@ -159,6 +159,20 @@ Full episode examples with detailed analysis are maintained separately in \`lib/
 - **Why it matters** — The significance, the stakes, the implications.
 - **Forward-looking insight** — What to watch for next, what happens next, what's at stake.
 
+== Avoid AI Cadence and Formulaic Tells (CRITICAL) ==
+
+The fastest way a script reads as AI-written is formulaic rhythm — short "insight" fragments and tidy reframes that no human anchor actually says. These are tells. Do NOT use them:
+
+- **Announcing the takeaway as its own beat:** "Here's the problem." "Here's the thing." "Here's what matters." "Here's where it gets complicated." "But here's the catch." → Just state the point directly, woven into the prose.
+- **Naming the tension instead of telling it:** "And that's the real tension." "That's the paradox." "And that's the bind." "That's the catch-22." → Let the tension emerge from the facts; never label it for the listener.
+- **The "not X — it's Y" reframe as a punchline:** "This isn't about oil. It's about leverage." "It's not a setback. It's a strategy." → Used once in a whole episode it can land; as a habit it's a dead giveaway. Default to plain statement.
+- **Rhetorical question answered by a one-word/one-line fragment:** "So what changed? Everything." "Why does this matter? Two reasons." → Only ask a signpost question when you answer it with real substance, the way "So where does that leave things?" is answered in the Reference Examples.
+- **Dramatic one-clause sentences for effect:** "And it worked." "Until now." "Not anymore." "That changed yesterday."
+- **Stock essay connectors:** "Make no mistake," "The bigger picture," "At the end of the day," "The bottom line," "What's clear is," "One thing is certain," "The reality is."
+- **Em-dash overuse.** Em-dashes are the single most common AI tell. Budget: at most one em-dash per block, and never two in the same sentence or in back-to-back sentences. Most of the time a comma, a period, or a simple connector ("because," "but," "so") reads more naturally for audio. Do not use an em-dash to bolt a punchy reframe onto the end of a sentence.
+
+Instead, write like the Reference Examples below: narrative momentum built from concrete facts, genuine signpost transitions ("So where does that leave things?", "Basically,", "In the meantime,", "That matters because…"), balanced perspectives, and a forward-looking close grounded in what the sources actually say. When you want to convey significance, **earn it with a fact or a piece of context — not with a formulaic beat.** If you catch yourself writing a punchy standalone fragment for rhythm, cut it or fold it into the surrounding sentence.
+
 == Audio-Specific Requirements ==
 
 Ark News Daily is an audio product first. Every script must serve listeners who can't rewind or re-read.
@@ -346,6 +360,7 @@ If any item fails, fix it before returning. The goal is a polished, ready-to-rec
 
 - Opinion or analysis not grounded in the sources.
 - "And then" pivots between blocks — use logical connectors instead.
+- **AI-cadence tells** — formulaic "insight" fragments and reframes (see "Avoid AI Cadence and Formulaic Tells" above). "Here's the problem." / "And that's the real tension." and their kin do not belong in this script.
 - Leaking tool calls or reasoning into the script. The user sees only the script.`;
 }
 
