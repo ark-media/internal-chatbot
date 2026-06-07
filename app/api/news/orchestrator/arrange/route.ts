@@ -6,9 +6,11 @@ import {
   ensureOrchestratorTables,
   loadRun,
   saveRun,
+  saveRunIfUnchanged,
 } from '@/lib/orchestrator/state';
 import {
   extractedStoriesToDistill,
+  orderStoriesById,
   type NarrativeArc,
   type OrchestratorRun,
 } from '@/lib/orchestrator/types';
@@ -69,6 +71,9 @@ export async function POST(req: Request) {
   if (stories.length === 0) {
     return Response.json({ error: 'no_stories', stage: run.stage }, { status: 409 });
   }
+  // Optimistic-lock snapshot for the success saves, matching /deepen. Guards
+  // against a double-submit (or an overlapping deepen) clobbering the run.
+  const expectedUpdatedAt = run.updatedAt;
 
   if (body.action === 'suggest') {
     // Allow suggesting from the review checkpoint or re-suggesting at 'arranged'.
@@ -85,7 +90,13 @@ export async function POST(req: Request) {
         arc,
         updatedAt: new Date().toISOString(),
       };
-      await saveRun(next);
+      const saved = await saveRunIfUnchanged(next, expectedUpdatedAt);
+      if (!saved) {
+        return Response.json(
+          { error: 'conflict', detail: 'The run changed while arranging. Try again.' },
+          { status: 409 },
+        );
+      }
       console.log(
         JSON.stringify({
           event: 'orchestrator.arrange.suggest',
@@ -119,30 +130,18 @@ export async function POST(req: Request) {
   }
 
   const arc: NarrativeArc = body.arc;
+  // Order stories once, via the shared helper, and build distill from the same
+  // sequence so topic `i` always lines up with `orderedStories[i]` — even when
+  // the editor's arc.order is incomplete. (Previously this route re-derived the
+  // order by hand, which had to stay byte-for-byte in sync with the mapper.)
+  const orderedStories = orderStoriesById(stories, arc.order);
   const distill = extractedStoriesToDistill(stories, arc.order);
-
-  // Reconstruct the exact id order extractedStoriesToDistill produced (arc.order
-  // first, then any omitted stories appended in original order) so topic i lines
-  // up with its story even when the editor's arc.order is incomplete.
-  const storyById = new Map(stories.map((s) => [s.id, s]));
-  const seenIds = new Set<string>();
-  const orderedIds: string[] = [];
-  for (const id of arc.order) {
-    if (storyById.has(id) && !seenIds.has(id)) {
-      orderedIds.push(id);
-      seenIds.add(id);
-    }
-  }
-  for (const s of stories) {
-    if (!seenIds.has(s.id)) orderedIds.push(s.id);
-  }
 
   // Fold each story's transition + block role into the matching topic's
   // description so the script writer sees the arc without any change to
   // buildCachedSystemContent. distill.topics is in this same order.
   distill.topics = distill.topics.map((topic, i) => {
-    const id = orderedIds[i];
-    const story = id ? storyById.get(id) : undefined;
+    const story = orderedStories[i];
     if (!story) return topic;
     const role = arc.roles[story.id];
     const transition = arc.transitions[story.id];
@@ -167,7 +166,13 @@ export async function POST(req: Request) {
     approvedTopicIndices: distill.topics.map((_, i) => i),
     updatedAt: new Date().toISOString(),
   };
-  await saveRun(next);
+  const saved = await saveRunIfUnchanged(next, expectedUpdatedAt);
+  if (!saved) {
+    return Response.json(
+      { error: 'conflict', detail: 'The run changed while arranging. Try again.' },
+      { status: 409 },
+    );
+  }
 
   console.log(
     JSON.stringify({

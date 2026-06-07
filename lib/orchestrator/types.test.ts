@@ -174,8 +174,42 @@ describe('extractedStoryToTopic', () => {
     expect(a.article.content).toBe('');
     expect(a.article.isFlagged).toBe(false);
     expect(a.article.publicationDate).toBeNull();
-    expect(a.keyQuotes).toEqual(['a verbatim quote']);
+    // SOT speaker attribution is preserved into keyQuotes (read on air).
+    expect(a.keyQuotes).toEqual(['TRUMP: a verbatim quote']);
     expect(a.provenance).toBe('manual');
+  });
+
+  it('drops a blank/placeholder speaker prefix, keeping the verbatim text', () => {
+    const t = extractedStoryToTopic(
+      story({
+        sources: [
+          {
+            label: 'Reuters',
+            url: 'https://reuters.com/a',
+            sotClips: [{ speaker: '  ', text: 'no speaker here' }],
+          },
+        ],
+      }),
+    );
+    expect(t.articles[0].keyQuotes).toEqual(['no speaker here']);
+  });
+
+  it('keeps SOT quotes even when the source has no dry facts (empty summary)', () => {
+    const t = extractedStoryToTopic(
+      story({
+        dryFacts: [],
+        sources: [
+          { label: 'A', url: 'https://a.com', facts: ['only fact'] },
+          {
+            label: 'B',
+            url: 'https://b.com',
+            sotClips: [{ speaker: 'AIDE', text: 'a clip with no facts' }],
+          },
+        ],
+      }),
+    );
+    expect(t.articles[1].summary).toBe('');
+    expect(t.articles[1].keyQuotes).toEqual(['AIDE: a clip with no facts']);
   });
 
   it('folds story-level dryFacts onto the first source summary', () => {

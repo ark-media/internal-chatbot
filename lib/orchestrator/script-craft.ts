@@ -20,7 +20,8 @@ const MAX_QUOTES_PER_ARTICLE = 5;
 // late-added article doesn't blow up the cached system block.
 const FALLBACK_EXCERPT_CHARS = 1500;
 
-function buildSourceBlock(topics: TopicWithSources[], extras: Article[]): string {
+// Exported for unit testing — assembles the source digest the writer sees.
+export function buildSourceBlock(topics: TopicWithSources[], extras: Article[]): string {
   const lines: string[] = [];
   topics.forEach((t, ti) => {
     lines.push(`# Topic ${ti + 1}: ${t.topic}`);
@@ -35,14 +36,20 @@ function buildSourceBlock(topics: TopicWithSources[], extras: Article[]): string
       // Prefer the distilled summary + verbatim quotes; fall back to a raw
       // content excerpt only for sources that bypassed distill (e.g. articles
       // added via /refetch).
+      const quotes = (rated.keyQuotes ?? []).slice(0, MAX_QUOTES_PER_ARTICLE);
+      const quotesBlock =
+        quotes.length > 0
+          ? `Quotes (verbatim):\n${quotes.map((q) => `- "${q}"`).join('\n')}`
+          : '';
       let body: string;
       if (rated.summary && rated.summary.length > 0) {
-        const quotes = (rated.keyQuotes ?? []).slice(0, MAX_QUOTES_PER_ARTICLE);
-        const quotesBlock =
-          quotes.length > 0
-            ? `\n\nQuotes (verbatim):\n${quotes.map((q) => `- "${q}"`).join('\n')}`
-            : '';
-        body = `Summary: ${rated.summary}${quotesBlock}`;
+        body = quotesBlock
+          ? `Summary: ${rated.summary}\n\n${quotesBlock}`
+          : `Summary: ${rated.summary}`;
+      } else if (quotesBlock) {
+        // No summary but verbatim quotes exist (e.g. a doc source whose facts
+        // live at story level): surface the quotes instead of an empty excerpt.
+        body = quotesBlock;
       } else {
         body = `Excerpt:\n${a.content.slice(0, FALLBACK_EXCERPT_CHARS)}`;
       }

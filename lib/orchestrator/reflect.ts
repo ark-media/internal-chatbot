@@ -94,7 +94,7 @@ SCRIPT TO REVIEW:
 
 ${script.fullText}
 
-Review the script. Return a JSON object with: problems (array of {type, issue, detail}), decision ("loop" or "exit"), corrections (array of {blockOrSection, problem, suggestedFix}). Apply the decision rule strictly: <3 distinct problems → exit, ≥3 → loop.`;
+Review the script. Return a JSON object with: problems (array of {type, issue, detail}), decision ("loop" or "exit"), corrections (array of {blockOrSection, problem, suggestedFix}). Apply the decision rule strictly: "loop" if there is ANY hard failure or 3+ distinct problems; "exit" only with zero hard failures and fewer than 3 soft problems.`;
 
   const { object } = await generateObject({
     model: 'anthropic/claude-sonnet-4-6',

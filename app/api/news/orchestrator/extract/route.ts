@@ -4,6 +4,7 @@ import {
   ensureOrchestratorTables,
   loadRun,
   saveRun,
+  saveRunIfUnchanged,
 } from '@/lib/orchestrator/state';
 import type { ExtractedStory, OrchestratorRun } from '@/lib/orchestrator/types';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -38,6 +39,14 @@ export async function POST(req: Request) {
     }
   }
 
+  // Reject oversized uploads via Content-Length BEFORE `formData()` buffers the
+  // whole body into memory. The post-parse `file.size` check below is the
+  // backstop for requests that lie about or omit the header.
+  const contentLength = Number(req.headers.get('content-length') ?? '');
+  if (Number.isFinite(contentLength) && contentLength > MAX_FILE_BYTES) {
+    return Response.json({ error: 'file_too_large' }, { status: 413 });
+  }
+
   let form: FormData;
   try {
     form = await req.formData();
@@ -66,6 +75,10 @@ export async function POST(req: Request) {
   }
 
   const started = Date.now();
+  // Snapshot for optimistic locking on the success save: extraction runs a
+  // multi-second model call, so a double-submit (e.g. re-upload) could finish
+  // twice and clobber. The terminal error saves below stay best-effort.
+  const expectedUpdatedAt = run.updatedAt;
 
   let documentMarkdown: string;
   try {
@@ -124,7 +137,13 @@ export async function POST(req: Request) {
       errorMessage: null,
       updatedAt: new Date().toISOString(),
     };
-    await saveRun(next);
+    const saved = await saveRunIfUnchanged(next, expectedUpdatedAt);
+    if (!saved) {
+      return Response.json(
+        { error: 'conflict', detail: 'The run changed while extracting. Try again.' },
+        { status: 409 },
+      );
+    }
 
     console.log(
       JSON.stringify({

@@ -258,6 +258,16 @@ function hostnameOf(url: string): string {
   }
 }
 
+// Format a SOT clip into a single keyQuotes string, preserving the speaker
+// attribution that's read on air. The verbatim text is kept intact; the
+// speaker is prefixed (e.g. `TRUMP: the quote`) so the writer knows who said
+// it. A blank/placeholder speaker is dropped so the quote isn't prefixed with
+// noise.
+function formatSotClip(clip: { speaker: string; text: string }): string {
+  const speaker = clip.speaker.trim();
+  return speaker ? `${speaker}: ${clip.text}` : clip.text;
+}
+
 // Map one extracted story onto the TopicWithSources shape the script writer
 // consumes. The dossier is the source-of-truth: facts go into RatedArticle
 // `summary`, SOT quotes into `keyQuotes`, and `article.content` is left empty
@@ -293,7 +303,7 @@ export function extractedStoryToTopic(story: ExtractedStory): TopicWithSources {
       completeness: 75,
       avgScore: 75,
       summary: facts.join(' '),
-      keyQuotes: (src.sotClips ?? []).map((c) => c.text),
+      keyQuotes: (src.sotClips ?? []).map(formatSotClip),
       provenance: 'manual',
     };
   });
@@ -321,6 +331,31 @@ export function extractedStoryToTopic(story: ExtractedStory): TopicWithSources {
   return { topic: story.headline, description, articles };
 }
 
+// Order stories by `order` (story ids): ids present in `order` come first in
+// that exact sequence (duplicates and unknown ids ignored), then any stories
+// missing from `order` are appended in their original relative order. This is
+// the single source of truth for arc ordering — the arrange route relies on
+// the same sequence to line topic `i` up with its story, so both call here
+// rather than re-deriving the order independently.
+export function orderStoriesById(
+  stories: ExtractedStory[],
+  order?: string[],
+): ExtractedStory[] {
+  if (!order || order.length === 0) return stories;
+  const byId = new Map(stories.map((s) => [s.id, s]));
+  const seen = new Set<string>();
+  const front: ExtractedStory[] = [];
+  for (const id of order) {
+    const s = byId.get(id);
+    if (s && !seen.has(id)) {
+      front.push(s);
+      seen.add(id);
+    }
+  }
+  const rest = stories.filter((s) => !seen.has(s.id));
+  return [...front, ...rest];
+}
+
 // Materialize a DistillResult from extracted stories. `order` (story ids,
 // arc order) reorders the topics; ids missing from `order` are appended in
 // their original relative order, and unknown ids are ignored.
@@ -328,23 +363,8 @@ export function extractedStoriesToDistill(
   stories: ExtractedStory[],
   order?: string[],
 ): DistillResult {
-  let ordered = stories;
-  if (order && order.length > 0) {
-    const byId = new Map(stories.map((s) => [s.id, s]));
-    const seen = new Set<string>();
-    const front: ExtractedStory[] = [];
-    for (const id of order) {
-      const s = byId.get(id);
-      if (s && !seen.has(id)) {
-        front.push(s);
-        seen.add(id);
-      }
-    }
-    const rest = stories.filter((s) => !seen.has(s.id));
-    ordered = [...front, ...rest];
-  }
   return {
-    topics: ordered.map(extractedStoryToTopic),
+    topics: orderStoriesById(stories, order).map(extractedStoryToTopic),
     rationale: 'Extracted from editor dossier.',
   };
 }
