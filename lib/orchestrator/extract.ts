@@ -1,66 +1,69 @@
-import { generateObject } from 'ai';
+import { generateObject, streamObject } from 'ai';
 import { z } from 'zod';
 
 import type { ExtractedStory } from './types';
 
-// Extraction schema. Mirrors ExtractedStory minus `id` (assigned server-side
-// after generation — we never trust the model for stable ids).
-const extractSchema = z.object({
-  stories: z
+// One extracted story. Mirrors ExtractedStory minus `id` (assigned server-side
+// after generation — we never trust the model for stable ids). Exported so the
+// streaming extractor can use it directly as the array element schema.
+export const storySchema = z.object({
+  headline: z.string().describe('A short, specific headline for this story.'),
+  lead: z
+    .string()
+    .optional()
+    .describe('The dossier "Lead:" line — the one-paragraph framing, if present.'),
+  dryFacts: z
+    .array(z.string())
+    .describe(
+      'Just what happened — the bare facts, one per item, no analysis. Condense each to one sentence. Pull from the "What happened" section and bullet sub-points.',
+    ),
+  relevance: z
+    .string()
+    .describe(
+      "Ark Media's analysis — why this story matters and why the listener should care. Copy or condense the dossier's \"Why it matters\" section. Do not invent analysis that isn't supported by the dossier.",
+    ),
+  whatsNext: z
+    .string()
+    .optional()
+    .describe('The dossier "What\'s next:" / forward-looking line, if present.'),
+  blockHint: z
+    .enum(['A', 'B', 'C', 'D'])
+    .optional()
+    .describe('If the dossier labels this an "A BLOCK" / "B BLOCK" etc., record the letter.'),
+  sources: z
     .array(
       z.object({
-        headline: z
+        label: z
           .string()
-          .describe('A short, specific headline for this story.'),
-        lead: z
-          .string()
-          .optional()
-          .describe('The dossier "Lead:" line — the one-paragraph framing, if present.'),
-        dryFacts: z
+          .describe('The outlet / link text, e.g. "Reuters", "Times of Israel".'),
+        url: z.string().describe('The source URL, copied verbatim.'),
+        facts: z
           .array(z.string())
-          .describe(
-            'Just what happened — the bare facts, one per item, no analysis. Condense each to one sentence. Pull from the "What happened" section and bullet sub-points.',
-          ),
-        relevance: z
-          .string()
-          .describe(
-            "Ark Media's analysis — why this story matters and why the listener should care. Copy or condense the dossier's \"Why it matters\" section. Do not invent analysis that isn't supported by the dossier.",
-          ),
-        whatsNext: z
-          .string()
           .optional()
-          .describe('The dossier "What\'s next:" / forward-looking line, if present.'),
-        blockHint: z
-          .enum(['A', 'B', 'C', 'D'])
-          .optional()
-          .describe('If the dossier labels this an "A BLOCK" / "B BLOCK" etc., record the letter.'),
-        sources: z
+          .describe('Dry facts attributable to THIS specific source, if the dossier ties them to it.'),
+        sotClips: z
           .array(
             z.object({
-              label: z
+              speaker: z
                 .string()
-                .describe('The outlet / link text, e.g. "Reuters", "Times of Israel".'),
-              url: z.string().describe('The source URL, copied verbatim.'),
-              facts: z
-                .array(z.string())
-                .optional()
-                .describe('Dry facts attributable to THIS specific source, if the dossier ties them to it.'),
-              sotClips: z
-                .array(
-                  z.object({
-                    speaker: z
-                      .string()
-                      .describe('Who is speaking, in caps (e.g. TRUMP). Use SPEAKER_01 if unknown.'),
-                    text: z.string().describe('The quote text, copied EXACTLY — never paraphrase.'),
-                  }),
-                )
-                .optional()
-                .describe('Verbatim "SOT:" audio-clip quotes attached to this source.'),
+                .describe('Who is speaking, in caps (e.g. TRUMP). Use SPEAKER_01 if unknown.'),
+              text: z.string().describe('The quote text, copied EXACTLY — never paraphrase.'),
             }),
           )
-          .describe('Every source link cited for this story. Capture both `([Outlet](url))` links and bare `Outlet — https://…` lines.'),
+          .optional()
+          .describe('Verbatim "SOT:" audio-clip quotes attached to this source.'),
       }),
     )
+    .describe('Every source link cited for this story. Capture both `([Outlet](url))` links and bare `Outlet — https://…` lines.'),
+});
+
+type ExtractedStoryDraft = z.infer<typeof storySchema>;
+
+// Extraction schema for the non-streaming path. Wraps the story element in a
+// `stories` array so generateObject returns a single object.
+const extractSchema = z.object({
+  stories: z
+    .array(storySchema)
     .describe('Every distinct story found in the dossier, in the order they appear.'),
 });
 
@@ -76,29 +79,21 @@ Your job:
 - When a fact or quote is clearly tied to one source, attach it to that source's facts/sotClips. Otherwise put it in the story-level dryFacts.
 - Condense long passages into tight one-sentence facts, but never change names, numbers, dates, or quotes.`;
 
-// Parse an editor's dossier (markdown) into structured stories. Single Sonnet
-// call — a 5–8k-word dossier (~11k tokens) fits comfortably; we set a generous
-// output budget for stories with long fact lists. The system block is cached so
-// a re-extract reuses the cached instructions. Ids are assigned by the caller.
-export async function extractStories(
-  documentMarkdown: string,
-  signal?: AbortSignal,
-): Promise<Omit<ExtractedStory, 'id'>[]> {
-  const { object } = await generateObject({
-    model: 'anthropic/claude-sonnet-4-6',
-    schema: extractSchema,
-    system: {
-      role: 'system',
-      content: EXTRACT_SYSTEM_PROMPT,
-      providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
-    },
-    prompt: `Parse the following editor's dossier into structured stories.\n\n---\n\n${documentMarkdown}`,
-    temperature: 0.1,
-    maxOutputTokens: 16000,
-    abortSignal: signal,
-  });
+// The cached system block + dossier prompt, shared by both extract paths. The
+// system block is cached so a re-extract reuses the cached instructions.
+const extractSystem = {
+  role: 'system' as const,
+  content: EXTRACT_SYSTEM_PROMPT,
+  providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' as const } } },
+};
+const extractPrompt = (documentMarkdown: string) =>
+  `Parse the following editor's dossier into structured stories.\n\n---\n\n${documentMarkdown}`;
 
-  return object.stories.map((s) => ({
+// Normalize a model-produced story draft into the ExtractedStory shape (minus
+// `id`, which the caller assigns). Drops unknown keys and shields the rest of
+// the pipeline from the raw zod inference type.
+export function normalizeStoryDraft(s: ExtractedStoryDraft): Omit<ExtractedStory, 'id'> {
+  return {
     headline: s.headline,
     lead: s.lead,
     dryFacts: s.dryFacts,
@@ -111,5 +106,43 @@ export async function extractStories(
       facts: src.facts,
       sotClips: src.sotClips,
     })),
-  }));
+  };
+}
+
+// Parse an editor's dossier (markdown) into structured stories. Single Sonnet
+// call — a 5–8k-word dossier (~11k tokens) fits comfortably; we set a generous
+// output budget for stories with long fact lists. Ids are assigned by the caller.
+export async function extractStories(
+  documentMarkdown: string,
+  signal?: AbortSignal,
+): Promise<Omit<ExtractedStory, 'id'>[]> {
+  const { object } = await generateObject({
+    model: 'anthropic/claude-sonnet-4-6',
+    schema: extractSchema,
+    system: extractSystem,
+    prompt: extractPrompt(documentMarkdown),
+    temperature: 0.1,
+    maxOutputTokens: 16000,
+    abortSignal: signal,
+  });
+
+  return object.stories.map(normalizeStoryDraft);
+}
+
+// Streaming variant of extractStories. Returns the streamObject result so the
+// route can surface each completed story to the client (via `elementStream`) as
+// it parses, then `await result.object` for the validated full set. Same model,
+// prompt, and output budget as the non-streaming path — only the transport
+// differs. Ids are assigned by the caller after the full set resolves.
+export function streamExtractStories(documentMarkdown: string, signal?: AbortSignal) {
+  return streamObject({
+    model: 'anthropic/claude-sonnet-4-6',
+    output: 'array',
+    schema: storySchema,
+    system: extractSystem,
+    prompt: extractPrompt(documentMarkdown),
+    temperature: 0.1,
+    maxOutputTokens: 16000,
+    abortSignal: signal,
+  });
 }

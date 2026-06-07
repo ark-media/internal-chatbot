@@ -50,7 +50,9 @@ export async function POST(req: Request) {
 
   const run = await loadRun(body.chatId);
   if (!run) return Response.json({ error: 'run_not_found' }, { status: 404 });
-  if (run.stage !== 'checkpoint') {
+  // 'arranged' is the document flow's merged review screen, which materializes
+  // distill up front so deepen works there too.
+  if (run.stage !== 'checkpoint' && run.stage !== 'arranged') {
     return Response.json({ error: 'wrong_stage', stage: run.stage }, { status: 409 });
   }
   if (!run.distill || body.topicIndex >= run.distill.topics.length) {

@@ -51,7 +51,9 @@ const bodySchema = z.discriminatedUnion('action', [
 // after a finished run). Reject mid-flight stages and `error` — the UI
 // pushes those to /start instead.
 function ensureEditable(run: OrchestratorRun): void {
-  if (run.stage !== 'checkpoint' && run.stage !== 'complete') {
+  // 'arranged' is the document flow's merged review screen (distill is
+  // materialized up front), so topic edits work there too.
+  if (run.stage !== 'checkpoint' && run.stage !== 'complete' && run.stage !== 'arranged') {
     throw new Error(`run is not editable (stage=${run.stage})`);
   }
 }
@@ -177,10 +179,15 @@ export async function POST(req: Request) {
       }));
       allArticles = [...run.articles, ...deduped];
     }
+    // Document runs key local reorder state by topic id, so a topic added on the
+    // merged screen needs one too. Discover runs are purely positional — leave
+    // id undefined there.
+    const isDocRun = !!run.extractedStories?.length;
     const newTopic: TopicWithSources = {
       topic: body.topic,
       description: body.description,
       articles,
+      ...(isDocRun ? { id: crypto.randomUUID() } : {}),
     };
     const updatedDistill: DistillResult = { ...distill, topics: [...distill.topics, newTopic] };
     // New topic appended at the end — existing approved indices stay valid,

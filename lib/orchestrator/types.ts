@@ -30,6 +30,18 @@ export type TopicWithSources = {
   topic: string;
   description: string;
   articles: RatedArticle[];
+  // Stable identity for the document flow's merged review screen. Set to the
+  // source story id by extractedStoryToTopic so the client can hold local
+  // reorder/transition state by id while the tool routes keep indexing
+  // distill.topics by position. Undefined for discover-flow topics, which are
+  // purely positional.
+  id?: string;
+  // Document flow: the editor's arc decisions, set by /arrange apply and folded
+  // into the script writer's view by buildSourceBlock. Kept off `description`
+  // so deepen (which replaces description) and re-edits don't clobber or
+  // double-fold them. Undefined for discover-flow topics.
+  block?: 'A' | 'B' | 'C' | 'D';
+  transition?: string; // one-line bridge into the next topic in arc order
 };
 
 // A discovered-but-not-yet-extracted article reference — what the writer sees
@@ -327,7 +339,7 @@ export function extractedStoryToTopic(story: ExtractedStory): TopicWithSources {
     });
   }
 
-  return { topic: story.headline, description, articles };
+  return { id: story.id, topic: story.headline, description, articles };
 }
 
 // Order stories by `order` (story ids): ids present in `order` come first in

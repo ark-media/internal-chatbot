@@ -49,6 +49,27 @@ describe('buildSourceBlock', () => {
     expect(block).toContain('- "a quote"');
   });
 
+  it('folds the document flow block + transition into the writer view', () => {
+    const block = buildSourceBlock(
+      [
+        {
+          ...topicWith(rated({ summary: 'the facts' })),
+          block: 'B',
+          transition: 'and that brings us to the next story',
+        },
+      ],
+      [],
+    );
+    expect(block).toContain('Block: B');
+    expect(block).toContain('Transition into next: "and that brings us to the next story"');
+  });
+
+  it('omits block + transition for discover-flow topics that have neither', () => {
+    const block = buildSourceBlock([topicWith(rated({ summary: 'the facts' }))], []);
+    expect(block).not.toContain('Block:');
+    expect(block).not.toContain('Transition into next:');
+  });
+
   it('falls back to a content excerpt when there is neither summary nor quotes', () => {
     const block = buildSourceBlock(
       [

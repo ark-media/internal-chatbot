@@ -157,6 +157,10 @@ const story = (over: Partial<ExtractedStory> = {}): ExtractedStory => ({
 });
 
 describe('extractedStoryToTopic', () => {
+  it('carries the source story id so the merged review screen can track it', () => {
+    expect(extractedStoryToTopic(story({ id: 'abc' })).id).toBe('abc');
+  });
+
   it('maps headline/lead/relevance/whatsNext into topic + description', () => {
     const t = extractedStoryToTopic(story());
     expect(t.topic).toBe('Headline');

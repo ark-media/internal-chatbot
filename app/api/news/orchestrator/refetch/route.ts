@@ -49,7 +49,9 @@ export async function POST(req: Request) {
 
   const run = await loadRun(body.chatId);
   if (!run) return Response.json({ error: 'run_not_found' }, { status: 404 });
-  if (run.stage !== 'checkpoint' || !run.distill) {
+  // 'arranged' is the document flow's merged review screen (distill is
+  // materialized up front), so source-finding works there too.
+  if ((run.stage !== 'checkpoint' && run.stage !== 'arranged') || !run.distill) {
     return Response.json({ error: 'wrong_stage', stage: run.stage }, { status: 409 });
   }
   if (body.topicIndex >= run.distill.topics.length) {

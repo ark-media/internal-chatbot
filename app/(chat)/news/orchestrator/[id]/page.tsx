@@ -53,11 +53,11 @@ import { MarkdownRenderer } from '@/components/MarkdownRenderer';
 import { KindBadge } from '@/components/ui/KindBadge';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
 import { cn } from '@/lib/cn';
+import { takeCompleteLines } from '@/lib/orchestrator/ndjson';
 import {
   renumberIndicesAfterDelete,
   type Candidate,
   type DistillResult,
-  type ExtractedStory,
   type NarrativeArc,
   type OrchestratorRun,
   type RatedArticle,
@@ -91,9 +91,14 @@ type StartResponse =
   | { stage: 'extracting' }
   | { stage: 'error'; errorMessage: string };
 
-type ExtractResponse =
-  | { stage: 'arranged'; stories: ExtractedStory[]; arc: NarrativeArc }
-  | { stage: 'error'; errorMessage: string };
+// One story as it streams from /extract (display-only — no server id yet).
+type StreamingStory = { headline: string; sources?: { url?: string }[] };
+
+// NDJSON messages the streaming /extract route emits, one per line.
+type ExtractStreamMessage =
+  | { type: 'story'; story: StreamingStory }
+  | { type: 'done' }
+  | { type: 'error'; message: string };
 
 type ArrangeResponse =
   | { stage: 'arranged'; arc: NarrativeArc }
@@ -215,6 +220,18 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
   // After a script is complete, the writer can pop back into the checkpoint
   // editor without losing the script. Local-only — survives until refresh.
   const [editingFromComplete, setEditingFromComplete] = useState(false);
+  // Document flow back-nav: force the upload card to show even though a run
+  // exists, so the editor can discard the current dossier and upload another.
+  const [forceStart, setForceStart] = useState(false);
+  // Stories streaming in from /extract, shown progressively while busy. Null
+  // once extraction lands and the authoritative run is loaded.
+  const [extractStream, setExtractStream] = useState<StreamingStory[] | null>(null);
+  // The deferred arc suggestion is computing in the background (off the global
+  // busy lock so the editor can keep working on the merged screen).
+  const [arcSuggesting, setArcSuggesting] = useState(false);
+  // Which run we've already kicked off the background arc suggestion for, so the
+  // auto-trigger fires once per extraction (reset on a fresh upload).
+  const arcSuggestedForRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -268,14 +285,20 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
     [chatId, today, refresh],
   );
 
-  // Document flow: create the run shell, then upload the dossier file to
-  // /extract, which parses it, extracts the stories, and suggests a narrative
-  // arc in one pass — landing directly on the review-and-arrange screen. One
-  // busy lock ('extract') spans both calls.
+  // Document flow: create the run shell, then upload the dossier to /extract,
+  // which streams stories back (NDJSON) as it parses them and persists the run
+  // on 'arranged' before closing. We show stories progressively via
+  // `extractStream`, then refresh to the authoritative run. The arc suggestion
+  // is deferred and triggered separately. One busy lock ('extract') spans it.
   const startDocument = useCallback(
     async (file: File) => {
       setBusy('extract');
       setError(null);
+      setForceStart(false);
+      setRejectedTopics(new Set());
+      setExtractStream([]);
+      // A fresh upload should re-trigger the background arc suggestion.
+      arcSuggestedForRef.current = null;
       try {
         const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
         const startRes = await fetch('/api/news/orchestrator/start', {
@@ -293,49 +316,141 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
         const form = new FormData();
         form.append('chatId', chatId);
         form.append('file', file);
-        const res = await fetch('/api/news/orchestrator/extract', {
-          method: 'POST',
-          body: form,
-        });
-        const data = (await res.json()) as ExtractResponse;
-        if (data.stage === 'error') {
-          setError(data.errorMessage);
+        const res = await fetch('/api/news/orchestrator/extract', { method: 'POST', body: form });
+        if (!res.ok || !res.body) {
+          setError(`Extraction failed (${res.status}).`);
+          await refresh();
+          return;
         }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        const stories: StreamingStory[] = [];
+        let buf = '';
+        let streamError: string | null = null;
+        // Read NDJSON lines; each is a complete message. Stories accumulate for
+        // live display; 'done'/'error' end the stream.
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const { lines, rest } = takeCompleteLines(buf);
+          buf = rest;
+          for (const ln of lines) {
+            let msg: ExtractStreamMessage;
+            try {
+              msg = JSON.parse(ln) as ExtractStreamMessage;
+            } catch {
+              continue;
+            }
+            if (msg.type === 'story') {
+              stories.push(msg.story);
+              setExtractStream([...stories]);
+            } else if (msg.type === 'error') {
+              streamError = msg.message;
+            }
+          }
+        }
+        if (streamError) setError(streamError);
         await refresh();
       } catch (err) {
         setError(String(err).slice(0, 300));
       } finally {
+        setExtractStream(null);
         setBusy(null);
       }
     },
     [chatId, today, refresh],
   );
 
-  // Apply the editor's final arc; materializes topics + → checkpoint.
-  const applyArc = useCallback(
-    async (arc: NarrativeArc) => {
-      setBusy('arrange');
+  // Deferred arc suggestion: extraction lands on 'arranged' in dossier order
+  // (no model call), then this runs the arc agent in the background and updates
+  // run.arc. Kept OFF the global busy lock so the editor can review/reorder
+  // while it computes; the merged screen surfaces the result as an apply banner.
+  const suggestArcInBackground = useCallback(async () => {
+    setArcSuggesting(true);
+    try {
+      const res = await fetch('/api/news/orchestrator/arrange', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ chatId, action: 'suggest' }),
+      });
+      const data = (await res.json()) as ArrangeResponse;
+      // A failed suggestion is non-fatal — the editor still has the dossier
+      // order to work from, so swallow it rather than surfacing an error.
+      if (!('error' in data) && data.stage === 'arranged') {
+        await refresh();
+      }
+    } catch {
+      /* non-fatal: the dossier-order arc remains usable */
+    } finally {
+      setArcSuggesting(false);
+    }
+  }, [chatId, refresh]);
+
+  // Auto-trigger the suggestion once per extraction, when the run is sitting on
+  // the merged screen with the placeholder (dossier-order) arc.
+  useEffect(() => {
+    if (
+      run?.stage === 'arranged' &&
+      run.arc &&
+      run.arc.rationale === '' &&
+      !arcSuggesting &&
+      arcSuggestedForRef.current !== chatId
+    ) {
+      arcSuggestedForRef.current = chatId;
+      void suggestArcInBackground();
+    }
+  }, [run?.stage, run?.arc, chatId, arcSuggesting, suggestArcInBackground]);
+
+  // Document flow "Write script": fold the editor's arc onto the topics
+  // (/arrange apply, which advances to checkpoint) then generate — chained under
+  // one busy lock so the merged review screen goes straight to the finished
+  // script with no intermediate checkpoint view. `approvedIndices` is the
+  // non-rejected topic set in arc order; the apply preserves any deepen/refetch
+  // edits because it stamps block/transition rather than rebuilding the distill.
+  const writeScript = useCallback(
+    async (arc: NarrativeArc, approvedIndices: number[]) => {
+      if (approvedIndices.length === 0) {
+        setError('Keep at least one topic with sources before writing the script.');
+        return;
+      }
+      if (generateInFlightRef.current) return;
+      generateInFlightRef.current = true;
+      setBusy('generate');
       setError(null);
       try {
-        const res = await fetch('/api/news/orchestrator/arrange', {
+        const applyRes = await fetch('/api/news/orchestrator/arrange', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ chatId, action: 'apply', arc }),
         });
-        const data = (await res.json()) as ArrangeResponse;
-        if ('error' in data) {
-          setError(data.error);
+        const applyData = (await applyRes.json()) as ArrangeResponse;
+        if ('error' in applyData) {
+          setError(applyData.error);
           return;
         }
-        if (data.stage === 'error') {
-          setError(data.errorMessage);
+        if (applyData.stage === 'error') {
+          setError(applyData.errorMessage);
+          return;
+        }
+        const genRes = await fetch('/api/news/orchestrator/generate', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ chatId, approvedTopicIndices: approvedIndices }),
+        });
+        const genData = (await genRes.json()) as GenerateResponse;
+        if (genData.stage !== 'complete') {
+          setError(genData.errorMessage || 'Generation failed.');
+          await refresh();
           return;
         }
         await refresh();
-        setRejectedTopics(new Set());
+        setEditingFromComplete(false);
       } catch (err) {
         setError(String(err).slice(0, 300));
       } finally {
+        generateInFlightRef.current = false;
         setBusy(null);
       }
     },
@@ -671,13 +786,24 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
     );
   }
 
-  // Decide which view to show.
-  const showStart = run === null || run.stage === 'error';
-  const showArrange = !showStart && run !== null && run.stage === 'arranged';
+  // Decide which view to show. A document run is identifiable by its extracted
+  // stories; it uses the single merged review screen and never the checkpoint.
+  const isDocRun = !!run?.extractedStories?.length;
+  const showStart = run === null || run.stage === 'error' || forceStart;
+  // The merged review-and-arrange screen: at 'arranged', or when reopening a
+  // finished doc run to revise it.
+  const showArrange =
+    !showStart &&
+    run !== null &&
+    !!run.arc &&
+    !!run.distill &&
+    (run.stage === 'arranged' ||
+      (isDocRun && run.stage === 'complete' && editingFromComplete));
   const showTriage = !showStart && run !== null && run.stage === 'triage';
   const showCheckpoint =
     !showStart &&
     run !== null &&
+    !isDocRun &&
     (run.stage === 'checkpoint' || (run.stage === 'complete' && editingFromComplete));
   const showScript =
     !showStart &&
@@ -729,18 +855,50 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
           ) : null}
 
           {busy === 'extract' || run?.stage === 'extracting' ? (
-            <ProgressCard
-              label="Reading your dossier…"
-              detail="Parsing the document, pulling out each story — sources, dry facts, and the Ark analysis of why it matters — then shaping them into a narrative arc. Typically 60–120 seconds."
-            />
+            extractStream && extractStream.length > 0 ? (
+              <StreamingExtractView stories={extractStream} />
+            ) : (
+              <ProgressCard
+                label="Reading your dossier…"
+                detail="Parsing the document and pulling out each story — sources, dry facts, and the Ark analysis of why it matters. Stories will appear here as they're found."
+              />
+            )
           ) : null}
 
-          {showArrange && run?.arc ? (
-            <ArrangeView
-              stories={run.extractedStories ?? []}
+          {showArrange && run?.arc && run?.distill ? (
+            <MergedReviewView
+              distill={run.distill}
               arc={run.arc}
-              onApply={applyArc}
+              rejectedTopics={rejectedTopics}
+              onToggleReject={(i) =>
+                setRejectedTopics((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(i)) next.delete(i);
+                  else next.add(i);
+                  return next;
+                })
+              }
+              onRefetch={refetch}
+              onDeepen={deepen}
+              onTopicAction={topicAction}
+              onCancelTopicAction={cancelTopicAction}
+              onAttach={attachUrls}
+              onWrite={writeScript}
+              onBack={() => {
+                if (
+                  run?.finalScript &&
+                  !window.confirm(
+                    'Upload a different dossier? Your current stories and script for this run will be replaced.',
+                  )
+                ) {
+                  return;
+                }
+                setForceStart(true);
+              }}
               busy={busy}
+              arcSuggesting={arcSuggesting}
+              regenerating={editingFromComplete}
+              onCancelEdit={editingFromComplete ? () => setEditingFromComplete(false) : null}
             />
           ) : null}
 
@@ -989,112 +1147,167 @@ function ProgressCard({ label, detail }: { label: string; detail: string }) {
   );
 }
 
-// The extracted detail for a single story — sources, dry facts, and the Ark
-// analysis. Rendered inside an expandable arrange row so the editor reviews and
-// arranges on one screen. No headline/badge here; the row header carries those.
-function StoryDetailBody({ story }: { story: ExtractedStory }) {
+// Progressive view of stories as they stream in from /extract — turns the long
+// extraction wait into something the editor can watch fill in. Display-only;
+// the authoritative run loads (and this unmounts) once the stream completes.
+function StreamingExtractView({ stories }: { stories: StreamingStory[] }) {
   return (
-    <div className="mt-3 border-t border-overlay/10 pt-3">
-      {story.lead ? <p className="text-sm text-fg/75">{story.lead}</p> : null}
-
-      {story.dryFacts.length > 0 ? (
-        <div className="mt-3">
-          <div className="text-[0.7rem] uppercase tracking-wider text-fg/45">Dry facts</div>
-          <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-fg/70">
-            {story.dryFacts.map((f, i) => (
-              <li key={i}>{f}</li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
-      <div className="mt-3">
-        <div className="text-[0.7rem] uppercase tracking-wider text-fg/45">
-          Why it matters (Ark analysis)
-        </div>
-        <p className="mt-1 text-sm text-fg/70">{story.relevance}</p>
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-3 text-fg">
+        <Loader2 className="h-5 w-5 animate-spin text-sky-brand" />
+        <span className="font-medium">
+          Reading your dossier…{' '}
+          <span className="text-fg/55">
+            {stories.length} stor{stories.length === 1 ? 'y' : 'ies'} so far
+          </span>
+        </span>
       </div>
-
-      {story.whatsNext ? (
-        <div className="mt-3">
-          <div className="text-[0.7rem] uppercase tracking-wider text-fg/45">What&rsquo;s next</div>
-          <p className="mt-1 text-sm text-fg/70">{story.whatsNext}</p>
-        </div>
-      ) : null}
-
-      {story.sources.length > 0 ? (
-        <div className="mt-4 flex flex-col gap-2 border-t border-overlay/10 pt-3">
-          <div className="text-[0.7rem] uppercase tracking-wider text-fg/45">
-            {story.sources.length} source{story.sources.length === 1 ? '' : 's'}
+      <div className="flex flex-col gap-2">
+        {stories.map((s, i) => (
+          <div
+            key={i}
+            className="flex items-center gap-3 rounded-xl border border-overlay/10 bg-overlay/[0.03] px-4 py-3"
+          >
+            <span className="font-mono text-xs text-fg/40">{i + 1}</span>
+            <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg">
+              {s.headline || 'Untitled story'}
+            </span>
+            {s.sources && s.sources.length > 0 ? (
+              <span className="shrink-0 text-xs text-fg/45">
+                {s.sources.length} source{s.sources.length === 1 ? '' : 's'}
+              </span>
+            ) : null}
           </div>
-          {story.sources.map((src, i) => (
-            <div key={i} className="rounded-md border border-overlay/[0.06] bg-overlay/[0.02] px-3 py-2">
-              <a
-                href={src.url || undefined}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 text-sm text-cyan-400 underline hover:text-cyan-300"
-              >
-                {src.label || src.url || 'source'}
-                {src.url ? <ExternalLink className="h-3 w-3" /> : null}
-              </a>
-              {src.sotClips && src.sotClips.length > 0 ? (
-                <div className="mt-1.5 flex flex-col gap-1">
-                  {src.sotClips.map((c, j) => (
-                    <p key={j} className="text-xs text-fg/55">
-                      <span className="font-semibold text-fg/70">{c.speaker}:</span> &ldquo;{c.text}
-                      &rdquo;
-                    </p>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="mt-4 rounded-md border border-dashed border-amber-400/20 bg-amber-500/[0.04] px-3 py-2 text-xs text-amber-200/80">
-          No sources parsed for this story — the script will flag the missing citation.
-        </div>
-      )}
+        ))}
+      </div>
     </div>
   );
 }
 
-// ---------- Review & arrange ----------
+// ---------- Review & arrange (document flow, merged) ----------
 
 const ROLE_LETTERS = ['A', 'B', 'C', 'D'] as const;
 
-function ArrangeView({
-  stories,
+// The single document-flow review screen. It folds the old "arrange" affordances
+// (drag-reorder, positional A/B/C/D block, transitions) together with the topic
+// tools (reject, deepen, refetch, attach, add) onto one list, then writes the
+// script. Display order is the editor's local `order` of topic ids; the topic
+// tools address `distill.topics` by their current position, and "Write script"
+// hands /generate the non-rejected indices in arc order.
+function MergedReviewView({
+  distill,
   arc,
-  onApply,
+  rejectedTopics,
+  onToggleReject,
+  onRefetch,
+  onDeepen,
+  onTopicAction,
+  onCancelTopicAction,
+  onAttach,
+  onWrite,
+  onBack,
   busy,
+  arcSuggesting,
+  regenerating,
+  onCancelEdit,
 }: {
-  stories: ExtractedStory[];
+  distill: DistillResult;
   arc: NarrativeArc;
-  onApply: (arc: NarrativeArc) => void;
+  rejectedTopics: Set<number>;
+  onToggleReject: (index: number) => void;
+  onRefetch: (index: number, guidance: string) => void;
+  onDeepen: (index: number, guidance: string) => void;
+  onTopicAction: (p: TopicAction) => Promise<boolean>;
+  onCancelTopicAction: () => void;
+  onAttach: (topicIndex: number, urls: string[]) => void;
+  onWrite: (arc: NarrativeArc, approvedIndices: number[]) => void;
+  onBack: () => void;
   busy: BusyState;
+  // The deferred arc suggestion is still computing in the background.
+  arcSuggesting: boolean;
+  regenerating: boolean;
+  onCancelEdit: (() => void) | null;
 }) {
-  const storyById = useMemo(() => new Map(stories.map((s) => [s.id, s])), [stories]);
-  // Working copy of the arc the editor can reorder + edit before applying.
-  // Seed order with the suggestion, then append any stories the arc omitted.
+  const topics = distill.topics;
+  // Topics in the document flow always carry an id (their source story id, or a
+  // uuid if added on this screen); fall back to a positional key defensively.
+  const idOf = useCallback(
+    (t: TopicWithSources, i: number) => t.id ?? `pos:${i}`,
+    [],
+  );
+  const indexById = useMemo(() => {
+    const m = new Map<string, number>();
+    topics.forEach((t, i) => m.set(idOf(t, i), i));
+    return m;
+  }, [topics, idOf]);
+  const topicById = useMemo(() => {
+    const m = new Map<string, TopicWithSources>();
+    topics.forEach((t, i) => m.set(idOf(t, i), t));
+    return m;
+  }, [topics, idOf]);
+
+  // Editor's working order of topic ids, seeded from the suggested arc.
   const [order, setOrder] = useState<string[]>(() => {
+    const ids = topics.map(idOf);
+    const idSet = new Set(ids);
     const seen = new Set<string>();
     const seq: string[] = [];
     for (const id of arc.order) {
-      if (storyById.has(id) && !seen.has(id)) {
+      if (idSet.has(id) && !seen.has(id)) {
         seq.push(id);
         seen.add(id);
       }
     }
-    for (const s of stories) if (!seen.has(s.id)) seq.push(s.id);
+    for (const id of ids) if (!seen.has(id)) seq.push(id);
     return seq;
   });
   const [transitions, setTransitions] = useState<Record<string, string>>(arc.transitions);
+  const [showAdd, setShowAdd] = useState(false);
+  // Which arc suggestion (keyed by its rationale) the editor has already applied
+  // or dismissed. Seeded from the arc at mount so an already-applied arc (e.g. a
+  // re-edit of a finished run) doesn't nag; a NEW suggestion arriving later
+  // (rationale goes from '' to non-empty) surfaces the banner.
+  const [dismissedRationale, setDismissedRationale] = useState(arc.rationale);
+  // A suggestion is available to apply when the arc has a rationale the editor
+  // hasn't acted on yet.
+  const suggestionPending = arc.rationale !== '' && arc.rationale !== dismissedRationale;
 
-  // Block role is strictly positional: 1st story is the A block, 2nd the B
-  // block, and so on. Dragging to reorder therefore relabels automatically,
-  // and the block dropdown is just a shortcut to move a story to that slot.
+  // Adopt the suggested arc: re-seed the working order + transitions from it.
+  const applySuggestedArc = () => {
+    const ids = topics.map(idOf);
+    const idSet = new Set(ids);
+    const seen = new Set<string>();
+    const seq: string[] = [];
+    for (const id of arc.order) {
+      if (idSet.has(id) && !seen.has(id)) {
+        seq.push(id);
+        seen.add(id);
+      }
+    }
+    for (const id of ids) if (!seen.has(id)) seq.push(id);
+    setOrder(seq);
+    setTransitions(arc.transitions);
+    setDismissedRationale(arc.rationale);
+  };
+
+  // Reconcile the working order whenever topics are added/removed by the tools
+  // (each tool refreshes the run). Surviving ids keep the editor's order; new
+  // ids append; deleted ids drop. Mirrors the rejectedTopics renumbering.
+  const idsKey = topics.map(idOf).join('|');
+  useEffect(() => {
+    const ids = topics.map(idOf);
+    const idSet = new Set(ids);
+    setOrder((prev) => {
+      const kept = prev.filter((id) => idSet.has(id));
+      const added = ids.filter((id) => !kept.includes(id));
+      const next = [...kept, ...added];
+      const same = next.length === prev.length && next.every((id, i) => id === prev[i]);
+      return same ? prev : next;
+    });
+    // idsKey captures the set+order of topic ids; idOf is stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idsKey]);
+
   const roleForIndex = (i: number): 'A' | 'B' | 'C' | 'D' => ROLE_LETTERS[Math.min(i, 3)];
 
   const sensors = useSensors(
@@ -1112,25 +1325,95 @@ function ArrangeView({
     setOrder((prev) => arrayMove(prev, oldIndex, newIndex));
   };
 
-  const apply = () => {
-    onApply({
+  // Topics kept (not rejected) and with at least one source, in arc order.
+  const keptCount = order.filter((id) => {
+    const idx = indexById.get(id);
+    if (idx == null) return false;
+    return !rejectedTopics.has(idx) && topics[idx].articles.length > 0;
+  }).length;
+
+  const write = () => {
+    const arcOut: NarrativeArc = {
       order,
       leadId: order[0] ?? '',
       roles: Object.fromEntries(order.map((id, i) => [id, roleForIndex(i)])),
       transitions,
       rationale: arc.rationale,
-    });
+    };
+    const approved = order
+      .map((id) => indexById.get(id))
+      .filter((i): i is number => i != null)
+      .filter((i) => !rejectedTopics.has(i) && topics[i].articles.length > 0);
+    onWrite(arcOut, approved);
   };
 
   return (
     <div className="flex flex-col gap-4">
+      <button
+        onClick={onBack}
+        disabled={busy !== null}
+        className="inline-flex items-center gap-1.5 self-start rounded-md border border-overlay/15 px-2.5 py-1 text-xs text-fg/60 transition hover:border-overlay/30 hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+        title="Discard this run and upload a different dossier"
+      >
+        <ArrowLeft className="h-3 w-3" /> Upload a different dossier
+      </button>
+
+      {regenerating ? (
+        <div className="flex items-center justify-between rounded-lg border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+          <span>
+            Editing this run — your previous script is preserved. Click <strong>Write script</strong>{' '}
+            to replace it, or <strong>back</strong> to keep it as-is.
+          </span>
+          {onCancelEdit ? (
+            <button
+              onClick={onCancelEdit}
+              className="inline-flex items-center gap-1 rounded-md border border-amber-400/30 px-2 py-1 text-xs hover:bg-amber-500/20"
+            >
+              <ArrowLeft className="h-3 w-3" /> Back to script
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {suggestionPending ? (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-sky-brand/30 bg-sky-brand/10 px-4 py-3 text-sm text-fg/80">
+          <span className="inline-flex items-center gap-2">
+            <Wand2 className="h-4 w-4 shrink-0 text-sky-brand" />
+            <span>
+              <strong className="text-fg">Suggested arc ready.</strong> Reorder the stories and fill
+              transitions to match Ark&rsquo;s narrative flow?
+            </span>
+          </span>
+          <span className="flex shrink-0 items-center gap-2">
+            <button
+              onClick={applySuggestedArc}
+              disabled={busy !== null}
+              className="rounded-md bg-sky-brand px-2.5 py-1 text-xs font-semibold text-ink-950 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Apply
+            </button>
+            <button
+              onClick={() => setDismissedRationale(arc.rationale)}
+              className="rounded-md border border-overlay/15 px-2.5 py-1 text-xs text-fg/60 transition hover:border-overlay/30 hover:text-fg"
+            >
+              Dismiss
+            </button>
+          </span>
+        </div>
+      ) : arcSuggesting ? (
+        <div className="inline-flex items-center gap-2 self-start rounded-lg border border-overlay/10 bg-overlay/[0.02] px-3 py-1.5 text-xs text-fg/55">
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-brand" />
+          Suggesting a narrative arc…
+        </div>
+      ) : null}
+
       <div className="rounded-lg border border-overlay/10 bg-overlay/[0.02] px-4 py-3 text-sm text-fg/70">
         <span className="font-semibold text-fg">
-          {stories.length} stor{stories.length === 1 ? 'y' : 'ies'} extracted and arranged.
+          {topics.length} stor{topics.length === 1 ? 'y' : 'ies'} extracted and arranged.
         </span>{' '}
-        Expand any story to review its sources, dry facts, and the Ark analysis. Drag to reorder,
-        set each block, and edit the transitions, then approve.
-        {arc.rationale ? (
+        Drag to reorder, set each block, and edit the transitions. Reject, deepen, or attach sources
+        per story, then write the script.
+        {arc.rationale && !suggestionPending ? (
           <span className="mt-2 block text-fg/55">
             <span className="font-semibold text-fg/70">Suggested arc: </span>
             {arc.rationale}
@@ -1142,13 +1425,16 @@ function ArrangeView({
         <SortableContext items={order} strategy={verticalListSortingStrategy}>
           <div className="flex flex-col gap-2">
             {order.map((id, i) => {
-              const story = storyById.get(id);
-              if (!story) return null;
+              const topic = topicById.get(id);
+              const serverIndex = indexById.get(id);
+              if (!topic || serverIndex == null) return null;
               return (
-                <ArrangeRow
+                <SortableTopicRow
                   key={id}
-                  story={story}
-                  position={i}
+                  id={id}
+                  topic={topic}
+                  serverIndex={serverIndex}
+                  displayNumber={i + 1}
                   isLast={i === order.length - 1}
                   role={roleForIndex(i)}
                   roleOptions={ROLE_LETTERS.slice(0, Math.min(order.length, 4))}
@@ -1164,6 +1450,14 @@ function ArrangeView({
                   }}
                   onTransitionChange={(t) => setTransitions((prev) => ({ ...prev, [id]: t }))}
                   locked={locked}
+                  rejected={rejectedTopics.has(serverIndex)}
+                  onToggleReject={() => onToggleReject(serverIndex)}
+                  onRefetch={(g) => onRefetch(serverIndex, g)}
+                  onDeepen={(g) => onDeepen(serverIndex, g)}
+                  onTopicAction={onTopicAction}
+                  onCancelTopicAction={onCancelTopicAction}
+                  onAttach={(urls) => onAttach(serverIndex, urls)}
+                  busy={busy}
                 />
               );
             })}
@@ -1171,21 +1465,42 @@ function ArrangeView({
         </SortableContext>
       </DndContext>
 
+      {showAdd ? (
+        <AddTopicCard
+          onCancel={() => {
+            onCancelTopicAction();
+            setShowAdd(false);
+          }}
+          onSubmit={async (payload) => {
+            const ok = await onTopicAction({ action: 'add', ...payload });
+            if (ok) setShowAdd(false);
+          }}
+          busy={busy === 'topics'}
+        />
+      ) : (
+        <button
+          onClick={() => setShowAdd(true)}
+          className="inline-flex items-center justify-center gap-2 rounded-2xl border border-dashed border-overlay/15 bg-overlay/[0.01] p-4 text-sm text-fg/55 transition hover:border-overlay/30 hover:text-fg"
+        >
+          <Plus className="h-4 w-4" /> Add a story
+        </button>
+      )}
+
       <div className="sticky bottom-0 -mx-6 mt-2 border-t border-overlay/10 bg-canvas/90 px-6 py-4 backdrop-blur">
         <button
-          onClick={apply}
-          disabled={busy !== null || order.length === 0}
+          onClick={write}
+          disabled={busy !== null || keptCount === 0}
           className={cn(
             'w-full rounded-lg bg-sky-brand px-4 py-3 text-sm font-semibold text-ink-950',
             'transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50',
           )}
         >
-          {busy === 'arrange' ? (
+          {busy === 'generate' ? (
             <span className="inline-flex items-center gap-2">
-              <Loader2 className="h-4 w-4 animate-spin" /> Applying…
+              <Loader2 className="h-4 w-4 animate-spin" /> Writing…
             </span>
           ) : (
-            `Approve arc & continue (${order.length} stor${order.length === 1 ? 'y' : 'ies'})`
+            `Write script (${keptCount} stor${keptCount === 1 ? 'y' : 'ies'})`
           )}
         </button>
       </div>
@@ -1193,9 +1508,14 @@ function ArrangeView({
   );
 }
 
-function ArrangeRow({
-  story,
-  position,
+// One row on the merged review screen: a drag handle + positional block selector
+// in a left rail, the full TopicCard (reject/deepen/refetch/attach/edit/delete),
+// and the transition input below it.
+function SortableTopicRow({
+  id,
+  topic,
+  serverIndex,
+  displayNumber,
   isLast,
   role,
   roleOptions,
@@ -1203,9 +1523,19 @@ function ArrangeRow({
   onRoleChange,
   onTransitionChange,
   locked,
+  rejected,
+  onToggleReject,
+  onRefetch,
+  onDeepen,
+  onTopicAction,
+  onCancelTopicAction,
+  onAttach,
+  busy,
 }: {
-  story: ExtractedStory;
-  position: number;
+  id: string;
+  topic: TopicWithSources;
+  serverIndex: number;
+  displayNumber: number;
   isLast: boolean;
   role: 'A' | 'B' | 'C' | 'D';
   roleOptions: ('A' | 'B' | 'C' | 'D')[];
@@ -1213,10 +1543,17 @@ function ArrangeRow({
   onRoleChange: (r: 'A' | 'B' | 'C' | 'D') => void;
   onTransitionChange: (t: string) => void;
   locked: boolean;
+  rejected: boolean;
+  onToggleReject: () => void;
+  onRefetch: (guidance: string) => void;
+  onDeepen: (guidance: string) => void;
+  onTopicAction: (p: TopicAction) => Promise<boolean>;
+  onCancelTopicAction: () => void;
+  onAttach: (urls: string[]) => void;
+  busy: BusyState;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition: dndTransition, isDragging } =
-    useSortable({ id: story.id, disabled: locked });
-  const [expanded, setExpanded] = useState(false);
+    useSortable({ id, disabled: locked });
   const style = {
     transform: CSS.Transform.toString(transform),
     transition: dndTransition,
@@ -1225,66 +1562,60 @@ function ArrangeRow({
     <div
       ref={setNodeRef}
       style={style}
-      className={cn(
-        'rounded-2xl border border-overlay/10 bg-overlay/[0.03] p-4',
-        isDragging && 'opacity-60',
-      )}
+      className={cn('flex items-stretch gap-2', isDragging && 'opacity-60')}
     >
-      <div className="flex items-start gap-3">
+      <div className="flex flex-col items-center gap-2 pt-5">
         <button
           {...attributes}
           {...listeners}
           disabled={locked}
-          className="mt-0.5 cursor-grab touch-none text-fg/30 hover:text-fg/60 disabled:cursor-not-allowed active:cursor-grabbing"
+          className="cursor-grab touch-none text-fg/30 hover:text-fg/60 disabled:cursor-not-allowed active:cursor-grabbing"
           title="Drag to reorder"
         >
           <GripVertical className="h-5 w-5" />
         </button>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-xs text-fg/40">{position + 1}</span>
-            <select
-              value={role}
-              onChange={(e) => onRoleChange(e.target.value as 'A' | 'B' | 'C' | 'D')}
+        <select
+          value={role}
+          onChange={(e) => onRoleChange(e.target.value as 'A' | 'B' | 'C' | 'D')}
+          disabled={locked}
+          className="rounded-md border border-overlay/15 ark-recessed px-1 py-0.5 text-xs text-fg disabled:opacity-60"
+          title="Block role"
+        >
+          {roleOptions.map((r) => (
+            <option key={r} value={r}>
+              {r}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="min-w-0 flex-1">
+        <TopicCard
+          topic={topic}
+          index={serverIndex}
+          displayNumber={displayNumber}
+          rejected={rejected}
+          onToggleReject={onToggleReject}
+          onRefetch={onRefetch}
+          onDeepen={onDeepen}
+          onTopicAction={onTopicAction}
+          onCancelTopicAction={onCancelTopicAction}
+          onAttach={onAttach}
+          busy={busy}
+        />
+        {!isLast ? (
+          <div className="mt-2">
+            <label className="text-[0.7rem] uppercase tracking-wider text-fg/45">
+              Transition into next story
+            </label>
+            <input
+              value={transition}
+              onChange={(e) => onTransitionChange(e.target.value)}
               disabled={locked}
-              className="rounded-md border border-overlay/15 ark-recessed px-1.5 py-0.5 text-xs text-fg disabled:opacity-60"
-              title="Block role"
-            >
-              {roleOptions.map((r) => (
-                <option key={r} value={r}>
-                  {r} block
-                </option>
-              ))}
-            </select>
-            <h3 className="truncate text-sm font-bold text-fg">{story.headline}</h3>
-            <button
-              onClick={() => setExpanded((v) => !v)}
-              className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-fg/45 hover:bg-overlay/5 hover:text-fg/80"
-              aria-expanded={expanded}
-              title={expanded ? 'Hide detail' : 'Review detail'}
-            >
-              {expanded ? 'Hide' : 'Review'}
-              <ChevronDown
-                className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-180')}
-              />
-            </button>
+              placeholder="A one-line bridge into the next story"
+              className="mt-1 w-full rounded-md border border-overlay/15 ark-recessed px-2 py-1 text-sm text-fg placeholder:text-fg/30 disabled:opacity-60"
+            />
           </div>
-          {expanded ? <StoryDetailBody story={story} /> : null}
-          {!isLast ? (
-            <div className="mt-2">
-              <label className="text-[0.7rem] uppercase tracking-wider text-fg/45">
-                Transition into next story
-              </label>
-              <input
-                value={transition}
-                onChange={(e) => onTransitionChange(e.target.value)}
-                disabled={locked}
-                placeholder="A one-line bridge into the next story"
-                className="mt-1 w-full rounded-md border border-overlay/15 ark-recessed px-2 py-1 text-sm text-fg placeholder:text-fg/30 disabled:opacity-60"
-              />
-            </div>
-          ) : null}
-        </div>
+        ) : null}
       </div>
     </div>
   );
@@ -2002,6 +2333,7 @@ function AddTopicCard({
 function TopicCard({
   topic,
   index,
+  displayNumber,
   rejected,
   onToggleReject,
   onRefetch,
@@ -2013,6 +2345,11 @@ function TopicCard({
 }: {
   topic: TopicWithSources;
   index: number;
+  // Label shown in the badge. Defaults to index+1; the merged review screen
+  // passes the arc position instead, since its display order differs from the
+  // topic's position in distill.topics (which is what `index` addresses for
+  // the tool callbacks).
+  displayNumber?: number;
   rejected: boolean;
   onToggleReject: () => void;
   onRefetch: (guidance: string) => void;
@@ -2068,7 +2405,7 @@ function TopicCard({
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <KindBadge tone="sky">Topic {index + 1}</KindBadge>
+            <KindBadge tone="sky">Topic {displayNumber ?? index + 1}</KindBadge>
             {editingTitle ? (
               <input
                 value={titleDraft}

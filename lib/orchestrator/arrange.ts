@@ -99,11 +99,35 @@ Return every story exactly once, using the ids above verbatim.`;
     abortSignal: signal,
   });
 
-  // Keep only ids that exist in the input; drop dupes. Append any story the
-  // model omitted so nothing silently disappears from the arc.
+  return assembleArc(object.ordered, stories, object.rationale);
+}
+
+type OrderedItem = { id: string; role: 'A' | 'B' | 'C' | 'D'; transition: string };
+
+// Turn the model's flat, possibly-imperfect `ordered` array into a clean
+// NarrativeArc. Pure and exported so the reconciliation — the easy-to-break
+// part — is unit-tested without a model call.
+//
+// Steps: (1) keep only ids that exist in the input and drop dupes, so a
+// hallucinated or repeated id can't corrupt the arc; (2) append any story the
+// model omitted (role D) so nothing silently disappears; (3) stably sort by
+// role so the broadcast sequence agrees with the role labels. The model
+// occasionally lists stories out of role order — e.g. the C-block close placed
+// second — even though its roles, transitions, and rationale all speak in
+// A→B→C terms, and the review UI derives the block letter positionally, so a
+// raw-sequence/role mismatch surfaces the C story in the B slot and parks the
+// wrong transition above it. A story's transition bridges into whatever role
+// follows it, so once the order matches the roles the transitions line up. The
+// sort is stable, so an already-consistent model (and ties within a role) is
+// left untouched and the appended D-role fallbacks stay last.
+export function assembleArc(
+  modelOrdered: OrderedItem[],
+  stories: ExtractedStory[],
+  rationale: string,
+): NarrativeArc {
   const validIds = new Set(stories.map((s) => s.id));
   const seen = new Set<string>();
-  const ordered = object.ordered.filter((o) => {
+  const ordered = modelOrdered.filter((o) => {
     if (!validIds.has(o.id) || seen.has(o.id)) return false;
     seen.add(o.id);
     return true;
@@ -114,6 +138,9 @@ Return every story exactly once, using the ids above verbatim.`;
       seen.add(s.id);
     }
   }
+
+  const roleRank = { A: 0, B: 1, C: 2, D: 3 } as const;
+  ordered.sort((a, b) => roleRank[a.role] - roleRank[b.role]);
 
   const order = ordered.map((o) => o.id);
   const roles: Record<string, 'A' | 'B' | 'C' | 'D'> = {};
@@ -128,6 +155,6 @@ Return every story exactly once, using the ids above verbatim.`;
     leadId: order[0] ?? '',
     roles,
     transitions,
-    rationale: object.rationale,
+    rationale,
   };
 }

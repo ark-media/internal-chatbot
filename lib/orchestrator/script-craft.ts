@@ -26,6 +26,10 @@ export function buildSourceBlock(topics: TopicWithSources[], extras: Article[]):
   topics.forEach((t, ti) => {
     lines.push(`# Topic ${ti + 1}: ${t.topic}`);
     lines.push(t.description);
+    // Document flow folds the editor's arc decisions in here rather than into
+    // the persisted description (see TopicWithSources.block/transition).
+    if (t.block) lines.push(`Block: ${t.block}`);
+    if (t.transition) lines.push(`Transition into next: "${t.transition}"`);
     lines.push('');
     t.articles.forEach((rated) => {
       const a = rated.article;

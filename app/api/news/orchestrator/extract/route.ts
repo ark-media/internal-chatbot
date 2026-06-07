@@ -1,14 +1,17 @@
-import { getNewsExamples } from '@/lib/news-prompt';
-import { extractedOrderArc, suggestArc } from '@/lib/orchestrator/arrange';
+import { extractedOrderArc } from '@/lib/orchestrator/arrange';
 import { parseDocumentToMarkdown, UnsupportedDocError } from '@/lib/orchestrator/doc-parse';
-import { extractStories } from '@/lib/orchestrator/extract';
+import { normalizeStoryDraft, streamExtractStories } from '@/lib/orchestrator/extract';
 import {
   ensureOrchestratorTables,
   loadRun,
   saveRun,
   saveRunIfUnchanged,
 } from '@/lib/orchestrator/state';
-import type { ExtractedStory, NarrativeArc, OrchestratorRun } from '@/lib/orchestrator/types';
+import {
+  extractedStoriesToDistill,
+  type ExtractedStory,
+  type OrchestratorRun,
+} from '@/lib/orchestrator/types';
 import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
@@ -71,8 +74,8 @@ export async function POST(req: Request) {
   const run = await loadRun(chatId);
   if (!run) return Response.json({ error: 'run_not_found' }, { status: 404 });
   // Only the freshly-created run shell ('extracting') may be extracted. Extract
-  // folds in arc suggestion and lands on 'arranged', so there's no bare-
-  // extraction checkpoint to re-upload from; reject once a run has moved on.
+  // lands directly on 'arranged' (the arc suggestion is deferred and computed
+  // separately via /arrange suggest), so reject once a run has moved on.
   if (run.stage !== 'extracting') {
     return Response.json({ error: 'wrong_stage', stage: run.stage }, { status: 409 });
   }
@@ -110,85 +113,117 @@ export async function POST(req: Request) {
     return Response.json({ stage: 'error', errorMessage: detail }, { status: 200 });
   }
 
-  try {
-    const extracted = await extractStories(documentMarkdown);
-    const stories: ExtractedStory[] = extracted.map((s) => ({
-      ...s,
-      id: crypto.randomUUID(),
-    }));
+  // Stream the extraction as newline-delimited JSON so the client can show each
+  // story as it parses. The full set is persisted (stories + extracted-order arc
+  // + distill, landing on 'arranged') *before* the stream closes, so the
+  // client's post-stream refresh always reads the saved run — no serverless
+  // persist/refresh race. The arc suggestion is deferred: the client triggers
+  // /arrange suggest in the background once it lands on 'arranged'.
+  const encoder = new TextEncoder();
+  const line = (obj: unknown) => encoder.encode(`${JSON.stringify(obj)}\n`);
 
-    if (stories.length === 0) {
-      const detail = 'No stories could be extracted from this document. Check the formatting and try again.';
-      await saveRun({
-        ...run,
-        stage: 'error',
-        sourceDocument: documentMarkdown,
-        errorMessage: detail,
-        updatedAt: new Date().toISOString(),
-      });
-      return Response.json({ stage: 'error', errorMessage: detail }, { status: 200 });
-    }
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      try {
+        const result = streamExtractStories(documentMarkdown, req.signal);
+        // Surface each completed story for live display (no id yet — display only).
+        for await (const story of result.elementStream) {
+          controller.enqueue(line({ type: 'story', story }));
+        }
+        const drafts = await result.object;
+        const stories: ExtractedStory[] = drafts.map((s) => ({
+          ...normalizeStoryDraft(s),
+          id: crypto.randomUUID(),
+        }));
 
-    // Extraction and arc suggestion are folded into a single step: the editor
-    // had no action to take on a bare extraction beyond "now arrange it", so we
-    // run the arc agent here and land directly on the review-and-arrange screen.
-    // If the arc agent fails we don't strand the stories — fall back to a
-    // straight extracted-order arc the editor can reshape by hand.
-    let arc: NarrativeArc;
-    try {
-      const exampleScripts = await getNewsExamples();
-      arc = await suggestArc(stories, exampleScripts);
-    } catch (err) {
-      console.warn(
-        JSON.stringify({ event: 'orchestrator.extract.arc_fallback', chatId, err: String(err) }),
-      );
-      arc = extractedOrderArc(stories);
-    }
+        if (stories.length === 0) {
+          const detail =
+            'No stories could be extracted from this document. Check the formatting and try again.';
+          await saveRun({
+            ...run,
+            stage: 'error',
+            sourceDocument: documentMarkdown,
+            errorMessage: detail,
+            updatedAt: new Date().toISOString(),
+          });
+          controller.enqueue(line({ type: 'error', message: detail }));
+          controller.close();
+          return;
+        }
 
-    const next: OrchestratorRun = {
-      ...run,
-      stage: 'arranged',
-      sourceDocument: documentMarkdown,
-      extractedStories: stories,
-      arc,
-      // A re-extract supersedes any prior distill from this run.
-      distill: null,
-      errorMessage: null,
-      updatedAt: new Date().toISOString(),
-    };
-    const saved = await saveRunIfUnchanged(next, expectedUpdatedAt);
-    if (!saved) {
-      return Response.json(
-        { error: 'conflict', detail: 'The run changed while extracting. Try again.' },
-        { status: 409 },
-      );
-    }
+        // Land on 'arranged' with the no-model extracted-order arc, and
+        // materialize the distill (in that order) so the merged review screen's
+        // per-topic tools have a working set. Block + transition stay editable
+        // on the screen; they're folded only at "Write script" (/arrange apply).
+        const arc = extractedOrderArc(stories);
+        const distill = extractedStoriesToDistill(stories, arc.order);
+        const next: OrchestratorRun = {
+          ...run,
+          stage: 'arranged',
+          sourceDocument: documentMarkdown,
+          extractedStories: stories,
+          arc,
+          distill,
+          approvedTopicIndices: distill.topics.map((_, i) => i),
+          errorMessage: null,
+          updatedAt: new Date().toISOString(),
+        };
+        const saved = await saveRunIfUnchanged(next, expectedUpdatedAt);
+        if (!saved) {
+          controller.enqueue(
+            line({ type: 'error', message: 'The run changed while extracting. Try again.' }),
+          );
+          controller.close();
+          return;
+        }
 
-    console.log(
-      JSON.stringify({
-        event: 'orchestrator.extract.complete',
-        chatId,
-        ms: Date.now() - started,
-        docChars: documentMarkdown.length,
-        storyCount: stories.length,
-      }),
-    );
+        console.log(
+          JSON.stringify({
+            event: 'orchestrator.extract.complete',
+            chatId,
+            ms: Date.now() - started,
+            docChars: documentMarkdown.length,
+            storyCount: stories.length,
+          }),
+        );
 
-    return Response.json({ stage: 'arranged', stories, arc });
-  } catch (err) {
-    await saveRun({
-      ...run,
-      stage: 'error',
-      sourceDocument: documentMarkdown,
-      errorMessage: String(err).slice(0, 500),
-      updatedAt: new Date().toISOString(),
-    });
-    console.error(
-      JSON.stringify({ event: 'orchestrator.extract.error', chatId, err: String(err) }),
-    );
-    return Response.json(
-      { stage: 'error', errorMessage: String(err).slice(0, 500) },
-      { status: 500 },
-    );
-  }
+        controller.enqueue(line({ type: 'done' }));
+        controller.close();
+      } catch (err) {
+        // A client disconnect aborts the model mid-stream — unwind quietly
+        // without persisting an error over the run.
+        if (req.signal.aborted) {
+          try {
+            controller.close();
+          } catch {
+            /* already closed */
+          }
+          return;
+        }
+        await saveRun({
+          ...run,
+          stage: 'error',
+          sourceDocument: documentMarkdown,
+          errorMessage: String(err).slice(0, 500),
+          updatedAt: new Date().toISOString(),
+        });
+        console.error(
+          JSON.stringify({ event: 'orchestrator.extract.error', chatId, err: String(err) }),
+        );
+        try {
+          controller.enqueue(line({ type: 'error', message: String(err).slice(0, 500) }));
+          controller.close();
+        } catch {
+          /* already closed */
+        }
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      'content-type': 'application/x-ndjson; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+    },
+  });
 }
