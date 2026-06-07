@@ -21,6 +21,14 @@ export const maxDuration = 300;
 const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
 // Guard against a near-empty doc that would waste a model call.
 const MIN_DOC_CHARS = 200;
+// Ceiling on the parsed document length before it hits the model. The byte cap
+// above bounds the raw upload, but a 10 MB markdown file is ~10M chars (~2.5M
+// tokens) — far past Sonnet's context window, so without this an oversized doc
+// would fail the extract call on context overflow and surface as a generic
+// error. A typical editor's dossier is 5–8k words (~40k chars); 300k chars
+// (~75k tokens) leaves generous headroom for unusually long dossiers while
+// staying well under the context limit alongside the 16k-token output budget.
+const MAX_DOC_CHARS = 300_000;
 
 export async function POST(req: Request) {
   await ensureOrchestratorTables();
@@ -103,6 +111,20 @@ export async function POST(req: Request) {
 
   if (documentMarkdown.trim().length < MIN_DOC_CHARS) {
     const detail = 'The uploaded document looks empty or too short to extract stories from.';
+    await saveRun({
+      ...run,
+      stage: 'error',
+      sourceDocument: documentMarkdown,
+      errorMessage: detail,
+      updatedAt: new Date().toISOString(),
+    });
+    return Response.json({ stage: 'error', errorMessage: detail }, { status: 200 });
+  }
+
+  if (documentMarkdown.length > MAX_DOC_CHARS) {
+    const detail = `The uploaded document is too long to extract in one pass (${Math.round(
+      documentMarkdown.length / 1000,
+    )}k characters; the limit is ${MAX_DOC_CHARS / 1000}k). Trim it to the day's dossier and try again.`;
     await saveRun({
       ...run,
       stage: 'error',
