@@ -26,7 +26,6 @@ import {
   ChevronDown,
   FileText,
   Upload,
-  Sparkles,
   Wand2,
 } from 'lucide-react';
 import {
@@ -67,7 +66,7 @@ import {
   type TopicWithSources,
 } from '@/lib/orchestrator/types';
 
-type StartMode = 'discover' | 'urls' | 'topics' | 'document';
+type StartMode = 'document' | 'discover';
 
 // Which in-flight request, if any, is blocking the orchestrator UI. `null`
 // means idle — only one orchestrator request runs at a time, so this doubles
@@ -93,7 +92,7 @@ type StartResponse =
   | { stage: 'error'; errorMessage: string };
 
 type ExtractResponse =
-  | { stage: 'extracted'; stories: ExtractedStory[] }
+  | { stage: 'arranged'; stories: ExtractedStory[]; arc: NarrativeArc }
   | { stage: 'error'; errorMessage: string };
 
 type ArrangeResponse =
@@ -119,7 +118,7 @@ function stageLabel(stage: OrchestratorRun['stage'] | undefined): string {
     case 'arranging':
       return 'Arranging';
     case 'arranged':
-      return 'Approve arc';
+      return 'Review & arrange';
     case 'triage':
       return 'Triage articles';
     case 'checkpoint':
@@ -276,8 +275,9 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
   );
 
   // Document flow: create the run shell, then upload the dossier file to
-  // /extract, which parses it and runs the extraction agent. One busy lock
-  // ('extract') spans both calls.
+  // /extract, which parses it, extracts the stories, and suggests a narrative
+  // arc in one pass — landing directly on the review-and-arrange screen. One
+  // busy lock ('extract') spans both calls.
   const startDocument = useCallback(
     async (file: File) => {
       setBusy('extract');
@@ -317,34 +317,7 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
     [chatId, today, refresh],
   );
 
-  // Stage 2 — ask the arc agent to suggest a narrative order.
-  const suggestArc = useCallback(async () => {
-    setBusy('arrange');
-    setError(null);
-    try {
-      const res = await fetch('/api/news/orchestrator/arrange', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ chatId, action: 'suggest' }),
-      });
-      const data = (await res.json()) as ArrangeResponse;
-      if ('error' in data) {
-        setError(data.error);
-        return;
-      }
-      if (data.stage === 'error') {
-        setError(data.errorMessage);
-        return;
-      }
-      await refresh();
-    } catch (err) {
-      setError(String(err).slice(0, 300));
-    } finally {
-      setBusy(null);
-    }
-  }, [chatId, refresh]);
-
-  // Stage 2 — apply the editor's final arc; materializes topics + → checkpoint.
+  // Apply the editor's final arc; materializes topics + → checkpoint.
   const applyArc = useCallback(
     async (arc: NarrativeArc) => {
       setBusy('arrange');
@@ -706,7 +679,6 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
 
   // Decide which view to show.
   const showStart = run === null || run.stage === 'error';
-  const showExtracted = !showStart && run !== null && run.stage === 'extracted';
   const showArrange = !showStart && run !== null && run.stage === 'arranged';
   const showTriage = !showStart && run !== null && run.stage === 'triage';
   const showCheckpoint =
@@ -734,8 +706,8 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
             </div>
           </div>
           <p className="text-sm text-fg/60">
-            Pulls today&rsquo;s top stories, lets you pick which to cover, then writes and edits the
-            script for you. Or skip ahead — bring your own URLs or topics.
+            Upload a research dossier to extract and arrange the stories, then deepen and write the
+            script. Or discover today&rsquo;s top stories and triage them yourself.
           </p>
 
           {error ? (
@@ -758,29 +730,14 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
           {busy === 'start' && !showCheckpoint && !showTriage ? (
             <ProgressCard
               label="Setting up your run…"
-              detail="Pulling today's stories is quick. Seeding from your own URLs or topics also reads each source, which takes a little longer."
+              detail="Pulling today's top stories into a raw list for you to triage. This is usually quick."
             />
           ) : null}
 
           {busy === 'extract' || run?.stage === 'extracting' ? (
             <ProgressCard
               label="Reading your dossier…"
-              detail="Parsing the document and pulling out each story — sources, dry facts, and the Ark analysis of why it matters. Typically 30–90 seconds."
-            />
-          ) : null}
-
-          {showExtracted && run ? (
-            <ExtractedView
-              stories={run.extractedStories ?? []}
-              onArrange={suggestArc}
-              busy={busy}
-            />
-          ) : null}
-
-          {busy === 'arrange' || run?.stage === 'arranging' ? (
-            <ProgressCard
-              label="Suggesting a narrative arc…"
-              detail="Ordering the stories into a coherent broadcast per the Ark news bible — picking the lead, sequencing, and writing transitions."
+              detail="Parsing the document, pulling out each story — sources, dry facts, and the Ark analysis of why it matters — then shaping them into a narrative arc. Typically 60–120 seconds."
             />
           ) : null}
 
@@ -899,22 +856,12 @@ function StartCard({
 }: {
   today: string;
   onTodayChange: (v: string) => void;
-  onStart: (
-    p:
-      | { mode: 'discover' }
-      | { mode: 'urls'; urls: string[] }
-      | { mode: 'topics'; topics: { topic: string; description: string }[]; autoGather: boolean },
-  ) => void;
+  onStart: (p: { mode: 'discover' }) => void;
   onStartDocument: (file: File) => void;
   busy: boolean;
   previousError: string | null;
 }) {
-  const [mode, setMode] = useState<StartMode>('discover');
-  const [urlsText, setUrlsText] = useState('');
-  const [topics, setTopics] = useState<{ topic: string; description: string }[]>([
-    { topic: '', description: '' },
-  ]);
-  const [autoGather, setAutoGather] = useState(true);
+  const [mode, setMode] = useState<StartMode>('document');
   const [docFile, setDocFile] = useState<File | null>(null);
 
   const submit = () => {
@@ -922,29 +869,10 @@ function StartCard({
       if (docFile) onStartDocument(docFile);
       return;
     }
-    if (mode === 'discover') return onStart({ mode: 'discover' });
-    if (mode === 'urls') {
-      const urls = urlsText
-        .split(/\s+/)
-        .map((u) => u.trim())
-        .filter((u) => /^https?:\/\//i.test(u));
-      if (urls.length === 0) return;
-      return onStart({ mode: 'urls', urls });
-    }
-    // topics
-    const cleaned = topics
-      .map((t) => ({ topic: t.topic.trim(), description: t.description.trim() }))
-      .filter((t) => t.topic.length > 0 && t.description.length > 0);
-    if (cleaned.length === 0) return;
-    return onStart({ mode: 'topics', topics: cleaned, autoGather });
+    return onStart({ mode: 'discover' });
   };
 
-  const canSubmit = (() => {
-    if (mode === 'discover') return true;
-    if (mode === 'document') return docFile !== null;
-    if (mode === 'urls') return urlsText.trim().length > 0;
-    return topics.some((t) => t.topic.trim() && t.description.trim());
-  })();
+  const canSubmit = mode === 'discover' || docFile !== null;
 
   return (
     <div className="rounded-2xl border border-overlay/10 bg-overlay/[0.03] p-6">
@@ -972,8 +900,6 @@ function StartCard({
           [
             ['document', 'Upload dossier'],
             ['discover', 'Discover stories'],
-            ['urls', 'I have URLs'],
-            ['topics', 'I have topics'],
           ] as const
         ).map(([k, label]) => (
           <button
@@ -1038,84 +964,6 @@ function StartCard({
         </p>
       ) : null}
 
-      {mode === 'urls' ? (
-        <div className="mb-4 flex flex-col gap-2">
-          <label className="text-sm text-fg/70">Paste URLs (one per line)</label>
-          <textarea
-            value={urlsText}
-            onChange={(e) => setUrlsText(e.target.value)}
-            placeholder={'https://www.timesofisrael.com/...\nhttps://www.reuters.com/...'}
-            rows={5}
-            className="w-full rounded-md border border-overlay/15 ark-recessed px-3 py-2 font-mono text-xs text-fg placeholder:text-fg/30"
-          />
-          <p className="text-xs text-fg/40">
-            We&rsquo;ll extract each one and group + rate them like a normal run. URLs outside the
-            freshness window get an &ldquo;older story&rdquo; flag, but stay in the pool.
-          </p>
-        </div>
-      ) : null}
-
-      {mode === 'topics' ? (
-        <div className="mb-4 flex flex-col gap-3">
-          <label className="text-sm text-fg/70">Your topics (up to 4)</label>
-          {topics.map((t, i) => (
-            <div key={i} className="flex flex-col gap-1.5 rounded-md border border-overlay/10 ark-recessed-soft p-3">
-              <div className="flex items-center justify-between">
-                <span className="text-[0.7rem] uppercase tracking-wider text-fg/45">
-                  Topic {i + 1}
-                </span>
-                {topics.length > 1 ? (
-                  <button
-                    onClick={() => setTopics((prev) => prev.filter((_, idx) => idx !== i))}
-                    className="text-xs text-fg/40 hover:text-red-300"
-                  >
-                    Remove
-                  </button>
-                ) : null}
-              </div>
-              <input
-                value={t.topic}
-                onChange={(e) =>
-                  setTopics((prev) =>
-                    prev.map((p, idx) => (idx === i ? { ...p, topic: e.target.value } : p)),
-                  )
-                }
-                placeholder="Short topic name (e.g. Strait of Hormuz tensions)"
-                className="w-full rounded-md border border-overlay/15 ark-recessed px-2 py-1 text-sm text-fg placeholder:text-fg/30"
-              />
-              <textarea
-                value={t.description}
-                onChange={(e) =>
-                  setTopics((prev) =>
-                    prev.map((p, idx) => (idx === i ? { ...p, description: e.target.value } : p)),
-                  )
-                }
-                placeholder="1–2 sentence description of what this topic covers"
-                rows={2}
-                className="w-full rounded-md border border-overlay/15 ark-recessed px-2 py-1 text-sm text-fg placeholder:text-fg/30"
-              />
-            </div>
-          ))}
-          {topics.length < 4 ? (
-            <button
-              onClick={() => setTopics((prev) => [...prev, { topic: '', description: '' }])}
-              className="inline-flex items-center gap-1.5 self-start rounded-md border border-overlay/15 px-2 py-1 text-xs text-fg/60 hover:bg-overlay/5 hover:text-fg"
-            >
-              <Plus className="h-3 w-3" /> Add topic
-            </button>
-          ) : null}
-          <label className="mt-1 flex items-center gap-2 text-xs text-fg/55">
-            <input
-              type="checkbox"
-              checked={autoGather}
-              onChange={(e) => setAutoGather(e.target.checked)}
-              className="rounded border-overlay/20 ark-recessed"
-            />
-            Auto-gather sources for each topic now (uncheck if you&rsquo;ll attach URLs yourself).
-          </label>
-        </div>
-      ) : null}
-
       <button
         onClick={submit}
         disabled={busy || !canSubmit}
@@ -1128,14 +976,8 @@ function StartCard({
         {busy
           ? 'Starting…'
           : mode === 'document'
-            ? 'Extract stories'
-            : mode === 'discover'
-              ? 'Pull today’s stories'
-              : mode === 'urls'
-                ? 'Extract & group'
-                : autoGather
-                  ? 'Find sources for these topics'
-                  : 'Open editor with these topics'}
+            ? 'Extract & arrange'
+            : 'Pull today’s stories'}
       </button>
     </div>
   );
@@ -1153,69 +995,13 @@ function ProgressCard({ label, detail }: { label: string; detail: string }) {
   );
 }
 
-// ---------- Extracted (Stage 1 review) ----------
-
-function ExtractedView({
-  stories,
-  onArrange,
-  busy,
-}: {
-  stories: ExtractedStory[];
-  onArrange: () => void;
-  busy: BusyState;
-}) {
+// The extracted detail for a single story — sources, dry facts, and the Ark
+// analysis. Rendered inside an expandable arrange row so the editor reviews and
+// arranges on one screen. No headline/badge here; the row header carries those.
+function StoryDetailBody({ story }: { story: ExtractedStory }) {
   return (
-    <div className="flex flex-col gap-4">
-      <div className="rounded-lg border border-overlay/10 bg-overlay/[0.02] px-4 py-3 text-sm text-fg/70">
-        <span className="font-semibold text-fg">
-          {stories.length} stor{stories.length === 1 ? 'y' : 'ies'} extracted.
-        </span>{' '}
-        Each story below has its sources, the dry facts, and the Ark analysis of why it matters.
-        Review them, then move on to arrange the episode.
-      </div>
-
-      {stories.map((story, i) => (
-        <ExtractedStoryCard key={story.id} story={story} index={i} />
-      ))}
-
-      <div className="sticky bottom-0 -mx-6 mt-2 border-t border-overlay/10 bg-canvas/90 px-6 py-4 backdrop-blur">
-        <button
-          onClick={onArrange}
-          disabled={busy !== null || stories.length === 0}
-          className={cn(
-            'w-full rounded-lg bg-sky-brand px-4 py-3 text-sm font-semibold text-ink-950',
-            'transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50',
-          )}
-        >
-          {busy === 'arrange' ? (
-            <span className="inline-flex items-center gap-2">
-              <Loader2 className="h-4 w-4 animate-spin" /> Suggesting an arc…
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-2">
-              <Sparkles className="h-4 w-4" /> Looks good — arrange the episode
-            </span>
-          )}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function ExtractedStoryCard({ story, index }: { story: ExtractedStory; index: number }) {
-  return (
-    <div className="rounded-2xl border border-overlay/10 bg-overlay/[0.03] p-5">
-      <div className="flex items-center gap-2">
-        <KindBadge tone="sky">Story {index + 1}</KindBadge>
-        {story.blockHint ? (
-          <span className="rounded bg-overlay/10 px-1.5 py-0.5 text-[0.65rem] uppercase tracking-wider text-fg/55">
-            {story.blockHint} block
-          </span>
-        ) : null}
-        <h3 className="text-base font-bold text-fg">{story.headline}</h3>
-      </div>
-
-      {story.lead ? <p className="mt-2 text-sm text-fg/75">{story.lead}</p> : null}
+    <div className="mt-3 border-t border-overlay/10 pt-3">
+      {story.lead ? <p className="text-sm text-fg/75">{story.lead}</p> : null}
 
       {story.dryFacts.length > 0 ? (
         <div className="mt-3">
@@ -1280,7 +1066,7 @@ function ExtractedStoryCard({ story, index }: { story: ExtractedStory; index: nu
   );
 }
 
-// ---------- Arrange (Stage 2) ----------
+// ---------- Review & arrange ----------
 
 function ArrangeView({
   stories,
@@ -1338,12 +1124,19 @@ function ArrangeView({
 
   return (
     <div className="flex flex-col gap-4">
-      {arc.rationale ? (
-        <div className="rounded-lg border border-overlay/10 bg-overlay/[0.02] px-4 py-3 text-sm text-fg/70">
-          <span className="font-semibold text-fg">Suggested arc: </span>
-          {arc.rationale}
-        </div>
-      ) : null}
+      <div className="rounded-lg border border-overlay/10 bg-overlay/[0.02] px-4 py-3 text-sm text-fg/70">
+        <span className="font-semibold text-fg">
+          {stories.length} stor{stories.length === 1 ? 'y' : 'ies'} extracted and arranged.
+        </span>{' '}
+        Expand any story to review its sources, dry facts, and the Ark analysis. Drag to reorder,
+        set each block, and edit the transitions, then approve.
+        {arc.rationale ? (
+          <span className="mt-2 block text-fg/55">
+            <span className="font-semibold text-fg/70">Suggested arc: </span>
+            {arc.rationale}
+          </span>
+        ) : null}
+      </div>
 
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         <SortableContext items={order} strategy={verticalListSortingStrategy}>
@@ -1412,6 +1205,7 @@ function ArrangeRow({
 }) {
   const { attributes, listeners, setNodeRef, transform, transition: dndTransition, isDragging } =
     useSortable({ id: story.id, disabled: locked });
+  const [expanded, setExpanded] = useState(false);
   const style = {
     transform: CSS.Transform.toString(transform),
     transition: dndTransition,
@@ -1452,7 +1246,19 @@ function ArrangeRow({
               ))}
             </select>
             <h3 className="truncate text-sm font-bold text-fg">{story.headline}</h3>
+            <button
+              onClick={() => setExpanded((v) => !v)}
+              className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-fg/45 hover:bg-overlay/5 hover:text-fg/80"
+              aria-expanded={expanded}
+              title={expanded ? 'Hide detail' : 'Review detail'}
+            >
+              {expanded ? 'Hide' : 'Review'}
+              <ChevronDown
+                className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-180')}
+              />
+            </button>
           </div>
+          {expanded ? <StoryDetailBody story={story} /> : null}
           {!isLast ? (
             <div className="mt-2">
               <label className="text-[0.7rem] uppercase tracking-wider text-fg/45">

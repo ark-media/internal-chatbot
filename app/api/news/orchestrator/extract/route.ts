@@ -1,3 +1,5 @@
+import { getNewsExamples } from '@/lib/news-prompt';
+import { suggestArc } from '@/lib/orchestrator/arrange';
 import { parseDocumentToMarkdown, UnsupportedDocError } from '@/lib/orchestrator/doc-parse';
 import { extractStories } from '@/lib/orchestrator/extract';
 import {
@@ -6,7 +8,7 @@ import {
   saveRun,
   saveRunIfUnchanged,
 } from '@/lib/orchestrator/state';
-import type { ExtractedStory, OrchestratorRun } from '@/lib/orchestrator/types';
+import type { ExtractedStory, NarrativeArc, OrchestratorRun } from '@/lib/orchestrator/types';
 import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
@@ -126,13 +128,37 @@ export async function POST(req: Request) {
       return Response.json({ stage: 'error', errorMessage: detail }, { status: 200 });
     }
 
+    // Extraction and arc suggestion are folded into a single step: the editor
+    // had no action to take on a bare extraction beyond "now arrange it", so we
+    // run the arc agent here and land directly on the review-and-arrange screen.
+    // If the arc agent fails we don't strand the stories — fall back to a
+    // straight extracted-order arc the editor can reshape by hand.
+    let arc: NarrativeArc;
+    try {
+      const exampleScripts = await getNewsExamples();
+      arc = await suggestArc(stories, exampleScripts);
+    } catch (err) {
+      console.warn(
+        JSON.stringify({ event: 'orchestrator.extract.arc_fallback', chatId, err: String(err) }),
+      );
+      arc = {
+        order: stories.map((s) => s.id),
+        leadId: stories[0].id,
+        roles: Object.fromEntries(
+          stories.map((s, i) => [s.id, s.blockHint ?? (i === 0 ? 'A' : 'D')]),
+        ),
+        transitions: {},
+        rationale: '',
+      };
+    }
+
     const next: OrchestratorRun = {
       ...run,
-      stage: 'extracted',
+      stage: 'arranged',
       sourceDocument: documentMarkdown,
       extractedStories: stories,
-      // A re-extract supersedes any prior arc/distill from this run.
-      arc: null,
+      arc,
+      // A re-extract supersedes any prior distill from this run.
       distill: null,
       errorMessage: null,
       updatedAt: new Date().toISOString(),
@@ -155,7 +181,7 @@ export async function POST(req: Request) {
       }),
     );
 
-    return Response.json({ stage: 'extracted', stories });
+    return Response.json({ stage: 'arranged', stories, arc });
   } catch (err) {
     await saveRun({
       ...run,
