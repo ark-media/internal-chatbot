@@ -84,7 +84,49 @@ export type OrchestratorStage =
   | 'checkpoint'
   | 'crafting'
   | 'complete'
-  | 'error';
+  | 'error'
+  // Document-driven flow (mode: 'document'). These precede 'checkpoint',
+  // which the doc flow reuses as its "deepen" stage:
+  //   extracting → extracted(✓) → arranging → arranged(✓) → checkpoint → …
+  | 'extracting' // agent is parsing the uploaded dossier
+  | 'extracted' // checkpoint: editor reviews the extracted stories
+  | 'arranging' // arc agent is running
+  | 'arranged'; // checkpoint: editor approves the narrative arc
+
+// A single source/link pulled from the dossier for one story. The dossier is
+// trusted as source-of-truth at extract time (no live re-fetch), so `facts`
+// and `sotClips` carry the editor-curated content the script writer works from.
+export type ExtractedSource = {
+  label: string; // link text / outlet name, e.g. "Reuters"
+  url: string;
+  facts?: string[]; // dry facts attributable to this specific source
+  sotClips?: { speaker: string; text: string }[]; // verbatim SOT quotes
+};
+
+// One story extracted from the editor's dossier at Stage 1. Edited at the
+// 'extracted' checkpoint, arranged at 'arranged', then mapped onto
+// TopicWithSources (see extractedStoryToTopic) so the existing script writer
+// consumes it unchanged.
+export type ExtractedStory = {
+  id: string; // server-assigned uuid; referenced by NarrativeArc + dnd reorder
+  headline: string;
+  lead?: string;
+  dryFacts: string[]; // story-level facts not bound to a single source
+  relevance: string; // Ark's "Why it matters" analysis
+  whatsNext?: string;
+  blockHint?: 'A' | 'B' | 'C' | 'D'; // parsed from "A BLOCK" labels, if present
+  sources: ExtractedSource[];
+};
+
+// The narrative arc the editor approves at Stage 2. `order` lists story ids
+// lead-first; transitions bridge each story to the next.
+export type NarrativeArc = {
+  order: string[]; // ExtractedStory ids, lead first
+  leadId: string;
+  roles: Record<string, 'A' | 'B' | 'C' | 'D'>; // storyId → block role
+  transitions: Record<string, string>; // storyId → 1-line bridge into the next story
+  rationale: string;
+};
 
 export type RefineEntry = {
   instruction: string;
@@ -135,6 +177,14 @@ export type OrchestratorRun = {
   // save-learn click. Used to dedupe re-clicks: if this matches the current
   // refineHistory.length, there is no new signal to learn from.
   lastDistilledVersion?: number;
+  // Document-driven flow (mode: 'document'). All optional for backwards compat
+  // with web-discovery runs that never populate them.
+  // Raw parsed dossier markdown — kept for audit and re-extract.
+  sourceDocument?: string;
+  // Stage-1 output; the editable structure at the 'extracted' checkpoint.
+  extractedStories?: ExtractedStory[];
+  // Stage-2 suggestion plus the editor's overrides.
+  arc?: NarrativeArc | null;
   updatedAt: string;
 };
 
@@ -197,3 +247,104 @@ export function deriveApprovedTopics(
     .map((i) => topics[i])
     .filter((t) => t.articles.length > 0);
 };
+
+// Hostname of a URL, or '' for bare/empty/invalid URLs. Used to populate
+// Article.source for doc-extracted sources.
+function hostnameOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return '';
+  }
+}
+
+// Map one extracted story onto the TopicWithSources shape the script writer
+// consumes. The dossier is the source-of-truth: facts go into RatedArticle
+// `summary`, SOT quotes into `keyQuotes`, and `article.content` is left empty
+// (buildSourceBlock prefers summary/quotes over content). publicationDate is
+// null + isFlagged false so the freshness logic doesn't tag doc sources as
+// stale. A story with no sources gets a single placeholder so it survives the
+// "topics must have >=1 article" check in /generate; the writer will FLAG the
+// missing citation, which is correct.
+export function extractedStoryToTopic(story: ExtractedStory): TopicWithSources {
+  const description = [
+    story.lead ? `Lead: ${story.lead}` : null,
+    `Why it matters: ${story.relevance}`,
+    story.whatsNext ? `What's next: ${story.whatsNext}` : null,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+
+  const articles: RatedArticle[] = story.sources.map((src, i) => {
+    // Fold story-level dryFacts onto the first source so they reach the writer.
+    const facts = [...(src.facts ?? [])];
+    if (i === 0 && story.dryFacts.length > 0) facts.unshift(...story.dryFacts);
+    return {
+      article: {
+        title: src.label || hostnameOf(src.url) || story.headline,
+        url: src.url,
+        publicationDate: null,
+        source: hostnameOf(src.url) || src.label || 'editor dossier',
+        content: '',
+        isFlagged: false,
+      },
+      relevance: 75,
+      credibility: 75,
+      completeness: 75,
+      avgScore: 75,
+      summary: facts.join(' '),
+      keyQuotes: (src.sotClips ?? []).map((c) => c.text),
+      provenance: 'manual',
+    };
+  });
+
+  if (articles.length === 0) {
+    articles.push({
+      article: {
+        title: story.headline,
+        url: '',
+        publicationDate: null,
+        source: 'editor dossier',
+        content: '',
+        isFlagged: false,
+      },
+      relevance: 75,
+      credibility: 75,
+      completeness: 75,
+      avgScore: 75,
+      summary: story.dryFacts.join(' '),
+      keyQuotes: [],
+      provenance: 'manual',
+    });
+  }
+
+  return { topic: story.headline, description, articles };
+}
+
+// Materialize a DistillResult from extracted stories. `order` (story ids,
+// arc order) reorders the topics; ids missing from `order` are appended in
+// their original relative order, and unknown ids are ignored.
+export function extractedStoriesToDistill(
+  stories: ExtractedStory[],
+  order?: string[],
+): DistillResult {
+  let ordered = stories;
+  if (order && order.length > 0) {
+    const byId = new Map(stories.map((s) => [s.id, s]));
+    const seen = new Set<string>();
+    const front: ExtractedStory[] = [];
+    for (const id of order) {
+      const s = byId.get(id);
+      if (s && !seen.has(id)) {
+        front.push(s);
+        seen.add(id);
+      }
+    }
+    const rest = stories.filter((s) => !seen.has(s.id));
+    ordered = [...front, ...rest];
+  }
+  return {
+    topics: ordered.map(extractedStoryToTopic),
+    rationale: 'Extracted from editor dossier.',
+  };
+}

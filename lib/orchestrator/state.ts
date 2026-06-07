@@ -43,6 +43,9 @@ function buildPayload(run: OrchestratorRun): RunStatePayload {
     iterations: run.iterations,
     errorMessage: run.errorMessage,
     lastDistilledVersion: run.lastDistilledVersion,
+    sourceDocument: run.sourceDocument,
+    extractedStories: run.extractedStories,
+    arc: run.arc,
   };
 }
 
@@ -149,6 +152,9 @@ export async function loadRun(chatId: string): Promise<OrchestratorRun | null> {
     iterations: row.state.iterations ?? 0,
     errorMessage: row.state.errorMessage ?? null,
     lastDistilledVersion: row.state.lastDistilledVersion,
+    sourceDocument: row.state.sourceDocument,
+    extractedStories: row.state.extractedStories ?? [],
+    arc: row.state.arc ?? null,
     updatedAt,
   };
 }

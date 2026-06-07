@@ -31,6 +31,11 @@ const baseSchema = {
 
 const bodySchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('discover'), ...baseSchema }),
+  // Document-driven flow: just creates the run shell at stage 'extracting'.
+  // The client immediately uploads the dossier file to /extract, which parses
+  // it and runs the extraction agent. Kept separate so a re-extract is
+  // possible and a /start retry never double-charges the model call.
+  z.object({ mode: z.literal('document'), ...baseSchema }),
   z.object({
     mode: z.literal('urls'),
     urls: z.array(z.string().url()).min(1).max(20),
@@ -110,6 +115,27 @@ export async function POST(req: Request) {
   await saveRun(initial);
 
   try {
+    if (body.mode === 'document') {
+      // Just park the run at 'extracting'; the client uploads the file to
+      // /extract next. No model call here.
+      const run: OrchestratorRun = {
+        ...initial,
+        stage: 'extracting',
+        updatedAt: new Date().toISOString(),
+      };
+      await saveRun(run);
+      console.log(
+        JSON.stringify({
+          event: 'orchestrator.start.complete',
+          mode: 'document',
+          chatId,
+          ms: Date.now() - started,
+          stage: 'extracting',
+        }),
+      );
+      return Response.json({ stage: 'extracting' });
+    }
+
     if (body.mode === 'urls') {
       const articles = await Promise.all(
         body.urls.map((u) => extractUrlToArticle(u, today)),

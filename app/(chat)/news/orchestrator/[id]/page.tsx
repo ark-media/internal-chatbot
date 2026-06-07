@@ -24,6 +24,10 @@ import {
   Search,
   AtSign,
   ChevronDown,
+  FileText,
+  Upload,
+  Sparkles,
+  Wand2,
 } from 'lucide-react';
 import {
   DndContext,
@@ -54,6 +58,8 @@ import {
   renumberIndicesAfterDelete,
   type Candidate,
   type DistillResult,
+  type ExtractedStory,
+  type NarrativeArc,
   type OrchestratorRun,
   type RatedArticle,
   type RefineEntry,
@@ -61,7 +67,7 @@ import {
   type TopicWithSources,
 } from '@/lib/orchestrator/types';
 
-type StartMode = 'discover' | 'urls' | 'topics';
+type StartMode = 'discover' | 'urls' | 'topics' | 'document';
 
 // Which in-flight request, if any, is blocking the orchestrator UI. `null`
 // means idle — only one orchestrator request runs at a time, so this doubles
@@ -69,6 +75,9 @@ type StartMode = 'discover' | 'urls' | 'topics';
 type BusyState =
   | null
   | 'start'
+  | 'extract'
+  | 'arrange'
+  | 'deepen'
   | 'refetch'
   | 'generate'
   | 'topics'
@@ -80,7 +89,18 @@ type BusyState =
 type StartResponse =
   | { stage: 'checkpoint'; distill: DistillResult; articleCount: number }
   | { stage: 'triage'; candidateCount: number }
+  | { stage: 'extracting' }
   | { stage: 'error'; errorMessage: string };
+
+type ExtractResponse =
+  | { stage: 'extracted'; stories: ExtractedStory[] }
+  | { stage: 'error'; errorMessage: string };
+
+type ArrangeResponse =
+  | { stage: 'arranged'; arc: NarrativeArc }
+  | { stage: 'checkpoint'; distill: DistillResult }
+  | { stage: 'error'; errorMessage: string }
+  | { error: string };
 
 type GenerateResponse =
   | { stage: 'complete'; script: Script; iterations: number }
@@ -92,6 +112,14 @@ function stageLabel(stage: OrchestratorRun['stage'] | undefined): string {
   switch (stage) {
     case 'gathering':
       return 'Pulling stories';
+    case 'extracting':
+      return 'Reading dossier';
+    case 'extracted':
+      return 'Review stories';
+    case 'arranging':
+      return 'Arranging';
+    case 'arranged':
+      return 'Approve arc';
     case 'triage':
       return 'Triage articles';
     case 'checkpoint':
@@ -245,6 +273,132 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
       }
     },
     [chatId, today, refresh],
+  );
+
+  // Document flow: create the run shell, then upload the dossier file to
+  // /extract, which parses it and runs the extraction agent. One busy lock
+  // ('extract') spans both calls.
+  const startDocument = useCallback(
+    async (file: File) => {
+      setBusy('extract');
+      setError(null);
+      try {
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
+        const startRes = await fetch('/api/news/orchestrator/start', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ chatId, today, timezone: tz, mode: 'document' }),
+        });
+        const startData = (await startRes.json()) as StartResponse;
+        if (startData.stage === 'error') {
+          setError(startData.errorMessage);
+          return;
+        }
+        notifyChatUpdated();
+
+        const form = new FormData();
+        form.append('chatId', chatId);
+        form.append('file', file);
+        const res = await fetch('/api/news/orchestrator/extract', {
+          method: 'POST',
+          body: form,
+        });
+        const data = (await res.json()) as ExtractResponse;
+        if (data.stage === 'error') {
+          setError(data.errorMessage);
+        }
+        await refresh();
+      } catch (err) {
+        setError(String(err).slice(0, 300));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [chatId, today, refresh],
+  );
+
+  // Stage 2 — ask the arc agent to suggest a narrative order.
+  const suggestArc = useCallback(async () => {
+    setBusy('arrange');
+    setError(null);
+    try {
+      const res = await fetch('/api/news/orchestrator/arrange', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ chatId, action: 'suggest' }),
+      });
+      const data = (await res.json()) as ArrangeResponse;
+      if ('error' in data) {
+        setError(data.error);
+        return;
+      }
+      if (data.stage === 'error') {
+        setError(data.errorMessage);
+        return;
+      }
+      await refresh();
+    } catch (err) {
+      setError(String(err).slice(0, 300));
+    } finally {
+      setBusy(null);
+    }
+  }, [chatId, refresh]);
+
+  // Stage 2 — apply the editor's final arc; materializes topics + → checkpoint.
+  const applyArc = useCallback(
+    async (arc: NarrativeArc) => {
+      setBusy('arrange');
+      setError(null);
+      try {
+        const res = await fetch('/api/news/orchestrator/arrange', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ chatId, action: 'apply', arc }),
+        });
+        const data = (await res.json()) as ArrangeResponse;
+        if ('error' in data) {
+          setError(data.error);
+          return;
+        }
+        if (data.stage === 'error') {
+          setError(data.errorMessage);
+          return;
+        }
+        await refresh();
+        setRejectedTopics(new Set());
+      } catch (err) {
+        setError(String(err).slice(0, 300));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [chatId, refresh],
+  );
+
+  // Stage 3 — deepen one topic's analysis from its attached sources.
+  const deepen = useCallback(
+    async (topicIndex: number, guidance: string) => {
+      setBusy('deepen');
+      setError(null);
+      try {
+        const res = await fetch('/api/news/orchestrator/deepen', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ chatId, topicIndex, guidance }),
+        });
+        const data = await res.json();
+        if ('error' in data) {
+          setError(data.detail || data.error);
+          return;
+        }
+        await refresh();
+      } catch (err) {
+        setError(String(err).slice(0, 300));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [chatId, refresh],
   );
 
   // Triage → checkpoint: run the AI grouping pass over the surviving articles.
@@ -552,6 +706,8 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
 
   // Decide which view to show.
   const showStart = run === null || run.stage === 'error';
+  const showExtracted = !showStart && run !== null && run.stage === 'extracted';
+  const showArrange = !showStart && run !== null && run.stage === 'arranged';
   const showTriage = !showStart && run !== null && run.stage === 'triage';
   const showCheckpoint =
     !showStart &&
@@ -593,7 +749,8 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
               today={today}
               onTodayChange={setToday}
               onStart={start}
-              busy={busy === 'start'}
+              onStartDocument={startDocument}
+              busy={busy === 'start' || busy === 'extract'}
               previousError={run?.stage === 'error' ? run.errorMessage : null}
             />
           ) : null}
@@ -602,6 +759,37 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
             <ProgressCard
               label="Setting up your run…"
               detail="Pulling today's stories is quick. Seeding from your own URLs or topics also reads each source, which takes a little longer."
+            />
+          ) : null}
+
+          {busy === 'extract' || run?.stage === 'extracting' ? (
+            <ProgressCard
+              label="Reading your dossier…"
+              detail="Parsing the document and pulling out each story — sources, dry facts, and the Ark analysis of why it matters. Typically 30–90 seconds."
+            />
+          ) : null}
+
+          {showExtracted && run ? (
+            <ExtractedView
+              stories={run.extractedStories ?? []}
+              onArrange={suggestArc}
+              busy={busy}
+            />
+          ) : null}
+
+          {busy === 'arrange' || run?.stage === 'arranging' ? (
+            <ProgressCard
+              label="Suggesting a narrative arc…"
+              detail="Ordering the stories into a coherent broadcast per the Ark news bible — picking the lead, sequencing, and writing transitions."
+            />
+          ) : null}
+
+          {showArrange && run?.arc ? (
+            <ArrangeView
+              stories={run.extractedStories ?? []}
+              arc={run.arc}
+              onApply={applyArc}
+              busy={busy}
             />
           ) : null}
 
@@ -639,6 +827,7 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
                 })
               }
               onRefetch={refetch}
+              onDeepen={deepen}
               onGenerate={generate}
               onTopicAction={topicAction}
               onCancelTopicAction={cancelTopicAction}
@@ -704,6 +893,7 @@ function StartCard({
   today,
   onTodayChange,
   onStart,
+  onStartDocument,
   busy,
   previousError,
 }: {
@@ -715,6 +905,7 @@ function StartCard({
       | { mode: 'urls'; urls: string[] }
       | { mode: 'topics'; topics: { topic: string; description: string }[]; autoGather: boolean },
   ) => void;
+  onStartDocument: (file: File) => void;
   busy: boolean;
   previousError: string | null;
 }) {
@@ -724,8 +915,13 @@ function StartCard({
     { topic: '', description: '' },
   ]);
   const [autoGather, setAutoGather] = useState(true);
+  const [docFile, setDocFile] = useState<File | null>(null);
 
   const submit = () => {
+    if (mode === 'document') {
+      if (docFile) onStartDocument(docFile);
+      return;
+    }
     if (mode === 'discover') return onStart({ mode: 'discover' });
     if (mode === 'urls') {
       const urls = urlsText
@@ -745,6 +941,7 @@ function StartCard({
 
   const canSubmit = (() => {
     if (mode === 'discover') return true;
+    if (mode === 'document') return docFile !== null;
     if (mode === 'urls') return urlsText.trim().length > 0;
     return topics.some((t) => t.topic.trim() && t.description.trim());
   })();
@@ -773,6 +970,7 @@ function StartCard({
       <div className="mb-5 flex flex-wrap gap-1 rounded-lg border border-overlay/10 ark-recessed p-1">
         {(
           [
+            ['document', 'Upload dossier'],
             ['discover', 'Discover stories'],
             ['urls', 'I have URLs'],
             ['topics', 'I have topics'],
@@ -792,6 +990,46 @@ function StartCard({
           </button>
         ))}
       </div>
+
+      {mode === 'document' ? (
+        <div className="mb-4 flex flex-col gap-2">
+          <label className="text-sm text-fg/70">Upload your research dossier</label>
+          <label
+            className={cn(
+              'flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed px-4 py-8 text-center transition',
+              docFile
+                ? 'border-sky-brand/40 bg-sky-brand/[0.04]'
+                : 'border-overlay/20 bg-overlay/[0.01] hover:border-overlay/35',
+            )}
+          >
+            <input
+              type="file"
+              accept=".docx,.md,.markdown,.txt"
+              className="hidden"
+              onChange={(e) => setDocFile(e.target.files?.[0] ?? null)}
+            />
+            {docFile ? (
+              <>
+                <FileText className="h-6 w-6 text-sky-brand" />
+                <span className="text-sm font-medium text-fg">{docFile.name}</span>
+                <span className="text-xs text-fg/45">Click to choose a different file</span>
+              </>
+            ) : (
+              <>
+                <Upload className="h-6 w-6 text-fg/40" />
+                <span className="text-sm text-fg/70">Choose a .docx, .md, or .txt file</span>
+                <span className="text-xs text-fg/40">
+                  Export a Google Doc as Microsoft Word (.docx) to keep its source links.
+                </span>
+              </>
+            )}
+          </label>
+          <p className="text-xs text-fg/40">
+            We&rsquo;ll extract every story — sources, dry facts, and the Ark analysis of why it
+            matters — for you to review, arrange, and deepen before writing the script.
+          </p>
+        </div>
+      ) : null}
 
       {mode === 'discover' ? (
         <p className="mb-4 text-sm text-fg/55">
@@ -889,13 +1127,15 @@ function StartCard({
         {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
         {busy
           ? 'Starting…'
-          : mode === 'discover'
-            ? 'Pull today’s stories'
-            : mode === 'urls'
-              ? 'Extract & group'
-              : autoGather
-                ? 'Find sources for these topics'
-                : 'Open editor with these topics'}
+          : mode === 'document'
+            ? 'Extract stories'
+            : mode === 'discover'
+              ? 'Pull today’s stories'
+              : mode === 'urls'
+                ? 'Extract & group'
+                : autoGather
+                  ? 'Find sources for these topics'
+                  : 'Open editor with these topics'}
       </button>
     </div>
   );
@@ -909,6 +1149,326 @@ function ProgressCard({ label, detail }: { label: string; detail: string }) {
         <span className="font-medium">{label}</span>
       </div>
       <p className="mt-2 text-sm text-fg/50">{detail}</p>
+    </div>
+  );
+}
+
+// ---------- Extracted (Stage 1 review) ----------
+
+function ExtractedView({
+  stories,
+  onArrange,
+  busy,
+}: {
+  stories: ExtractedStory[];
+  onArrange: () => void;
+  busy: BusyState;
+}) {
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="rounded-lg border border-overlay/10 bg-overlay/[0.02] px-4 py-3 text-sm text-fg/70">
+        <span className="font-semibold text-fg">
+          {stories.length} stor{stories.length === 1 ? 'y' : 'ies'} extracted.
+        </span>{' '}
+        Each story below has its sources, the dry facts, and the Ark analysis of why it matters.
+        Review them, then move on to arrange the episode.
+      </div>
+
+      {stories.map((story, i) => (
+        <ExtractedStoryCard key={story.id} story={story} index={i} />
+      ))}
+
+      <div className="sticky bottom-0 -mx-6 mt-2 border-t border-overlay/10 bg-canvas/90 px-6 py-4 backdrop-blur">
+        <button
+          onClick={onArrange}
+          disabled={busy !== null || stories.length === 0}
+          className={cn(
+            'w-full rounded-lg bg-sky-brand px-4 py-3 text-sm font-semibold text-ink-950',
+            'transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50',
+          )}
+        >
+          {busy === 'arrange' ? (
+            <span className="inline-flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" /> Suggesting an arc…
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-2">
+              <Sparkles className="h-4 w-4" /> Looks good — arrange the episode
+            </span>
+          )}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ExtractedStoryCard({ story, index }: { story: ExtractedStory; index: number }) {
+  return (
+    <div className="rounded-2xl border border-overlay/10 bg-overlay/[0.03] p-5">
+      <div className="flex items-center gap-2">
+        <KindBadge tone="sky">Story {index + 1}</KindBadge>
+        {story.blockHint ? (
+          <span className="rounded bg-overlay/10 px-1.5 py-0.5 text-[0.65rem] uppercase tracking-wider text-fg/55">
+            {story.blockHint} block
+          </span>
+        ) : null}
+        <h3 className="text-base font-bold text-fg">{story.headline}</h3>
+      </div>
+
+      {story.lead ? <p className="mt-2 text-sm text-fg/75">{story.lead}</p> : null}
+
+      {story.dryFacts.length > 0 ? (
+        <div className="mt-3">
+          <div className="text-[0.7rem] uppercase tracking-wider text-fg/45">Dry facts</div>
+          <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-fg/70">
+            {story.dryFacts.map((f, i) => (
+              <li key={i}>{f}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      <div className="mt-3">
+        <div className="text-[0.7rem] uppercase tracking-wider text-fg/45">
+          Why it matters (Ark analysis)
+        </div>
+        <p className="mt-1 text-sm text-fg/70">{story.relevance}</p>
+      </div>
+
+      {story.whatsNext ? (
+        <div className="mt-3">
+          <div className="text-[0.7rem] uppercase tracking-wider text-fg/45">What&rsquo;s next</div>
+          <p className="mt-1 text-sm text-fg/70">{story.whatsNext}</p>
+        </div>
+      ) : null}
+
+      {story.sources.length > 0 ? (
+        <div className="mt-4 flex flex-col gap-2 border-t border-overlay/10 pt-3">
+          <div className="text-[0.7rem] uppercase tracking-wider text-fg/45">
+            {story.sources.length} source{story.sources.length === 1 ? '' : 's'}
+          </div>
+          {story.sources.map((src, i) => (
+            <div key={i} className="rounded-md border border-overlay/[0.06] bg-overlay/[0.02] px-3 py-2">
+              <a
+                href={src.url || undefined}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-sm text-cyan-400 underline hover:text-cyan-300"
+              >
+                {src.label || src.url || 'source'}
+                {src.url ? <ExternalLink className="h-3 w-3" /> : null}
+              </a>
+              {src.sotClips && src.sotClips.length > 0 ? (
+                <div className="mt-1.5 flex flex-col gap-1">
+                  {src.sotClips.map((c, j) => (
+                    <p key={j} className="text-xs text-fg/55">
+                      <span className="font-semibold text-fg/70">{c.speaker}:</span> &ldquo;{c.text}
+                      &rdquo;
+                    </p>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-4 rounded-md border border-dashed border-amber-400/20 bg-amber-500/[0.04] px-3 py-2 text-xs text-amber-200/80">
+          No sources parsed for this story — the script will flag the missing citation.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------- Arrange (Stage 2) ----------
+
+function ArrangeView({
+  stories,
+  arc,
+  onApply,
+  busy,
+}: {
+  stories: ExtractedStory[];
+  arc: NarrativeArc;
+  onApply: (arc: NarrativeArc) => void;
+  busy: BusyState;
+}) {
+  const storyById = useMemo(() => new Map(stories.map((s) => [s.id, s])), [stories]);
+  // Working copy of the arc the editor can reorder + edit before applying.
+  // Seed order with the suggestion, then append any stories the arc omitted.
+  const [order, setOrder] = useState<string[]>(() => {
+    const seen = new Set<string>();
+    const seq: string[] = [];
+    for (const id of arc.order) {
+      if (storyById.has(id) && !seen.has(id)) {
+        seq.push(id);
+        seen.add(id);
+      }
+    }
+    for (const s of stories) if (!seen.has(s.id)) seq.push(s.id);
+    return seq;
+  });
+  const [roles, setRoles] = useState<Record<string, 'A' | 'B' | 'C' | 'D'>>(arc.roles);
+  const [transitions, setTransitions] = useState<Record<string, string>>(arc.transitions);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+  const locked = busy !== null;
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = order.indexOf(String(active.id));
+    const newIndex = order.indexOf(String(over.id));
+    if (oldIndex === -1 || newIndex === -1) return;
+    setOrder((prev) => arrayMove(prev, oldIndex, newIndex));
+  };
+
+  const apply = () => {
+    onApply({
+      order,
+      leadId: order[0] ?? '',
+      roles,
+      transitions,
+      rationale: arc.rationale,
+    });
+  };
+
+  return (
+    <div className="flex flex-col gap-4">
+      {arc.rationale ? (
+        <div className="rounded-lg border border-overlay/10 bg-overlay/[0.02] px-4 py-3 text-sm text-fg/70">
+          <span className="font-semibold text-fg">Suggested arc: </span>
+          {arc.rationale}
+        </div>
+      ) : null}
+
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={order} strategy={verticalListSortingStrategy}>
+          <div className="flex flex-col gap-2">
+            {order.map((id, i) => {
+              const story = storyById.get(id);
+              if (!story) return null;
+              return (
+                <ArrangeRow
+                  key={id}
+                  story={story}
+                  position={i}
+                  isLast={i === order.length - 1}
+                  role={roles[id] ?? 'D'}
+                  transition={transitions[id] ?? ''}
+                  onRoleChange={(r) => setRoles((prev) => ({ ...prev, [id]: r }))}
+                  onTransitionChange={(t) => setTransitions((prev) => ({ ...prev, [id]: t }))}
+                  locked={locked}
+                />
+              );
+            })}
+          </div>
+        </SortableContext>
+      </DndContext>
+
+      <div className="sticky bottom-0 -mx-6 mt-2 border-t border-overlay/10 bg-canvas/90 px-6 py-4 backdrop-blur">
+        <button
+          onClick={apply}
+          disabled={busy !== null || order.length === 0}
+          className={cn(
+            'w-full rounded-lg bg-sky-brand px-4 py-3 text-sm font-semibold text-ink-950',
+            'transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50',
+          )}
+        >
+          {busy === 'arrange' ? (
+            <span className="inline-flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" /> Applying…
+            </span>
+          ) : (
+            `Approve arc & continue (${order.length} stor${order.length === 1 ? 'y' : 'ies'})`
+          )}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ArrangeRow({
+  story,
+  position,
+  isLast,
+  role,
+  transition,
+  onRoleChange,
+  onTransitionChange,
+  locked,
+}: {
+  story: ExtractedStory;
+  position: number;
+  isLast: boolean;
+  role: 'A' | 'B' | 'C' | 'D';
+  transition: string;
+  onRoleChange: (r: 'A' | 'B' | 'C' | 'D') => void;
+  onTransitionChange: (t: string) => void;
+  locked: boolean;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition: dndTransition, isDragging } =
+    useSortable({ id: story.id, disabled: locked });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition: dndTransition,
+  };
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={cn(
+        'rounded-2xl border border-overlay/10 bg-overlay/[0.03] p-4',
+        isDragging && 'opacity-60',
+      )}
+    >
+      <div className="flex items-start gap-3">
+        <button
+          {...attributes}
+          {...listeners}
+          disabled={locked}
+          className="mt-0.5 cursor-grab touch-none text-fg/30 hover:text-fg/60 disabled:cursor-not-allowed active:cursor-grabbing"
+          title="Drag to reorder"
+        >
+          <GripVertical className="h-5 w-5" />
+        </button>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-xs text-fg/40">{position + 1}</span>
+            <select
+              value={role}
+              onChange={(e) => onRoleChange(e.target.value as 'A' | 'B' | 'C' | 'D')}
+              disabled={locked}
+              className="rounded-md border border-overlay/15 ark-recessed px-1.5 py-0.5 text-xs text-fg disabled:opacity-60"
+              title="Block role"
+            >
+              {(['A', 'B', 'C', 'D'] as const).map((r) => (
+                <option key={r} value={r}>
+                  {r} block
+                </option>
+              ))}
+            </select>
+            <h3 className="truncate text-sm font-bold text-fg">{story.headline}</h3>
+          </div>
+          {!isLast ? (
+            <div className="mt-2">
+              <label className="text-[0.7rem] uppercase tracking-wider text-fg/45">
+                Transition into next story
+              </label>
+              <input
+                value={transition}
+                onChange={(e) => onTransitionChange(e.target.value)}
+                disabled={locked}
+                placeholder="A one-line bridge into the next story"
+                className="mt-1 w-full rounded-md border border-overlay/15 ark-recessed px-2 py-1 text-sm text-fg placeholder:text-fg/30 disabled:opacity-60"
+              />
+            </div>
+          ) : null}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1411,6 +1971,7 @@ function CheckpointView({
   rejectedTopics,
   onToggleReject,
   onRefetch,
+  onDeepen,
   onGenerate,
   onTopicAction,
   onCancelTopicAction,
@@ -1424,6 +1985,7 @@ function CheckpointView({
   rejectedTopics: Set<number>;
   onToggleReject: (index: number) => void;
   onRefetch: (index: number, guidance: string) => void;
+  onDeepen: (index: number, guidance: string) => void;
   onGenerate: () => void;
   onTopicAction: (p: TopicAction) => Promise<boolean>;
   onCancelTopicAction: () => void;
@@ -1496,6 +2058,7 @@ function CheckpointView({
           rejected={rejectedTopics.has(i)}
           onToggleReject={() => onToggleReject(i)}
           onRefetch={(guidance) => onRefetch(i, guidance)}
+          onDeepen={(guidance) => onDeepen(i, guidance)}
           onTopicAction={onTopicAction}
           onCancelTopicAction={onCancelTopicAction}
           onAttach={(urls) => onAttach(i, urls)}
@@ -1625,6 +2188,7 @@ function TopicCard({
   rejected,
   onToggleReject,
   onRefetch,
+  onDeepen,
   onTopicAction,
   onCancelTopicAction,
   onAttach,
@@ -1635,6 +2199,7 @@ function TopicCard({
   rejected: boolean;
   onToggleReject: () => void;
   onRefetch: (guidance: string) => void;
+  onDeepen: (guidance: string) => void;
   onTopicAction: (p: TopicAction) => Promise<boolean>;
   onCancelTopicAction: () => void;
   onAttach: (urls: string[]) => void;
@@ -1642,6 +2207,8 @@ function TopicCard({
 }) {
   const [showRefetch, setShowRefetch] = useState(false);
   const [showAttach, setShowAttach] = useState(false);
+  const [showDeepen, setShowDeepen] = useState(false);
+  const [deepenGuidance, setDeepenGuidance] = useState('');
   // Local to this card so only the topic the writer clicked shows the
   // gather spinner — `busy` is global and disables every card's actions.
   const [gathering, setGathering] = useState(false);
@@ -1794,7 +2361,7 @@ function TopicCard({
       {!rejected ? (
         <div className="mt-4 flex flex-col gap-2 border-t border-overlay/10 pt-3">
           <div className="flex flex-wrap gap-2">
-            {!showRefetch && !showAttach ? (
+            {!showRefetch && !showAttach && !showDeepen ? (
               <>
                 <button
                   onClick={() => setShowRefetch(true)}
@@ -1809,6 +2376,17 @@ function TopicCard({
                 >
                   <LinkIcon className="h-3 w-3" /> Attach URL
                 </button>
+                {!noSources ? (
+                  <>
+                    <span className="text-xs text-fg/20">·</span>
+                    <button
+                      onClick={() => setShowDeepen(true)}
+                      className="inline-flex items-center gap-1.5 text-xs text-fg/55 transition hover:text-fg"
+                    >
+                      <Wand2 className="h-3 w-3" /> Deepen analysis
+                    </button>
+                  </>
+                ) : null}
                 {noSources ? (
                   <>
                     <span className="text-xs text-fg/20">·</span>
@@ -1924,6 +2502,49 @@ function TopicCard({
                   Cancel
                 </button>
               </div>
+            </div>
+          ) : null}
+
+          {showDeepen ? (
+            <div className="flex flex-col gap-2">
+              <textarea
+                value={deepenGuidance}
+                onChange={(e) => setDeepenGuidance(e.target.value)}
+                placeholder="Optional: what angle should the analysis push on? (leave blank for a general deepen)"
+                rows={2}
+                className="w-full rounded-md border border-overlay/15 ark-recessed px-3 py-2 text-sm text-fg placeholder:text-fg/30"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    onDeepen(deepenGuidance.trim());
+                    setShowDeepen(false);
+                    setDeepenGuidance('');
+                  }}
+                  disabled={busy !== null}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-sky-brand/20 px-3 py-1.5 text-xs text-sky-brand transition hover:bg-sky-brand/30 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {busy === 'deepen' ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Wand2 className="h-3 w-3" />
+                  )}
+                  Deepen
+                </button>
+                <button
+                  onClick={() => {
+                    setShowDeepen(false);
+                    setDeepenGuidance('');
+                  }}
+                  className="rounded-md px-3 py-1.5 text-xs text-fg/60 hover:bg-overlay/5 hover:text-fg"
+                >
+                  Cancel
+                </button>
+              </div>
+              <p className="text-xs text-fg/45">
+                Expands this topic&rsquo;s analysis using its attached sources and pulls additional
+                quotes. Typically 20–60 seconds.
+              </p>
             </div>
           ) : null}
         </div>
