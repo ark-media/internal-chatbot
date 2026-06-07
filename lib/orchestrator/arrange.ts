@@ -31,6 +31,23 @@ const arcSchema = z.object({
     .describe('2–4 sentences on why this order tells the most coherent story per Ark\'s structure.'),
 });
 
+// A no-model fallback arc: keep stories in their extracted order, lead first.
+// Used when the arc agent fails so the stories are never stranded — the editor
+// reshapes it by hand in the review-and-arrange UI. The lead always gets the A
+// role (so leadId and roles agree); the rest keep their dossier blockHint or
+// default to D.
+export function extractedOrderArc(stories: ExtractedStory[]): NarrativeArc {
+  return {
+    order: stories.map((s) => s.id),
+    leadId: stories[0]?.id ?? '',
+    roles: Object.fromEntries(
+      stories.map((s, i) => [s.id, i === 0 ? 'A' : (s.blockHint ?? 'D')]),
+    ),
+    transitions: {},
+    rationale: '',
+  };
+}
+
 // Suggest a narrative arc for the extracted stories, grounded in the Ark news
 // bible. Reorders freely toward the most coherent broadcast, using any existing
 // A/B/C BLOCK labels (blockHint) as a starting hint. The editor always has the

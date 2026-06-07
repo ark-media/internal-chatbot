@@ -113,10 +113,6 @@ function stageLabel(stage: OrchestratorRun['stage'] | undefined): string {
       return 'Pulling stories';
     case 'extracting':
       return 'Reading dossier';
-    case 'extracted':
-      return 'Review stories';
-    case 'arranging':
-      return 'Arranging';
     case 'arranged':
       return 'Review & arrange';
     case 'triage':
@@ -241,13 +237,11 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
     setRun(fresh.run);
   }, [chatId]);
 
+  // The start picker now only initiates 'discover'; the /start route still
+  // accepts 'urls'/'topics', but those are no longer reachable from this screen
+  // (topics are added later, at the checkpoint, via a different endpoint).
   const start = useCallback(
-    async (
-      payload:
-        | { mode: 'discover' }
-        | { mode: 'urls'; urls: string[] }
-        | { mode: 'topics'; topics: { topic: string; description: string }[]; autoGather: boolean },
-    ) => {
+    async (payload: { mode: 'discover' }) => {
       setBusy('start');
       setError(null);
       try {
@@ -1068,6 +1062,8 @@ function StoryDetailBody({ story }: { story: ExtractedStory }) {
 
 // ---------- Review & arrange ----------
 
+const ROLE_LETTERS = ['A', 'B', 'C', 'D'] as const;
+
 function ArrangeView({
   stories,
   arc,
@@ -1094,8 +1090,12 @@ function ArrangeView({
     for (const s of stories) if (!seen.has(s.id)) seq.push(s.id);
     return seq;
   });
-  const [roles, setRoles] = useState<Record<string, 'A' | 'B' | 'C' | 'D'>>(arc.roles);
   const [transitions, setTransitions] = useState<Record<string, string>>(arc.transitions);
+
+  // Block role is strictly positional: 1st story is the A block, 2nd the B
+  // block, and so on. Dragging to reorder therefore relabels automatically,
+  // and the block dropdown is just a shortcut to move a story to that slot.
+  const roleForIndex = (i: number): 'A' | 'B' | 'C' | 'D' => ROLE_LETTERS[Math.min(i, 3)];
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -1116,7 +1116,7 @@ function ArrangeView({
     onApply({
       order,
       leadId: order[0] ?? '',
-      roles,
+      roles: Object.fromEntries(order.map((id, i) => [id, roleForIndex(i)])),
       transitions,
       rationale: arc.rationale,
     });
@@ -1150,9 +1150,18 @@ function ArrangeView({
                   story={story}
                   position={i}
                   isLast={i === order.length - 1}
-                  role={roles[id] ?? 'D'}
+                  role={roleForIndex(i)}
+                  roleOptions={ROLE_LETTERS.slice(0, Math.min(order.length, 4))}
                   transition={transitions[id] ?? ''}
-                  onRoleChange={(r) => setRoles((prev) => ({ ...prev, [id]: r }))}
+                  onRoleChange={(r) => {
+                    const target = ROLE_LETTERS.indexOf(r);
+                    setOrder((prev) => {
+                      const from = prev.indexOf(id);
+                      const to = Math.min(target, prev.length - 1);
+                      if (from === -1 || from === to) return prev;
+                      return arrayMove(prev, from, to);
+                    });
+                  }}
                   onTransitionChange={(t) => setTransitions((prev) => ({ ...prev, [id]: t }))}
                   locked={locked}
                 />
@@ -1189,6 +1198,7 @@ function ArrangeRow({
   position,
   isLast,
   role,
+  roleOptions,
   transition,
   onRoleChange,
   onTransitionChange,
@@ -1198,6 +1208,7 @@ function ArrangeRow({
   position: number;
   isLast: boolean;
   role: 'A' | 'B' | 'C' | 'D';
+  roleOptions: ('A' | 'B' | 'C' | 'D')[];
   transition: string;
   onRoleChange: (r: 'A' | 'B' | 'C' | 'D') => void;
   onTransitionChange: (t: string) => void;
@@ -1239,7 +1250,7 @@ function ArrangeRow({
               className="rounded-md border border-overlay/15 ark-recessed px-1.5 py-0.5 text-xs text-fg disabled:opacity-60"
               title="Block role"
             >
-              {(['A', 'B', 'C', 'D'] as const).map((r) => (
+              {roleOptions.map((r) => (
                 <option key={r} value={r}>
                   {r} block
                 </option>

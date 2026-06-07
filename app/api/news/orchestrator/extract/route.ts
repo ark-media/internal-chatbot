@@ -1,5 +1,5 @@
 import { getNewsExamples } from '@/lib/news-prompt';
-import { suggestArc } from '@/lib/orchestrator/arrange';
+import { extractedOrderArc, suggestArc } from '@/lib/orchestrator/arrange';
 import { parseDocumentToMarkdown, UnsupportedDocError } from '@/lib/orchestrator/doc-parse';
 import { extractStories } from '@/lib/orchestrator/extract';
 import {
@@ -70,9 +70,10 @@ export async function POST(req: Request) {
 
   const run = await loadRun(chatId);
   if (!run) return Response.json({ error: 'run_not_found' }, { status: 404 });
-  // Allow first extract ('extracting') and re-extract from the review
-  // checkpoint ('extracted'). Reject once the editor has moved on.
-  if (run.stage !== 'extracting' && run.stage !== 'extracted') {
+  // Only the freshly-created run shell ('extracting') may be extracted. Extract
+  // folds in arc suggestion and lands on 'arranged', so there's no bare-
+  // extraction checkpoint to re-upload from; reject once a run has moved on.
+  if (run.stage !== 'extracting') {
     return Response.json({ error: 'wrong_stage', stage: run.stage }, { status: 409 });
   }
 
@@ -141,15 +142,7 @@ export async function POST(req: Request) {
       console.warn(
         JSON.stringify({ event: 'orchestrator.extract.arc_fallback', chatId, err: String(err) }),
       );
-      arc = {
-        order: stories.map((s) => s.id),
-        leadId: stories[0].id,
-        roles: Object.fromEntries(
-          stories.map((s, i) => [s.id, s.blockHint ?? (i === 0 ? 'A' : 'D')]),
-        ),
-        transitions: {},
-        rationale: '',
-      };
+      arc = extractedOrderArc(stories);
     }
 
     const next: OrchestratorRun = {

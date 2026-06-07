@@ -87,11 +87,11 @@ export type OrchestratorStage =
   | 'error'
   // Document-driven flow (mode: 'document'). These precede 'checkpoint',
   // which the doc flow reuses as its "deepen" stage:
-  //   extracting → extracted(✓) → arranging → arranged(✓) → checkpoint → …
-  | 'extracting' // agent is parsing the uploaded dossier
-  | 'extracted' // checkpoint: editor reviews the extracted stories
-  | 'arranging' // arc agent is running
-  | 'arranged'; // checkpoint: editor approves the narrative arc
+  //   extracting → arranged(✓) → checkpoint → …
+  // Extraction folds in arc suggestion and lands directly on 'arranged'; there
+  // is no separate bare-extraction checkpoint.
+  | 'extracting' // agent is parsing the dossier, extracting stories, suggesting an arc
+  | 'arranged'; // checkpoint: editor reviews the stories and approves the narrative arc
 
 // A single source/link pulled from the dossier for one story. The dossier is
 // trusted as source-of-truth at extract time (no live re-fetch), so `facts`
@@ -103,10 +103,9 @@ export type ExtractedSource = {
   sotClips?: { speaker: string; text: string }[]; // verbatim SOT quotes
 };
 
-// One story extracted from the editor's dossier at Stage 1. Edited at the
-// 'extracted' checkpoint, arranged at 'arranged', then mapped onto
-// TopicWithSources (see extractedStoryToTopic) so the existing script writer
-// consumes it unchanged.
+// One story extracted from the editor's dossier. Reviewed and arranged at the
+// 'arranged' checkpoint, then mapped onto TopicWithSources (see
+// extractedStoryToTopic) so the existing script writer consumes it unchanged.
 export type ExtractedStory = {
   id: string; // server-assigned uuid; referenced by NarrativeArc + dnd reorder
   headline: string;
@@ -181,9 +180,9 @@ export type OrchestratorRun = {
   // with web-discovery runs that never populate them.
   // Raw parsed dossier markdown — kept for audit and re-extract.
   sourceDocument?: string;
-  // Stage-1 output; the editable structure at the 'extracted' checkpoint.
+  // Extracted stories; the editable structure at the 'arranged' checkpoint.
   extractedStories?: ExtractedStory[];
-  // Stage-2 suggestion plus the editor's overrides.
+  // Suggested narrative arc plus the editor's overrides.
   arc?: NarrativeArc | null;
   updatedAt: string;
 };

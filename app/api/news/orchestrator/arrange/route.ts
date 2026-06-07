@@ -76,8 +76,8 @@ export async function POST(req: Request) {
   const expectedUpdatedAt = run.updatedAt;
 
   if (body.action === 'suggest') {
-    // Allow suggesting from the review checkpoint or re-suggesting at 'arranged'.
-    if (run.stage !== 'extracted' && run.stage !== 'arranged') {
+    // Re-suggest an arc from the review-and-arrange checkpoint.
+    if (run.stage !== 'arranged') {
       return Response.json({ error: 'wrong_stage', stage: run.stage }, { status: 409 });
     }
     const started = Date.now();
@@ -125,7 +125,7 @@ export async function POST(req: Request) {
 
   // action === 'apply' — materialize distill.topics in arc order and advance
   // to the existing 'checkpoint' stage (which the doc flow reuses as Deepen).
-  if (run.stage !== 'extracted' && run.stage !== 'arranged') {
+  if (run.stage !== 'arranged') {
     return Response.json({ error: 'wrong_stage', stage: run.stage }, { status: 409 });
   }
 
