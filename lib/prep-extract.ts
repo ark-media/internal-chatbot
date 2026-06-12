@@ -18,6 +18,16 @@ export type PrepExtraction = {
   guests: string[];
   topic: string | null;
   urls: string[];
+  // A short query for finding RECENT web coverage of the guest, used by shows
+  // whose guests are usually new to our archive (What's Your Number?). Null
+  // when no guest is named. Surfaced for every show but only consumed where
+  // the route opts into pre-loading web context.
+  webQuery: string | null;
+  // A short query for finding EVERGREEN profile material about the guest
+  // (biography, career, opinions, persona) — no economic angle, no recency
+  // window. Feeds the guest-specific Rapid Fire round. Null when no guest is
+  // named. Consumed only by shows that opt into a rapid-fire context pre-load.
+  profileQuery: string | null;
 };
 
 const URL_RE = /https?:\/\/[^\s<>"'`]+/g;
@@ -53,6 +63,18 @@ const extractSchema = z.object({
     .describe(
       'ONE or TWO keywords describing the episode\'s subject, used as a Postgres FTS filter (AND semantics — every keyword in the topic must appear in a turn for that turn to match). Prefer one keyword unless two are clearly needed to disambiguate. Strip stopwords. Examples: "Iran" (preferred over "Iran nuclear agreement strategy"), "DOGE" (preferred over "DOGE federal agencies layoffs"), "Ukraine ceasefire" (two only if "Ukraine" alone would over-match). Null if no clear topic.',
     ),
+  webQuery: z
+    .string()
+    .nullable()
+    .describe(
+      'A short web-search query (NOT an FTS filter — plain words, no AND semantics) for finding RECENT news and columns about the guest, used for shows whose guests are new to our archive. Combine the guest name with their organization/role and the episode\'s economic angle when known, e.g. "Karnit Flug Bank of Israel deficit", "Tenzai defense tech exports". Use the full guest name. Null if no guest is named.',
+    ),
+  profileQuery: z
+    .string()
+    .nullable()
+    .describe(
+      'A short web-search query for finding EVERGREEN profile material about the guest — biography, career, notable opinions, public persona — used to build a guest-specific rapid-fire round. Unlike webQuery, do NOT add the episode\'s economic angle and do NOT chase recent news; anchor on the person\'s identity instead, e.g. "Karnit Flug economist biography", "Eugene Kandel Israeli economy profile". Use the full guest name. Null if no guest is named.',
+    ),
 });
 
 export async function extractPrepContext(
@@ -63,7 +85,7 @@ export async function extractPrepContext(
   const trimmed = userText.trim();
 
   if (trimmed.length === 0) {
-    return { guests: [], topic: null, urls };
+    return { guests: [], topic: null, urls, webQuery: null, profileQuery: null };
   }
 
   // Fast path: short prompts with no URL and no obvious guest-name token
@@ -76,7 +98,7 @@ export async function extractPrepContext(
     urls.length === 0 &&
     !NAME_SHAPE_RE.test(trimmed)
   ) {
-    return { guests: [], topic: null, urls };
+    return { guests: [], topic: null, urls, webQuery: null, profileQuery: null };
   }
 
   try {
@@ -91,7 +113,11 @@ The user is preparing an episode of an Ark Media podcast (Call me Back, For Heav
 
 Guests are the people the user explicitly names as being on the upcoming episode — typically signalled by phrases like "with X and Y", "guest is X", or "interviewing X". Do not include hosts (Dan Senor, Ilan Benatar, etc. — they're on every episode of their own shows) and do not include people mentioned only as authors of linked articles unless the user clearly says they're also a guest.
 
-Topic should be ONE or TWO keywords — never more. The keyword(s) feed a Postgres full-text filter with AND semantics: every keyword in your topic must appear in a transcript turn for that turn to match, so each extra keyword shrinks recall geometrically. A guest's prior position on a subject is rarely captured in a single sentence that contains four narrow words. Default to one broad keyword (the subject everyone in the episode will be talking about — usually a country, person, or named event). Add a second keyword only when the first alone would be too generic (e.g. "Israel" + "hostages" if "Israel" alone over-matches the corpus). Drop stopwords. Concrete nouns and proper nouns over abstract framings.`,
+Topic should be ONE or TWO keywords — never more. The keyword(s) feed a Postgres full-text filter with AND semantics: every keyword in your topic must appear in a transcript turn for that turn to match, so each extra keyword shrinks recall geometrically. A guest's prior position on a subject is rarely captured in a single sentence that contains four narrow words. Default to one broad keyword (the subject everyone in the episode will be talking about — usually a country, person, or named event). Add a second keyword only when the first alone would be too generic (e.g. "Israel" + "hostages" if "Israel" alone over-matches the corpus). Drop stopwords. Concrete nouns and proper nouns over abstract framings.
+
+webQuery is different from topic — it is a plain web-search query (no AND-filter constraint), used to pull recent press about a guest who likely isn't in our transcript archive. Build it from the full guest name plus any organization/role and the economic angle the user gives (e.g. "Karnit Flug Bank of Israel deficit"). Include the guest's name in full. Null when no guest is named.
+
+profileQuery is also a plain web-search query, but it targets EVERGREEN profile material (biography, career, opinions, persona) used to build a guest-specific rapid-fire round — so, unlike webQuery, leave OUT the economic angle and the recent-news framing and anchor on the person (e.g. "Karnit Flug economist biography"). Include the guest's name in full. Null when no guest is named.`,
         providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
       },
       prompt: userText,
@@ -101,11 +127,13 @@ Topic should be ONE or TWO keywords — never more. The keyword(s) feed a Postgr
       guests: object.guests.map((g) => g.trim()).filter((g) => g.length > 0),
       topic: object.topic?.trim() || null,
       urls,
+      webQuery: object.webQuery?.trim() || null,
+      profileQuery: object.profileQuery?.trim() || null,
     };
   } catch (err) {
     console.warn(
       JSON.stringify({ event: 'prep.extract_error', err: String(err) }),
     );
-    return { guests: [], topic: null, urls };
+    return { guests: [], topic: null, urls, webQuery: null, profileQuery: null };
   }
 }

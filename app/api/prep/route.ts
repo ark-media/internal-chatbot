@@ -16,10 +16,11 @@ import {
   getDossier,
   type DossierTurn,
 } from '@/lib/retrieval';
-import { webSearch } from '@/lib/web-search';
+import { webSearch, type WebSearchResult } from '@/lib/web-search';
 import { extractArticles, type ExtractedArticle } from '@/lib/url-fetch';
 import { extractPrepContext } from '@/lib/prep-extract';
 import { prepSystemPrompt } from '@/lib/prep-prompt';
+import { getPrepShow } from '@/lib/prep-shows';
 import { ensureTable, getCached, setCached, cacheKey } from '@/lib/tool-cache';
 import {
   MAX_FILES,
@@ -216,6 +217,12 @@ const webSearchTool = tool({
 // ~one DB round-trip + a few thousand tokens of context, so 4 is a comfortable
 // ceiling for typical prep prompts (which name 1–2 guests).
 const PREP_MAX_PRELOADED_GUESTS = 4;
+// For WYN, pre-load web context unless the corpus already gives us real
+// grounding. A guest with one or two incidental mentions is still effectively
+// new to the archive, and recent press is the higher-signal source — so we
+// treat the corpus as "thin" below this many total dossier turns, not only
+// when it is strictly empty.
+const PREP_WYN_THIN_CORPUS_TURNS = 3;
 // Bookend half-size per guest dossier. With topic filter applied, FTS
 // already narrows the row set; this cap keeps the worst case bounded.
 const PREP_DOSSIER_BOOKEND_HALF = 12;
@@ -274,6 +281,58 @@ function buildDossierEvidenceBlock(
 function buildLinkedArticleBlock(article: ExtractedArticle): string {
   const titleAttr = article.title ? ` title="${escapeAttr(article.title)}"` : '';
   return `<linked_article url="${escapeAttr(article.url)}"${titleAttr}>\n${article.content}\n</linked_article>`;
+}
+
+function renderWebResults(results: WebSearchResult[]): string {
+  return results
+    .map((r) => {
+      const pubAttr = r.publishedDate
+        ? ` published="${escapeAttr(r.publishedDate)}"`
+        : '';
+      const titleAttr = r.title ? ` title="${escapeAttr(r.title)}"` : '';
+      return `<web_result url="${escapeAttr(r.url)}"${titleAttr}${pubAttr}>\n${r.snippet}\n</web_result>`;
+    })
+    .join('\n\n');
+}
+
+function buildWebContextBlock(
+  query: string,
+  results: WebSearchResult[],
+): string {
+  return `<web_context query="${escapeAttr(query)}">\nRecent web coverage of the guest / their work, pre-loaded because this show's guests are usually new to our archive. Treat as leads, not verbatim quotes.\n\n${renderWebResults(results)}\n</web_context>`;
+}
+
+// Evergreen profile material (biography, career, opinions, public persona),
+// distinct from the recency-windowed economic <web_context>. Feeds the
+// guest-specific Rapid Fire round, which needs personal hooks the economic
+// search won't surface.
+function buildRapidFireContextBlock(
+  query: string,
+  results: WebSearchResult[],
+): string {
+  return `<rapid_fire_context query="${escapeAttr(query)}">\nProfile material about the guest (biography, career, notable opinions, public persona), pre-loaded to help build the guest-specific Rapid Fire round. Treat as leads, not verbatim quotes.\n\n${renderWebResults(results)}\n</rapid_fire_context>`;
+}
+
+// Pre-load a web search for a guest, cached. Used by shows (What's Your Number?)
+// whose guests are typically not in our transcript archive, so a fresh web pull
+// is the highest-signal context available before the model writes. `namespace`
+// keeps the recency-windowed economic pull and the evergreen profile pull in
+// separate cache entries.
+async function loadPreloadedWebContext(
+  namespace: string,
+  query: string,
+  opts: { maxResults: number; daysBack?: number },
+): Promise<WebSearchResult[]> {
+  const cKey = cacheKey(namespace, { q: query });
+  const cached = await getCached<WebSearchResult[]>(cKey, 6);
+  if (cached) return cached;
+  const res = await webSearch(query, opts);
+  // Don't cache failures: a transient web-search outage would otherwise pin an
+  // empty result for this guest for the full TTL, silently starving the WYN
+  // surface of its grounding. A genuine empty-but-ok result is cached.
+  if (!res.ok) return [];
+  await setCached(cKey, res.results);
+  return res.results;
 }
 
 type ResolvedGuest = {
@@ -501,6 +560,10 @@ export async function POST(req: Request) {
   const messages = validated.data;
   const model = req.headers.get('x-model') || 'anthropic/claude-sonnet-4-6';
   const temperature = resolveTemperature(req.headers.get('x-temperature'));
+  // Show selection drives both the system prompt and whether we pre-load web
+  // context. getPrepShow falls back to the default surface for anything
+  // unrecognized, so an absent or stale header is always safe.
+  const show = getPrepShow(req.headers.get('x-show'));
   const uploadError = validateUploads(messages);
   if (uploadError) {
     return new Response(uploadError, {
@@ -556,6 +619,8 @@ export async function POST(req: Request) {
     topic: string | null;
     urls: number;
     articlesOk: number;
+    webResults: number;
+    profileResults: number;
   } | null = null;
 
   if (isFirstUserTurn && userText.trim().length > 0) {
@@ -593,12 +658,56 @@ export async function POST(req: Request) {
         evidenceBlocks.push(buildLinkedArticleBlock(article));
       }
 
+      // For shows whose guests are usually new to our archive (What's Your
+      // Number?), pre-load two web pulls before the model writes:
+      //  - economic coverage (recency-windowed) grounds the intro + interview.
+      //    Skipped when the producer pasted articles (higher-signal, and the
+      //    prompt says not to double up) or the corpus already has real material.
+      //  - profile material (evergreen) grounds the guest-specific Rapid Fire
+      //    round. Loaded whenever a guest is named — neither the economic corpus
+      //    nor pasted economic articles reliably carry the biographical hooks
+      //    rapid fire needs.
+      let webResults = 0;
+      let profileResults = 0;
+      if (show.id === 'whats-your-number') {
+        const { webQuery, profileQuery } = extracted;
+        const corpusTurns = dossiers.reduce((n, d) => n + d.turns.length, 0);
+        const corpusThin = corpusTurns < PREP_WYN_THIN_CORPUS_TURNS;
+
+        const [web, profile] = await Promise.all([
+          webQuery && articles.length === 0 && corpusThin
+            ? loadPreloadedWebContext('prep-preload-web', webQuery, {
+                maxResults: 6,
+                daysBack: 120,
+              })
+            : Promise.resolve<WebSearchResult[]>([]),
+          profileQuery
+            ? loadPreloadedWebContext('prep-preload-profile', profileQuery, {
+                maxResults: 5,
+              })
+            : Promise.resolve<WebSearchResult[]>([]),
+        ]);
+
+        if (webQuery && web.length > 0) {
+          evidenceBlocks.push(buildWebContextBlock(webQuery, web));
+          webResults = web.length;
+        }
+        if (profileQuery && profile.length > 0) {
+          evidenceBlocks.push(
+            buildRapidFireContextBlock(profileQuery, profile),
+          );
+          profileResults = profile.length;
+        }
+      }
+
       preSummary = {
         guests: extracted.guests.length,
         resolved: resolvedGuests.length,
         topic: extracted.topic,
         urls: extracted.urls.length,
         articlesOk: articles.length,
+        webResults,
+        profileResults,
       };
     } catch (err) {
       console.warn(
@@ -616,7 +725,7 @@ export async function POST(req: Request) {
   // the base-prompt cache; evidenceBlocks is only built on the first user turn.
   const cachedBaseSystem = {
     role: 'system' as const,
-    content: prepSystemPrompt(today),
+    content: prepSystemPrompt(today, show.id),
     providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
   };
   const system =
@@ -650,6 +759,7 @@ export async function POST(req: Request) {
       console.log(
         JSON.stringify({
           event: 'prep.finish',
+          show: show.id,
           ms: Date.now() - started,
           finishReason,
           toolCalls: toolCalls.map((t) => t.toolName),
