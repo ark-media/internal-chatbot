@@ -33,6 +33,9 @@ type ChatComposerProps = {
   footerHint: ReactNode;
   attachments?: ReactNode;
   fileAttach?: FileAttachConfig;
+  // Extra controls rendered at the start of the toolbar, before the model
+  // selector. Used by prep to surface the show selector.
+  leadingControls?: ReactNode;
 };
 
 export function ChatComposer({
@@ -49,6 +52,7 @@ export function ChatComposer({
   footerHint,
   attachments,
   fileAttach,
+  leadingControls,
 }: ChatComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -99,11 +103,12 @@ export function ChatComposer({
     >
       <div className="mx-auto max-w-7xl">
         {attachments}
-        {/* items-end keeps the model selector + send button pinned to the
-            textarea baseline as it auto-grows, instead of drifting upward. */}
+        {/* Two rows: the textarea spans the full width on top; the selector
+            cluster sits on its own row below so a wide selector (e.g. the show
+            picker) never squeezes the input. */}
         <div
           className={cn(
-            'ark-surface-raised group flex items-end gap-2 rounded-2xl border px-3 py-2.5 backdrop-blur',
+            'ark-surface-raised group flex flex-col gap-2 rounded-2xl border px-3 py-2.5 backdrop-blur',
             'border-overlay/10 shadow-[0_12px_40px_-16px_rgba(3,62,200,0.45)]',
             'transition focus-within:border-sky-brand/60',
             'focus-within:shadow-[0_12px_40px_-14px_rgba(62,181,249,0.55)]',
@@ -122,67 +127,76 @@ export function ChatComposer({
             />
           )}
 
-          <ModelSelector selectedModel={selectedModel} onModelChange={onModelChange} />
+          {/* Input row — items-end keeps the attach + send buttons pinned to the
+              textarea baseline as it auto-grows. */}
+          <div className="flex items-end gap-2">
+            <div className="flex min-w-0 flex-1 items-center">
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => onInputChange(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    trySubmit();
+                  }
+                }}
+                rows={1}
+                placeholder={placeholder}
+                disabled={busy}
+                className={cn(
+                  'min-h-[40px] max-h-[200px] w-full resize-none bg-transparent px-3 py-1.5',
+                  'text-[0.95rem] leading-relaxed text-fg placeholder:text-fg/35',
+                  'outline-none disabled:opacity-60 overflow-y-auto',
+                )}
+              />
+            </div>
 
-          {selectedTemperature !== undefined && onTemperatureChange ? (
-            <TemperatureSelector
-              selectedTemperature={selectedTemperature}
-              onTemperatureChange={onTemperatureChange}
-            />
-          ) : null}
+            {fileAttach && (
+              <IconButton
+                size="md"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={busy}
+                aria-label={fileAttach.ariaLabel}
+                title={fileAttach.tooltip}
+              >
+                <Paperclip className="h-4 w-4" />
+              </IconButton>
+            )}
 
-          <div className="flex min-w-0 flex-1 items-center">
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={(e) => onInputChange(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  trySubmit();
-                }
-              }}
-              rows={1}
-              placeholder={placeholder}
-              disabled={busy}
+            <button
+              type="submit"
+              aria-label="Send"
+              disabled={busy || !canSubmit}
               className={cn(
-                'min-h-[40px] max-h-[200px] w-full resize-none bg-transparent px-3 py-1.5',
-                'text-[0.95rem] leading-relaxed text-fg placeholder:text-fg/35',
-                'outline-none disabled:opacity-60 overflow-y-auto',
+                'group/btn relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl',
+                'text-ink-950 transition',
+                'bg-sky-brand hover:bg-sky-brand-soft',
+                'shadow-[0_6px_20px_-6px_rgba(62,181,249,0.7)]',
+                'disabled:cursor-not-allowed disabled:bg-overlay/10 disabled:text-fg/30 disabled:shadow-none',
               )}
-            />
+            >
+              {busy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <ArrowUp className="h-4 w-4" strokeWidth={2.5} />
+              )}
+            </button>
           </div>
 
-          {fileAttach && (
-            <IconButton
-              size="md"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={busy}
-              aria-label={fileAttach.ariaLabel}
-              title={fileAttach.tooltip}
-            >
-              <Paperclip className="h-4 w-4" />
-            </IconButton>
-          )}
+          {/* Controls row */}
+          <div className="flex flex-wrap items-center gap-2">
+            {leadingControls}
 
-          <button
-            type="submit"
-            aria-label="Send"
-            disabled={busy || !canSubmit}
-            className={cn(
-              'group/btn relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl',
-              'text-ink-950 transition',
-              'bg-sky-brand hover:bg-sky-brand-soft',
-              'shadow-[0_6px_20px_-6px_rgba(62,181,249,0.7)]',
-              'disabled:cursor-not-allowed disabled:bg-overlay/10 disabled:text-fg/30 disabled:shadow-none',
-            )}
-          >
-            {busy ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <ArrowUp className="h-4 w-4" strokeWidth={2.5} />
-            )}
-          </button>
+            <ModelSelector selectedModel={selectedModel} onModelChange={onModelChange} />
+
+            {selectedTemperature !== undefined && onTemperatureChange ? (
+              <TemperatureSelector
+                selectedTemperature={selectedTemperature}
+                onTemperatureChange={onTemperatureChange}
+              />
+            ) : null}
+          </div>
         </div>
         <div className="mt-2 px-1 text-[0.68rem] uppercase tracking-[0.2em] text-fg/30">
           {footerHint}

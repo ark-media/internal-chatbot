@@ -121,6 +121,13 @@ function normalizeShowKey(show: string): string {
     .trim();
 }
 
+// Whether a show name resolves to a known per-show folder entry (independent of
+// whether its env var is actually configured). Lets prep-shows.ts assert that
+// every canonical it exposes is routable here, so the two tables can't drift.
+export function isRoutableShow(show: string | null | undefined): boolean {
+  return !!show && normalizeShowKey(show) in SHOW_FOLDER_LOOKUP;
+}
+
 export interface PrepFolderResolution {
   folderId: string | null;
   matchedShow: string | null;

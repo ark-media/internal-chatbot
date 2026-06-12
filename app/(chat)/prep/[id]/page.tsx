@@ -29,6 +29,7 @@ import {
 
 import { Header } from '@/components/Header';
 import { MODELS } from '@/components/ModelSelector';
+import { ShowSelector } from '@/components/ShowSelector';
 import { ChatComposer } from '@/components/ChatComposer';
 import { ChatErrorBanner } from '@/components/ChatErrorBanner';
 import { EmptyState } from '@/components/EmptyState';
@@ -55,12 +56,11 @@ import {
   MAX_TOTAL_BYTES,
   formatBytes,
 } from '@/lib/prep-limits';
-
-const EXAMPLE_PROMPTS = [
-  'Call me Back — "Can Israel Afford Another War?" — with Amos Yadlin',
-  'For Heaven\'s Sake — "The Future of American Jewry" — with Bari Weiss',
-  'Call me Back — "Iran after the strikes" — with Ray Takeyh',
-];
+import {
+  DEFAULT_PREP_SHOW_ID,
+  getPrepShow,
+  type PrepShowId,
+} from '@/lib/prep-shows';
 
 type AttachedFile = {
   id: string;
@@ -104,6 +104,9 @@ function PrepBody({
   const [selectedModel, setSelectedModel] = useState(MODELS[1].id);
   const [selectedTemperature, setSelectedTemperature] =
     useState<TemperaturePresetId>(PREP_DEFAULT_TEMPERATURE_PRESET);
+  const [selectedShow, setSelectedShow] =
+    useState<PrepShowId>(DEFAULT_PREP_SHOW_ID);
+  const currentShow = getPrepShow(selectedShow);
   const [input, setInput] = useState('');
   const [files, setFiles] = useState<AttachedFile[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -174,10 +177,11 @@ function PrepBody({
         headers: {
           'x-model': selectedModel,
           'x-temperature': selectedTemperature,
+          'x-show': selectedShow,
         },
         body: { chatId },
       }),
-    [customFetch, selectedModel, selectedTemperature, chatId],
+    [customFetch, selectedModel, selectedTemperature, selectedShow, chatId],
   );
 
   const { messages, sendMessage, status, stop, error, regenerate, clearError } =
@@ -267,7 +271,20 @@ function PrepBody({
     const dt = new DataTransfer();
     for (const f of files) dt.items.add(f.file);
     const fileList = dt.files.length > 0 ? dt.files : undefined;
-    sendMessage({ text: q, files: fileList });
+    // Send the live selections per-message. useChat captures the transport at
+    // creation, so a header set only on the memoized transport can be stale on
+    // the first turn (e.g. switching show before the first send). Per-request
+    // headers always reflect the current selection and override the transport.
+    sendMessage(
+      { text: q, files: fileList },
+      {
+        headers: {
+          'x-model': selectedModel,
+          'x-temperature': selectedTemperature,
+          'x-show': selectedShow,
+        },
+      },
+    );
     setInput('');
     setFiles([]);
     if (wasEditing) {
@@ -323,7 +340,11 @@ function PrepBody({
     if (!questionsText?.trim()) return;
 
     const prompt = extractFirstUserPrompt() || '';
-    const { show, title } = parsePromptShow(prompt);
+    const parsed = parsePromptShow(prompt);
+    // An explicit show selection wins; fall back to parsing the prompt prefix
+    // for the generic surface (which has no canonical name).
+    const show = currentShow.canonical ?? parsed.show;
+    const title = parsed.title;
 
     setDriveSaveInProgress(true);
     setDriveLoading(true);
@@ -359,7 +380,7 @@ function PrepBody({
       setDriveLoading(false);
       setDriveSaveInProgress(false);
     }
-  }, [driveSaveInProgress, extractQuestionsText, extractFirstUserPrompt]);
+  }, [driveSaveInProgress, extractQuestionsText, extractFirstUserPrompt, currentShow]);
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
@@ -373,23 +394,45 @@ function PrepBody({
                 title="Prep the"
                 highlight="next episode"
                 description={
-                  <>
-                    Give an episode title + guest. Get 6–7 questions tagged{' '}
-                    <span className="rounded border border-overlay/15 bg-overlay/[0.06] px-1 py-0.5 text-[0.72rem] text-fg/70">
-                      open
-                    </span>{' '}
-                    /{' '}
-                    <span className="rounded border border-sky-brand/30 bg-sky-brand/[0.12] px-1 py-0.5 text-[0.72rem] text-sky-brand-soft">
-                      therefore
-                    </span>{' '}
-                    /{' '}
-                    <span className="rounded border border-amber-300/30 bg-amber-400/[0.12] px-1 py-0.5 text-[0.72rem] text-amber-200">
-                      but
-                    </span>{' '}
-                    — each building or pivoting on the last.
-                  </>
+                  selectedShow === 'whats-your-number' ? (
+                    <>
+                      Name the guest, their role, and the economic angle. Get an{' '}
+                      <span className="font-medium text-fg/80">intro script</span>, a{' '}
+                      <span className="font-medium text-fg/80">focused interview</span>{' '}
+                      tagged{' '}
+                      <span className="rounded border border-overlay/15 bg-overlay/[0.06] px-1 py-0.5 text-[0.72rem] text-fg/70">
+                        open
+                      </span>{' '}
+                      /{' '}
+                      <span className="rounded border border-sky-brand/30 bg-sky-brand/[0.12] px-1 py-0.5 text-[0.72rem] text-sky-brand-soft">
+                        therefore
+                      </span>{' '}
+                      /{' '}
+                      <span className="rounded border border-amber-300/30 bg-amber-400/[0.12] px-1 py-0.5 text-[0.72rem] text-amber-200">
+                        but
+                      </span>
+                      , and a tailored{' '}
+                      <span className="font-medium text-fg/80">rapid-fire</span> round.
+                    </>
+                  ) : (
+                    <>
+                      Give an episode title + guest. Get 6–7 questions tagged{' '}
+                      <span className="rounded border border-overlay/15 bg-overlay/[0.06] px-1 py-0.5 text-[0.72rem] text-fg/70">
+                        open
+                      </span>{' '}
+                      /{' '}
+                      <span className="rounded border border-sky-brand/30 bg-sky-brand/[0.12] px-1 py-0.5 text-[0.72rem] text-sky-brand-soft">
+                        therefore
+                      </span>{' '}
+                      /{' '}
+                      <span className="rounded border border-amber-300/30 bg-amber-400/[0.12] px-1 py-0.5 text-[0.72rem] text-amber-200">
+                        but
+                      </span>{' '}
+                      — each building or pivoting on the last.
+                    </>
+                  )
                 }
-                prompts={EXAMPLE_PROMPTS}
+                prompts={currentShow.examplePrompts}
                 onPick={submit}
                 busy={busy}
                 promptLayout="grid"
@@ -552,7 +595,13 @@ function PrepBody({
           input={input}
           onInputChange={setInput}
           onSubmit={() => submit(input)}
-          placeholder="Episode title + guest"
+          placeholder={currentShow.placeholder}
+          leadingControls={
+            <ShowSelector
+              selectedShow={selectedShow}
+              onShowChange={setSelectedShow}
+            />
+          }
           selectedModel={selectedModel}
           onModelChange={setSelectedModel}
           selectedTemperature={selectedTemperature}
