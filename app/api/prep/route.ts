@@ -283,11 +283,8 @@ function buildLinkedArticleBlock(article: ExtractedArticle): string {
   return `<linked_article url="${escapeAttr(article.url)}"${titleAttr}>\n${article.content}\n</linked_article>`;
 }
 
-function buildWebContextBlock(
-  query: string,
-  results: WebSearchResult[],
-): string {
-  const body = results
+function renderWebResults(results: WebSearchResult[]): string {
+  return results
     .map((r) => {
       const pubAttr = r.publishedDate
         ? ` published="${escapeAttr(r.publishedDate)}"`
@@ -296,22 +293,43 @@ function buildWebContextBlock(
       return `<web_result url="${escapeAttr(r.url)}"${titleAttr}${pubAttr}>\n${r.snippet}\n</web_result>`;
     })
     .join('\n\n');
-  return `<web_context query="${escapeAttr(query)}">\nRecent web coverage of the guest / their work, pre-loaded because this show's guests are usually new to our archive. Treat as leads, not verbatim quotes.\n\n${body}\n</web_context>`;
 }
 
-// Pre-load recent web coverage for a guest. Used by shows (What's Your Number?)
-// whose guests are typically not in our transcript archive, so a fresh web
-// pull is the highest-signal context available before the model writes.
-async function loadGuestWebContext(
+function buildWebContextBlock(
   query: string,
+  results: WebSearchResult[],
+): string {
+  return `<web_context query="${escapeAttr(query)}">\nRecent web coverage of the guest / their work, pre-loaded because this show's guests are usually new to our archive. Treat as leads, not verbatim quotes.\n\n${renderWebResults(results)}\n</web_context>`;
+}
+
+// Evergreen profile material (biography, career, opinions, public persona),
+// distinct from the recency-windowed economic <web_context>. Feeds the
+// guest-specific Rapid Fire round, which needs personal hooks the economic
+// search won't surface.
+function buildRapidFireContextBlock(
+  query: string,
+  results: WebSearchResult[],
+): string {
+  return `<rapid_fire_context query="${escapeAttr(query)}">\nProfile material about the guest (biography, career, notable opinions, public persona), pre-loaded to help build the guest-specific Rapid Fire round. Treat as leads, not verbatim quotes.\n\n${renderWebResults(results)}\n</rapid_fire_context>`;
+}
+
+// Pre-load a web search for a guest, cached. Used by shows (What's Your Number?)
+// whose guests are typically not in our transcript archive, so a fresh web pull
+// is the highest-signal context available before the model writes. `namespace`
+// keeps the recency-windowed economic pull and the evergreen profile pull in
+// separate cache entries.
+async function loadPreloadedWebContext(
+  namespace: string,
+  query: string,
+  opts: { maxResults: number; daysBack?: number },
 ): Promise<WebSearchResult[]> {
-  const cKey = cacheKey('prep-preload-web', { q: query });
+  const cKey = cacheKey(namespace, { q: query });
   const cached = await getCached<WebSearchResult[]>(cKey, 6);
   if (cached) return cached;
-  const res = await webSearch(query, { maxResults: 6, daysBack: 120 });
+  const res = await webSearch(query, opts);
   // Don't cache failures: a transient web-search outage would otherwise pin an
   // empty result for this guest for the full TTL, silently starving the WYN
-  // surface of its primary grounding. A genuine empty-but-ok result is cached.
+  // surface of its grounding. A genuine empty-but-ok result is cached.
   if (!res.ok) return [];
   await setCached(cKey, res.results);
   return res.results;
@@ -602,6 +620,7 @@ export async function POST(req: Request) {
     urls: number;
     articlesOk: number;
     webResults: number;
+    profileResults: number;
   } | null = null;
 
   if (isFirstUserTurn && userText.trim().length > 0) {
@@ -640,25 +659,44 @@ export async function POST(req: Request) {
       }
 
       // For shows whose guests are usually new to our archive (What's Your
-      // Number?), the corpus dossier is typically empty or thin, so pre-load
-      // recent web coverage as the primary grounding. Skip when the producer
-      // already pasted articles (those are higher-signal and the prompt tells
-      // the model not to double up).
+      // Number?), pre-load two web pulls before the model writes:
+      //  - economic coverage (recency-windowed) grounds the intro + interview.
+      //    Skipped when the producer pasted articles (higher-signal, and the
+      //    prompt says not to double up) or the corpus already has real material.
+      //  - profile material (evergreen) grounds the guest-specific Rapid Fire
+      //    round. Loaded whenever a guest is named — neither the economic corpus
+      //    nor pasted economic articles reliably carry the biographical hooks
+      //    rapid fire needs.
       let webResults = 0;
-      const corpusTurns = dossiers.reduce((n, d) => n + d.turns.length, 0);
-      const corpusThin = corpusTurns < PREP_WYN_THIN_CORPUS_TURNS;
-      if (
-        show.id === 'whats-your-number' &&
-        extracted.webQuery &&
-        articles.length === 0 &&
-        corpusThin
-      ) {
-        const results = await loadGuestWebContext(extracted.webQuery);
-        if (results.length > 0) {
+      let profileResults = 0;
+      if (show.id === 'whats-your-number') {
+        const { webQuery, profileQuery } = extracted;
+        const corpusTurns = dossiers.reduce((n, d) => n + d.turns.length, 0);
+        const corpusThin = corpusTurns < PREP_WYN_THIN_CORPUS_TURNS;
+
+        const [web, profile] = await Promise.all([
+          webQuery && articles.length === 0 && corpusThin
+            ? loadPreloadedWebContext('prep-preload-web', webQuery, {
+                maxResults: 6,
+                daysBack: 120,
+              })
+            : Promise.resolve<WebSearchResult[]>([]),
+          profileQuery
+            ? loadPreloadedWebContext('prep-preload-profile', profileQuery, {
+                maxResults: 5,
+              })
+            : Promise.resolve<WebSearchResult[]>([]),
+        ]);
+
+        if (webQuery && web.length > 0) {
+          evidenceBlocks.push(buildWebContextBlock(webQuery, web));
+          webResults = web.length;
+        }
+        if (profileQuery && profile.length > 0) {
           evidenceBlocks.push(
-            buildWebContextBlock(extracted.webQuery, results),
+            buildRapidFireContextBlock(profileQuery, profile),
           );
-          webResults = results.length;
+          profileResults = profile.length;
         }
       }
 
@@ -669,6 +707,7 @@ export async function POST(req: Request) {
         urls: extracted.urls.length,
         articlesOk: articles.length,
         webResults,
+        profileResults,
       };
     } catch (err) {
       console.warn(

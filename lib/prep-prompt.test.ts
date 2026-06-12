@@ -91,8 +91,12 @@ describe("prepSystemPrompt — What's Your Number?", () => {
     expect(prompt).toContain('End with catharsis');
   });
 
-  it('describes the pre-loaded web context block', () => {
+  it('describes both pre-loaded web blocks and points rapid fire at the profile one', () => {
     expect(prompt).toContain('<web_context>');
+    expect(prompt).toContain('<rapid_fire_context>');
+    // The Rapid Fire section should name its grounding source.
+    const rapidFire = prompt.slice(prompt.indexOf('# Rapid Fire'));
+    expect(rapidFire).toContain('<rapid_fire_context>');
   });
 
   it('interpolates today', () => {
