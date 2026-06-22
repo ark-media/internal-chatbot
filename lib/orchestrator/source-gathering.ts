@@ -3,7 +3,14 @@ import { google } from '@ai-sdk/google';
 
 import { ensureEnglish } from '../translate';
 import { cacheKey, getCached, setCached } from '../tool-cache';
-import { approvedHostnames, isApprovedSource, newsSources } from '../news-sources';
+import {
+  approvedHostnames,
+  hardPaywallHostnames,
+  isApprovedSource,
+  isHardPaywallSource,
+  isInternationalSource,
+  newsSources,
+} from '../news-sources';
 import type { Article, Candidate } from './types';
 
 // -- Freshness window --------------------------------------------------------
@@ -470,24 +477,17 @@ async function tavilySearch(opts: {
   return hits;
 }
 
-// -- WSJ → free-mirror substitution ------------------------------------------
-// WSJ is a hard paywall — Tavily Extract returns the headline + a teaser, not
-// the body, so the writer can't actually cite it. WSJ scoops typically get
-// re-reported by Reuters/Bloomberg/AP/Times of Israel within hours, so when
-// discovery surfaces a WSJ URL we search the other approved outlets for the
-// same story by title and substitute the free version. If no mirror is found,
-// the WSJ candidate is dropped — better than letting the writer triage an
-// article we can't read. Only runs during automatic discovery, not the
-// writer's manual `keywordSearch` escape hatch (where a WSJ URL is opt-in).
-
-function isWsjHost(url: string): boolean {
-  try {
-    const host = new URL(url).hostname.toLowerCase();
-    return host === 'wsj.com' || host.endsWith('.wsj.com');
-  } catch {
-    return false;
-  }
-}
+// -- paywall → free-mirror substitution --------------------------------------
+// Hard-paywall outlets (WSJ, NYT, Washington Post, FT) return only a headline +
+// teaser from Tavily Extract, not the body, so the writer can't actually cite
+// them. Their scoops typically get re-reported by Reuters/Bloomberg/AP/the
+// Guardian/Times of Israel within hours, so when discovery surfaces a paywalled
+// URL we search the other approved outlets for the same story by title and
+// substitute the free version. If no mirror is found, the paywalled candidate
+// is dropped — better than letting the writer triage an article we can't read.
+// Only runs during automatic discovery, not the writer's manual `keywordSearch`
+// escape hatch (where a paywalled URL is opt-in). See hardPaywallHostnames /
+// isHardPaywallSource in news-sources.
 
 // Same-event window for cross-outlet mirror matching. Re-reports usually drop
 // within hours; ±1 day catches late filings on either side of midnight UTC
@@ -505,21 +505,22 @@ function withinMirrorDateWindow(a: string | null, b: string | null): boolean {
   return Math.abs(aMs - bMs) / 86_400_000 <= MIRROR_DATE_WINDOW_DAYS;
 }
 
-// Look up a free mirror of a WSJ article by title. Tavily news-topic relevance
-// ranking on the title query handles same-event matching; we trust the top
-// result that's within the date window. Returns null when no candidate
-// survives — caller drops the WSJ entry.
+// Look up a free mirror of a paywalled article by title. Tavily news-topic
+// relevance ranking on the title query handles same-event matching; we trust
+// the top result that's within the date window. The search excludes every
+// hard-paywall outlet so we never mirror one paywall to another. Returns null
+// when no candidate survives — caller drops the paywalled entry.
 async function findFreeMirror(
-  wsj: Candidate,
+  paywalled: Candidate,
   signal?: AbortSignal,
 ): Promise<Candidate | null> {
-  const nonWsjHostnames = approvedHostnames.filter((h) => h !== 'wsj.com');
+  const freeHostnames = approvedHostnames.filter((h) => !hardPaywallHostnames.includes(h));
   let mirrors: Candidate[];
   try {
     mirrors = await tavilySearch({
-      query: wsj.title,
+      query: paywalled.title,
       maxResults: 5,
-      includeDomains: nonWsjHostnames,
+      includeDomains: freeHostnames,
       signal,
     });
   } catch (err) {
@@ -527,40 +528,40 @@ async function findFreeMirror(
     return null;
   }
   for (const m of mirrors) {
-    // Defense-in-depth: tavilySearch already excludes WSJ via include_domains,
-    // but the post-fetch isApprovedSource check would still accept a WSJ URL
-    // returned by mistake.
-    if (isWsjHost(m.url)) continue;
-    if (!withinMirrorDateWindow(wsj.publicationDate, m.publicationDate)) continue;
+    // Defense-in-depth: tavilySearch already excludes paywalled outlets via
+    // include_domains, but the post-fetch isApprovedSource check would still
+    // accept a paywalled URL returned by mistake.
+    if (isHardPaywallSource(m.url)) continue;
+    if (!withinMirrorDateWindow(paywalled.publicationDate, m.publicationDate)) continue;
     return m;
   }
   return null;
 }
 
-// Map WSJ candidates to their free-outlet mirrors. Non-WSJ entries pass
+// Map paywalled candidates to their free-outlet mirrors. Free entries pass
 // through. Mirror lookups run in parallel; the result is deduped by URL since
 // a mirror might already exist in the pool from another beat query.
-export async function substituteWsjMirrors(
+export async function substitutePaywallMirrors(
   candidates: Candidate[],
   signal?: AbortSignal,
 ): Promise<Candidate[]> {
   const resolved = await Promise.all(
     candidates.map(async (c) => {
-      if (!isWsjHost(c.url)) return c;
+      if (!isHardPaywallSource(c.url)) return c;
       const mirror = await findFreeMirror(c, signal);
       if (mirror) {
         console.log(
           JSON.stringify({
-            event: 'orchestrator.wsj_mirror.substituted',
-            wsjUrl: c.url,
+            event: 'orchestrator.paywall_mirror.substituted',
+            paywalledUrl: c.url,
             mirrorUrl: mirror.url,
           }),
         );
       } else {
         console.warn(
           JSON.stringify({
-            event: 'orchestrator.wsj_mirror.dropped',
-            wsjUrl: c.url,
+            event: 'orchestrator.paywall_mirror.dropped',
+            paywalledUrl: c.url,
             title: c.title.slice(0, 120),
           }),
         );
@@ -687,9 +688,10 @@ export async function discoverCandidates(
   // fulfilled-but-empty run is a genuine empty discovery: return [].
   if (!anyFulfilled && lastError) throw lastError;
 
-  // WSJ articles can't be extracted (hard paywall); swap them for free-outlet
-  // mirrors before the survivors hit triage. See substituteWsjMirrors above.
-  return substituteWsjMirrors(merged, signal);
+  // Hard-paywall articles (WSJ, NYT, WaPo, FT) can't be extracted; swap them for
+  // free-outlet mirrors before the survivors hit triage. See
+  // substitutePaywallMirrors above.
+  return substitutePaywallMirrors(merged, signal);
 }
 
 // Exported for testing.
@@ -789,6 +791,12 @@ export async function keywordSearch(
 // extraction — this is the raw candidate pool the writer triages. Verification
 // and extraction are deferred to `extractCandidates`, run later on only the
 // candidates that survive triage.
+// Of the maxArticles triage slots, how many gatherCandidates reserves for the
+// international tier (isInternationalSource). At the default maxArticles of 20
+// this hands the Western press ~6 guaranteed slots; the reservation never wastes
+// a slot — it backfills with the best leftovers when fewer internationals exist.
+const RESERVED_INTERNATIONAL_SLOTS = 6;
+
 export async function gatherCandidates(opts: {
   today: string;
   extraGuidance?: string;
@@ -805,19 +813,46 @@ export async function gatherCandidates(opts: {
   // keeps `rawCount` vs `approvedCount` meaningful in the log below.
   const approved = candidates.filter((c) => isApprovedSource(c.url));
 
-  // Dedupe by URL. The first `maxArticles` survivors become the active triage
-  // list; the next `maxExtras` go into the "See more" overflow pile the writer
-  // can browse and promote. Freshness is flagged from Tavily's claimed date;
-  // extraction can refine it later against the real publish date.
+  // Dedupe by URL, preserving discovery order, and flag freshness from Tavily's
+  // claimed date (extraction can refine it later against the real publish date).
   const seen = new Set<string>();
-  const top: Candidate[] = [];
-  const extras: Candidate[] = [];
+  const pool: Candidate[] = [];
   for (const c of approved) {
     if (seen.has(c.url)) continue;
     seen.add(c.url);
-    const flagged = { ...c, isFlagged: !inAcceptableRange(today, c.publicationDate) };
-    if (top.length < maxArticles) top.push(flagged);
-    else if (extras.length < maxExtras) extras.push(flagged);
+    pool.push({ ...c, isFlagged: !inAcceptableRange(today, c.publicationDate) });
+  }
+
+  // Build the active triage list (`top`, capped at maxArticles) with a reserved
+  // share for the international press. Discovery's beat queries are Israel-
+  // centric, so the high-volume Israeli outlets out-rank the internationals in
+  // Tavily's order and crowd them out of the cap. Phase 1 fills the first
+  // (maxArticles − RESERVED_INTERNATIONAL_SLOTS) slots in discovery order, any
+  // outlet — internationals that land here count too. Phase 2 fills the
+  // remaining slots from what's left, internationals first, then backfills with
+  // the best leftovers so no slot is wasted when fewer internationals exist.
+  // Everything that doesn't make the cap spills into the "See more" overflow
+  // pile (capped at maxExtras) in discovery order.
+  const baseCap = Math.max(0, maxArticles - RESERVED_INTERNATIONAL_SLOTS);
+  const top: Candidate[] = [];
+  const rest: Candidate[] = [];
+  for (const c of pool) {
+    if (top.length < baseCap) top.push(c);
+    else rest.push(c);
+  }
+  const reserved = new Set<Candidate>();
+  for (const c of rest) {
+    if (top.length >= maxArticles) break;
+    if (isInternationalSource(c.url)) {
+      top.push(c);
+      reserved.add(c);
+    }
+  }
+  const extras: Candidate[] = [];
+  for (const c of rest) {
+    if (reserved.has(c)) continue;
+    if (top.length < maxArticles) top.push(c);
+    else if (extras.length < maxExtras) extras.push(c);
     else break;
   }
 

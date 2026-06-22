@@ -35,7 +35,7 @@ import { POST } from './route';
 const CHAT_ID = 'chat-xyz';
 const APPROVED_URL = 'https://www.reuters.com/world/middle-east/story';
 const APPROVED_URL_2 = 'https://www.timesofisrael.com/another-story';
-const UNAPPROVED_URL = 'https://www.bbc.com/news/story';
+const UNAPPROVED_URL = 'https://www.cnn.com/news/story';
 
 function candidate(url: string): Candidate {
   return { title: `title ${url}`, url, source: 'example', publicationDate: null };
