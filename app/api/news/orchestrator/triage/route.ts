@@ -34,6 +34,14 @@ const bodySchema = z.discriminatedUnion('action', [
     chatId: z.string().min(1),
     url: z.string().min(1),
   }),
+  // Discard a whole theme group in one write — the URLs of every candidate
+  // under that group. Same effect as N `remove`s, but one CAS so the writer
+  // can't lose a race mid-cluster.
+  z.object({
+    action: z.literal('removeMany'),
+    chatId: z.string().min(1),
+    urls: z.array(z.string().min(1)).min(1).max(200),
+  }),
   z.object({
     action: z.literal('add'),
     chatId: z.string().min(1),
@@ -90,6 +98,9 @@ export async function POST(req: Request) {
     candidates = reorderByUrl(run.candidates, body.order);
   } else if (body.action === 'remove') {
     candidates = run.candidates.filter((c) => c.url !== body.url);
+  } else if (body.action === 'removeMany') {
+    const drop = new Set(body.urls);
+    candidates = run.candidates.filter((c) => !drop.has(c.url));
   } else {
     // add — append a writer-chosen search hit, deduped by URL. No extraction:
     // verification + Tavily extract happen at /group with every other

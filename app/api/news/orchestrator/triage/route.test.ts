@@ -103,6 +103,24 @@ describe('POST /api/news/orchestrator/triage', () => {
     expect(savedRun().candidates.map((c) => c.url)).toEqual([APPROVED_URL_2]);
   });
 
+  it('removeMany — drops every candidate in a discarded theme group at once', async () => {
+    const res = await POST(
+      makeRequest({ action: 'removeMany', chatId: CHAT_ID, urls: [APPROVED_URL, APPROVED_URL_2] }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(savedRun().candidates).toEqual([]);
+  });
+
+  it('removeMany — leaves candidates outside the discarded group untouched', async () => {
+    const res = await POST(
+      makeRequest({ action: 'removeMany', chatId: CHAT_ID, urls: [APPROVED_URL] }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(savedRun().candidates.map((c) => c.url)).toEqual([APPROVED_URL_2]);
+  });
+
   it('add — appends an approved candidate to the pool', async () => {
     const newUrl = 'https://www.jpost.com/breaking-news/article';
     const res = await POST(

@@ -55,6 +55,12 @@ export type Candidate = {
   source: string;
   publicationDate: string | null;
   isFlagged?: boolean;
+  // Broad theme assigned by the title-only clustering pass (clusterCandidates),
+  // used to group the triage list so the writer can discard a whole cluster at
+  // once. Purely a triage aid — the on-air topics are still built from article
+  // content by distillTopics at /group. Optional: candidates added later (search,
+  // X, "See more") and pre-clustering runs carry none and bucket under "Other".
+  theme?: string;
 };
 
 export type DistillResult = {
