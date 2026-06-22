@@ -24,6 +24,7 @@ import {
   Search,
   AtSign,
   ChevronDown,
+  ChevronRight,
   FileText,
   Upload,
   Wand2,
@@ -541,6 +542,7 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
       payload:
         | { action: 'reorder'; order: string[] }
         | { action: 'remove'; url: string }
+        | { action: 'removeMany'; urls: string[] }
         | { action: 'add'; candidate: Candidate },
     ) => {
       setError(null);
@@ -579,6 +581,16 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
     (url: string) => {
       const next = (run?.candidates ?? []).filter((c) => c.url !== url);
       return triageEdit(next, { action: 'remove', url });
+    },
+    [run, triageEdit],
+  );
+
+  // Discard a whole theme group at once — one CAS write for the cluster.
+  const removeGroup = useCallback(
+    (urls: string[]) => {
+      const drop = new Set(urls);
+      const next = (run?.candidates ?? []).filter((c) => !drop.has(c.url));
+      return triageEdit(next, { action: 'removeMany', urls });
     },
     [run, triageEdit],
   );
@@ -908,6 +920,7 @@ function OrchestratorBody({ chatId }: { chatId: string }) {
               extraCandidates={run.extraCandidates ?? []}
               onReorder={reorderArticles}
               onRemove={removeArticle}
+              onRemoveGroup={removeGroup}
               onSearch={searchArticles}
               onPullXPosts={pullXPosts}
               onAddCandidate={addArticle}
@@ -1628,6 +1641,7 @@ function TriageView({
   extraCandidates,
   onReorder,
   onRemove,
+  onRemoveGroup,
   onSearch,
   onPullXPosts,
   onAddCandidate,
@@ -1638,6 +1652,7 @@ function TriageView({
   extraCandidates: Candidate[];
   onReorder: (next: Candidate[]) => void;
   onRemove: (url: string) => void;
+  onRemoveGroup: (urls: string[]) => void;
   onSearch: (query: string) => Promise<Candidate[]>;
   onPullXPosts: () => Promise<Candidate[]>;
   onAddCandidate: (candidate: Candidate) => void;
@@ -1648,6 +1663,35 @@ function TriageView({
     () => new Set(candidates.map((c) => c.url)),
     [candidates],
   );
+
+  // Group candidates by theme for display. The candidate array arrives grouped
+  // contiguously from clusterCandidates, so first-appearance order yields clean,
+  // contiguous theme sections. Untagged candidates (added via search/X/"See
+  // more", or a run that pre-dates clustering) fall under "Other".
+  const groups = useMemo(() => {
+    const out: { theme: string; items: Candidate[] }[] = [];
+    const indexByTheme = new Map<string, number>();
+    for (const c of candidates) {
+      const theme = c.theme ?? 'Other';
+      let g = indexByTheme.get(theme);
+      if (g === undefined) {
+        g = out.length;
+        indexByTheme.set(theme, g);
+        out.push({ theme, items: [] });
+      }
+      out[g].items.push(c);
+    }
+    return out;
+  }, [candidates]);
+
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const toggleCollapsed = (theme: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(theme)) next.delete(theme);
+      else next.add(theme);
+      return next;
+    });
   const sensors = useSensors(
     // A small distance threshold so a click on the title link isn't swallowed
     // as a drag.
@@ -1659,12 +1703,18 @@ function TriageView({
   // disabled while any request is in flight.
   const locked = busy !== null;
 
+  // Drag-to-rank is scoped to within a theme: a move only commits when both
+  // ends sit in the same group. Because groups are contiguous in `candidates`,
+  // an in-group arrayMove on absolute indices keeps every group contiguous.
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
     const oldIndex = candidates.findIndex((c) => c.url === active.id);
     const newIndex = candidates.findIndex((c) => c.url === over.id);
     if (oldIndex === -1 || newIndex === -1) return;
+    const sameTheme =
+      (candidates[oldIndex].theme ?? 'Other') === (candidates[newIndex].theme ?? 'Other');
+    if (!sameTheme) return;
     onReorder(arrayMove(candidates, oldIndex, newIndex));
   };
 
@@ -1672,10 +1722,11 @@ function TriageView({
     <div className="flex flex-col gap-4">
       <div className="rounded-lg border border-overlay/10 bg-overlay/[0.02] px-4 py-3 text-sm text-fg/70">
         <span className="font-semibold text-fg">
-          {candidates.length} article{candidates.length === 1 ? '' : 's'} found.
+          {candidates.length} article{candidates.length === 1 ? '' : 's'} found
         </span>{' '}
-        This is the raw discovery list — drag to rank, remove what you don&rsquo;t want,
-        then group what&rsquo;s left. Sources are verified and read when you group.
+        across {groups.length} theme{groups.length === 1 ? '' : 's'}. Discard a whole theme
+        you don&rsquo;t want, drag to rank within a theme, then group what&rsquo;s left.
+        Sources are verified and read when you group.
       </div>
 
       {candidates.length === 0 ? (
@@ -1688,22 +1739,65 @@ function TriageView({
           collisionDetection={closestCenter}
           onDragEnd={handleDragEnd}
         >
-          <SortableContext
-            items={candidates.map((c) => c.url)}
-            strategy={verticalListSortingStrategy}
-          >
-            <div className="flex flex-col gap-2">
-              {candidates.map((candidate, i) => (
-                <TriageRow
-                  key={candidate.url}
-                  candidate={candidate}
-                  index={i}
-                  onRemove={() => onRemove(candidate.url)}
-                  locked={locked}
-                />
-              ))}
-            </div>
-          </SortableContext>
+          <div className="flex flex-col gap-3">
+            {groups.map((group) => {
+              const isCollapsed = collapsed.has(group.theme);
+              return (
+                <div
+                  key={group.theme}
+                  className="rounded-lg border border-overlay/10 bg-overlay/[0.015]"
+                >
+                  <div className="flex items-center gap-2 px-3 py-2">
+                    <button
+                      type="button"
+                      onClick={() => toggleCollapsed(group.theme)}
+                      className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                      aria-expanded={!isCollapsed}
+                    >
+                      {isCollapsed ? (
+                        <ChevronRight className="h-4 w-4 shrink-0 text-fg/40" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4 shrink-0 text-fg/40" />
+                      )}
+                      <span className="truncate text-sm font-semibold text-fg">
+                        {group.theme}
+                      </span>
+                      <span className="shrink-0 rounded-full bg-overlay/10 px-2 py-0.5 text-[0.7rem] text-fg/55">
+                        {group.items.length}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onRemoveGroup(group.items.map((c) => c.url))}
+                      disabled={locked}
+                      className="inline-flex shrink-0 items-center gap-1 rounded px-2 py-1 text-[0.7rem] text-fg/45 transition hover:bg-red-500/15 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" /> Discard theme
+                    </button>
+                  </div>
+
+                  {isCollapsed ? null : (
+                    <SortableContext
+                      items={group.items.map((c) => c.url)}
+                      strategy={verticalListSortingStrategy}
+                    >
+                      <div className="flex flex-col gap-2 px-2 pb-2">
+                        {group.items.map((candidate, i) => (
+                          <TriageRow
+                            key={candidate.url}
+                            candidate={candidate}
+                            index={i}
+                            onRemove={() => onRemove(candidate.url)}
+                            locked={locked}
+                          />
+                        ))}
+                      </div>
+                    </SortableContext>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </DndContext>
       )}
 

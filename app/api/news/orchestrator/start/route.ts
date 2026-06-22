@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { getNewsExamples } from '@/lib/news-prompt';
+import { clusterCandidates } from '@/lib/orchestrator/cluster';
 import { distillTopics } from '@/lib/orchestrator/distill';
 import {
   extractUrlToArticle,
@@ -289,10 +290,28 @@ export async function POST(req: Request) {
       );
     }
 
+    // Cluster the candidates into broad themes so the triage list comes back
+    // grouped. Title-only and best-effort: if it fails, fall back to the
+    // ungrouped list (the UI buckets untagged candidates under "Other") rather
+    // than block discovery on a cosmetic pass.
+    let grouped = candidates;
+    try {
+      grouped = await clusterCandidates(candidates, req.signal);
+    } catch (err) {
+      if (req.signal.aborted) throw err;
+      console.warn(
+        JSON.stringify({
+          event: 'orchestrator.start.cluster_failed',
+          chatId,
+          err: String(err).slice(0, 300),
+        }),
+      );
+    }
+
     const run: OrchestratorRun = {
       ...initial,
       stage: 'triage',
-      candidates,
+      candidates: grouped,
       extraCandidates: extras,
       updatedAt: new Date().toISOString(),
     };
@@ -304,8 +323,9 @@ export async function POST(req: Request) {
         mode: 'discover',
         chatId,
         ms: Date.now() - started,
-        candidateCount: candidates.length,
+        candidateCount: grouped.length,
         extraCount: extras.length,
+        themeCount: new Set(grouped.map((c) => c.theme ?? 'Other')).size,
         stage: 'triage',
       }),
     );

@@ -35,7 +35,7 @@ import { POST } from './route';
 const CHAT_ID = 'chat-xyz';
 const APPROVED_URL = 'https://www.reuters.com/world/middle-east/story';
 const APPROVED_URL_2 = 'https://www.timesofisrael.com/another-story';
-const UNAPPROVED_URL = 'https://www.bbc.com/news/story';
+const UNAPPROVED_URL = 'https://www.cnn.com/news/story';
 
 function candidate(url: string): Candidate {
   return { title: `title ${url}`, url, source: 'example', publicationDate: null };
@@ -97,6 +97,24 @@ describe('POST /api/news/orchestrator/triage', () => {
   it('remove — drops the candidate with the given URL', async () => {
     const res = await POST(
       makeRequest({ action: 'remove', chatId: CHAT_ID, url: APPROVED_URL }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(savedRun().candidates.map((c) => c.url)).toEqual([APPROVED_URL_2]);
+  });
+
+  it('removeMany — drops every candidate in a discarded theme group at once', async () => {
+    const res = await POST(
+      makeRequest({ action: 'removeMany', chatId: CHAT_ID, urls: [APPROVED_URL, APPROVED_URL_2] }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(savedRun().candidates).toEqual([]);
+  });
+
+  it('removeMany — leaves candidates outside the discarded group untouched', async () => {
+    const res = await POST(
+      makeRequest({ action: 'removeMany', chatId: CHAT_ID, urls: [APPROVED_URL] }),
     );
 
     expect(res.status).toBe(200);

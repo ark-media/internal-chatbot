@@ -20,8 +20,12 @@ export const newsSources = {
     'Times of Israel + liveblog (most useful for developing stories)',
     'Wall Street Journal + liveblog',
     'New York Times',
+    'Washington Post',
     'Associated Press + liveblog',
     'Reuters',
+    'The Guardian',
+    'Financial Times',
+    'BBC',
     'Jerusalem Post + liveblog',
     'I24 News English',
     'Haaretz English + liveblog',
@@ -67,10 +71,15 @@ export const approvedHostnames = [
   'timesofisrael.com',
   'wsj.com',
   'nytimes.com',
+  'washingtonpost.com',
   'apnews.com',
   'ap.org',
   'reuters.com',
   'reut.rs',
+  'theguardian.com',
+  'ft.com',
+  'bbc.com',
+  'bbc.co.uk',
   'jpost.com',
   'i24news.tv',
   'haaretz.com',
@@ -107,9 +116,63 @@ export const approvedHostnames = [
   'foreignaffairs.com',
 ];
 
+// Hard-paywall outlets. Tavily Extract returns only the headline + a teaser for
+// these — not the body — so a writer can't satisfy the "cite or don't answer"
+// rule from them. They stay in discovery for lead-spotting, but the
+// orchestrator swaps each one for a free-outlet mirror of the same story before
+// the writer triages (see substitutePaywallMirrors). All four are hard
+// metered/subscriber paywalls.
+export const hardPaywallHostnames = [
+  'wsj.com',
+  'nytimes.com',
+  'washingtonpost.com',
+  'ft.com',
+];
+
+// Major Western international outlets. Discovery's beat queries are Israel-
+// centric, where the high-volume Israeli outlets out-rank these in Tavily's
+// relevance order — so left alone they rarely surface. gatherCandidates reserves
+// a share of the triage pool for this tier so the desk reliably sees how the
+// international press is covering a story. Hard-paywall members (NYT, WaPo, WSJ,
+// FT) are normally swapped for free mirrors upstream; a Reuters/Guardian/BBC
+// re-report still counts toward the quota, which is the point.
+export const internationalHostnames = [
+  'nytimes.com',
+  'washingtonpost.com',
+  'reuters.com',
+  'reut.rs',
+  'apnews.com',
+  'ap.org',
+  'wsj.com',
+  'ft.com',
+  'theguardian.com',
+  'bbc.com',
+  'bbc.co.uk',
+  'bloomberg.com',
+];
+
 const approvedXHandles = new Set(
   newsSources.xAccounts.map((a) => a.handle.replace(/^@/, '').toLowerCase()),
 );
+
+// Suffix-match a URL's hostname against a list of bare domains, so subdomains
+// (www.bbc.com, news.walla.co.il) match their root. Returns false on unparseable
+// URLs. Shared by the source-tier predicates below.
+function hostInList(url: string, domains: string[]): boolean {
+  let host: string;
+  try { host = new URL(url).hostname.toLowerCase(); } catch { return false; }
+  return domains.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
+}
+
+// True when the URL is a hard-paywall outlet whose body Tavily can't extract.
+export function isHardPaywallSource(url: string): boolean {
+  return hostInList(url, hardPaywallHostnames);
+}
+
+// True when the URL is a major Western international outlet (the reserved tier).
+export function isInternationalSource(url: string): boolean {
+  return hostInList(url, internationalHostnames);
+}
 
 export function isApprovedSource(url: string): boolean {
   let parsed: URL;
@@ -131,7 +194,5 @@ export function isApprovedSource(url: string): boolean {
     return approvedXHandles.has(handle);
   }
 
-  return approvedHostnames.some((allowed) =>
-    host === allowed || host.endsWith(`.${allowed}`),
-  );
+  return hostInList(url, approvedHostnames);
 }

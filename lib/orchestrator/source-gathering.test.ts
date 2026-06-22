@@ -7,7 +7,7 @@ import {
   gatherCandidates,
   keywordSearch,
   parseCandidates,
-  substituteWsjMirrors,
+  substitutePaywallMirrors,
   verifyOrRecover,
 } from './source-gathering';
 
@@ -259,7 +259,7 @@ describe('keywordSearch', () => {
     installFetchMock(() =>
       jsonResponse({
         results: [
-          { url: 'https://www.bbc.com/news/story', title: 'Not approved' },
+          { url: 'https://www.cnn.com/news/story', title: 'Not approved' },
           { url: 'https://www.timesofisrael.com/story', title: 'Approved' },
           { url: 'https://www.timesofisrael.com/story', title: 'Approved duplicate' },
         ],
@@ -657,6 +657,48 @@ describe('gatherCandidates', () => {
     ]);
   });
 
+  it('reserves cap slots for internationals crowded to the back of the pool', async () => {
+    // Eight Israeli-outlet hits, then two internationals last. With
+    // maxArticles=8 and the 6-slot international reserve, baseCap is 2: the
+    // first two Israeli hits take the unreserved slots, the two internationals
+    // are pulled into the reserved portion despite ranking last, and the
+    // remaining Israeli hits backfill. Without the reserve, both internationals
+    // would have been crowded into the overflow pile.
+    const results = [
+      ...Array.from({ length: 8 }).map((_, i) => ({
+        url: `https://www.timesofisrael.com/story-${i}`,
+        title: `ToI story ${i}`,
+        published_date: '2026-05-14',
+        source_name: 'Times of Israel',
+      })),
+      {
+        url: 'https://www.reuters.com/world/middle-east/intl-a',
+        title: 'Reuters take',
+        published_date: '2026-05-14',
+        source_name: 'Reuters',
+      },
+      {
+        url: 'https://www.theguardian.com/world/2026/may/14/intl-b',
+        title: 'Guardian take',
+        published_date: '2026-05-14',
+        source_name: 'The Guardian',
+      },
+    ];
+    installFetchMock(() => jsonResponse({ results }));
+
+    const { top } = await gatherCandidates({
+      today: '2026-05-14',
+      extraGuidance: 'single query so only one fetch',
+      maxArticles: 8,
+      maxExtras: 10,
+    });
+
+    const topUrls = top.map((c) => c.url);
+    expect(top).toHaveLength(8);
+    expect(topUrls).toContain('https://www.reuters.com/world/middle-east/intl-a');
+    expect(topUrls).toContain('https://www.theguardian.com/world/2026/may/14/intl-b');
+  });
+
   it('returns an empty extras pile when maxExtras is 0 (checkpoint topic gathers)', async () => {
     installFetchMock(() =>
       jsonResponse({
@@ -681,7 +723,7 @@ describe('gatherCandidates', () => {
   });
 });
 
-describe('substituteWsjMirrors', () => {
+describe('substitutePaywallMirrors', () => {
   beforeEach(() => {
     vi.stubEnv('TAVILY_API_KEY', 'test-key');
     vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -720,16 +762,49 @@ describe('substituteWsjMirrors', () => {
       });
     });
 
-    const result = await substituteWsjMirrors([wsjCandidate]);
+    const result = await substitutePaywallMirrors([wsjCandidate]);
     expect(result).toHaveLength(1);
     expect(result[0].url).toBe('https://www.reuters.com/world/middle-east/iran-sanctions');
     expect(result[0].source).toBe('Reuters');
   });
 
+  it('mirrors a NYT candidate too, and excludes every paywall from the search', async () => {
+    const nytCandidate = {
+      title: 'Israel and Hezbollah Edge Toward a Ceasefire',
+      url: 'https://www.nytimes.com/2026/05/14/world/middleeast/israel-hezbollah.html',
+      publicationDate: '2026-05-14',
+      source: 'The New York Times',
+    };
+    installFetchMock((url, init) => {
+      const body = JSON.parse(init?.body as string);
+      // None of the hard-paywall outlets may be a mirror target.
+      for (const paywall of ['wsj.com', 'nytimes.com', 'washingtonpost.com', 'ft.com']) {
+        expect(body.include_domains).not.toContain(paywall);
+      }
+      expect(body.include_domains).toContain('theguardian.com');
+      return jsonResponse({
+        results: [
+          {
+            url: 'https://www.theguardian.com/world/2026/may/14/israel-hezbollah-ceasefire',
+            title: 'Israel and Hezbollah move toward ceasefire',
+            published_date: '2026-05-14',
+            source_name: 'The Guardian',
+          },
+        ],
+      });
+    });
+
+    const result = await substitutePaywallMirrors([nytCandidate]);
+    expect(result).toHaveLength(1);
+    expect(result[0].url).toBe(
+      'https://www.theguardian.com/world/2026/may/14/israel-hezbollah-ceasefire',
+    );
+  });
+
   it('drops a WSJ candidate when no mirror is found', async () => {
     installFetchMock(() => jsonResponse({ results: [] }));
 
-    const result = await substituteWsjMirrors([wsjCandidate]);
+    const result = await substitutePaywallMirrors([wsjCandidate]);
     expect(result).toEqual([]);
   });
 
@@ -748,13 +823,13 @@ describe('substituteWsjMirrors', () => {
       }),
     );
 
-    const result = await substituteWsjMirrors([wsjCandidate]);
+    const result = await substitutePaywallMirrors([wsjCandidate]);
     expect(result).toEqual([]);
   });
 
-  it('passes non-WSJ candidates through without a mirror lookup', async () => {
+  it('passes free-outlet candidates through without a mirror lookup', async () => {
     const fetchMock = installFetchMock(() => {
-      throw new Error('Tavily should not be called for non-WSJ candidates');
+      throw new Error('Tavily should not be called for free-outlet candidates');
     });
 
     const reutersCandidate = {
@@ -763,7 +838,7 @@ describe('substituteWsjMirrors', () => {
       publicationDate: '2026-05-14',
       source: 'Reuters',
     };
-    const result = await substituteWsjMirrors([reutersCandidate]);
+    const result = await substitutePaywallMirrors([reutersCandidate]);
     expect(result).toEqual([reutersCandidate]);
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -789,7 +864,7 @@ describe('substituteWsjMirrors', () => {
       publicationDate: '2026-05-14',
       source: 'Reuters',
     };
-    const result = await substituteWsjMirrors([sibling, wsjCandidate]);
+    const result = await substitutePaywallMirrors([sibling, wsjCandidate]);
     expect(result.map((c) => c.url)).toEqual([reutersUrl]);
   });
 
@@ -800,7 +875,7 @@ describe('substituteWsjMirrors', () => {
       ...wsjCandidate,
       url: 'https://blogs.wsj.com/world/middle-east/post',
     };
-    const result = await substituteWsjMirrors([subdomain]);
+    const result = await substitutePaywallMirrors([subdomain]);
     expect(result).toEqual([]);
   });
 });
