@@ -26,6 +26,14 @@ const FALLBACK_EXCERPT_CHARS = 1500;
 // as robotic. Kept below the fact-critical stages (extract/distill run at ≤0.1).
 const SCRIPT_WRITER_TEMPERATURE = 0.5;
 
+// Model for the script writer. Flipped from claude-sonnet-4-6 to claude-sonnet-5
+// on 2026-07-01 after a same-prompt A/B on the clipdist eval: Sonnet 5 placed
+// SOT clips well across the script body on 20/20 runs vs 14/20 for 4.6 (which
+// kept front-loading them), a significant gap (p ~ 0.02). Env-overridable so
+// evals can still A/B. Both craftScript and refineScript use it.
+const SCRIPT_WRITER_MODEL =
+  process.env.SCRIPT_WRITER_MODEL ?? 'anthropic/claude-sonnet-5';
+
 // Exported for unit testing — assembles the source digest the writer sees.
 export function buildSourceBlock(topics: TopicWithSources[], extras: Article[]): string {
   const lines: string[] = [];
@@ -164,7 +172,7 @@ export async function craftScript(opts: {
 Write the broadcast-ready script now. Begin your response with "SONIC ID:" — no preamble, no announcements about fetching or searching, no commentary about what you're about to do. Follow the Output Format from the system prompt exactly: SONIC ID + intro, [A BLOCK]/[B BLOCK]/[C BLOCK] (and [D BLOCK] if warranted), outro, then "---" then "SOURCES:" with a numbered list. Use superscript footnotes (¹²³…) for every factual claim. Add inline [FLAG: ...] notes for uncertain or weak sourcing. Aim for 1000–1200 words of script body.`;
 
   const { text } = await generateText({
-    model: 'anthropic/claude-sonnet-4-6',
+    model: SCRIPT_WRITER_MODEL,
     system: {
       role: 'system',
       content: cachedSystemContent,
@@ -206,7 +214,7 @@ ${instruction}
 Apply the writer's request to the current script and return the full revised script. Preserve every factual claim, citation, and FLAG that the request doesn't explicitly touch. Do not start from scratch — edit in place. Follow the Output Format from the system prompt exactly: SONIC ID + intro, blocks, outro, then "---" then "SOURCES:". Begin your response with "SONIC ID:" — no preamble.`;
 
   const { text } = await generateText({
-    model: 'anthropic/claude-sonnet-4-6',
+    model: SCRIPT_WRITER_MODEL,
     system: {
       role: 'system',
       content: cachedSystemContent,

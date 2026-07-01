@@ -43,11 +43,30 @@ describe('newsSystemPrompt — verbatim user-supplied quotes/SOT', () => {
         expect(ruleStart).toBeLessThan(footnotesStart);
       });
 
-      it('tells the writer to distribute multiple clips evenly, not cluster them', () => {
-        expect(prompt).toContain('Space clips out within the block');
-        expect(prompt).toContain('distribute them evenly through the block');
+      it('tells the writer to spread clips across the whole script, not front-load', () => {
+        expect(prompt).toContain('Distribute clips across the whole script');
+        expect(prompt).toContain('Do NOT front-load them');
+        // The C-block close is where clips consistently go missing.
+        expect(prompt).toContain('including the C-block close, can and should carry a clip');
+      });
+
+      it('still tells the writer not to stack or cluster clips within a block', () => {
         expect(prompt).toContain(
           'do not stack them back-to-back or cluster them all at the opening or the close',
+        );
+      });
+
+      // The writer had live web search but kept reading the draft's wrong
+      // "80 countries" on air while parking the correction in a SOURCES line
+      // the listener never hears. Both paths can fact-check draft figures, so
+      // the rule must hold in both modes.
+      it('requires a verified correction to land in the spoken narration, not the footnotes', () => {
+        expect(prompt).toContain(
+          'Corrections belong in the spoken text, not the footnotes',
+        );
+        expect(prompt).toContain('put the CORRECTED value in the broadcast narration');
+        expect(prompt).toContain(
+          'a caveat parked in SOURCES is invisible to them',
         );
       });
     });

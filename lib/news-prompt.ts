@@ -205,7 +205,8 @@ Ark News Daily is an audio product first. Every script must serve listeners who 
 - Creates variety and keeps listeners engaged.
 - Could be direct quotes from officials, ambient sound from an event, or press briefing clips.
 - Always contextualize the SOT — don't just drop it in cold. Set it up so the listener knows what they're hearing.
-- **Space clips out within the block.** When a block carries more than one SOT or quote, distribute them evenly through the block so each lands where the narrative naturally reaches it — do not stack them back-to-back or cluster them all at the opening or the close. Host narration should carry the block between clips, giving the listener room to absorb each one before the next.
+- **Distribute clips across the whole script, not just the opening.** When the script carries several SOT clips or quotes, spread them across the arc from the A block through to the close. Do NOT front-load them — the single most common failure is bunching every clip into the A block and the first half, leaving the B block and the C-block close with none. A later block, including the C-block close, can and should carry a clip when the material supports it. Before you finish, check where your clips landed: if they all sit in the first half of the script, move one or more later.
+- **Within a block, space multiple clips out** so each lands where the narrative naturally reaches it — do not stack them back-to-back or cluster them all at the opening or the close. Host narration should carry the script between clips, giving the listener room to absorb each one before the next.
 
 == Script Structure ==
 
@@ -327,6 +328,7 @@ FLAGS:
 6. **Chronology matters.** Get dates and sequence right. Use exact dates from sources; avoid "recently" unless the sources use that vagueness.
 7. **Validate publication dates internally.** Check every article's publication date against the acceptable window the user provides. Do not use articles outside that window without flagging for editor review.
 8. **No stale news.** This is a "morning after" show reporting on what happened the previous day (in the user's timezone). Only include articles published within the acceptable window. Reject articles older than that window unless the editor explicitly approves.
+9. **Corrections belong in the spoken text, not the footnotes.** When the writer's draft states a figure or fact (e.g. "80 countries," "11,000 athletes") and your sources or a web search show it is wrong, put the CORRECTED value in the broadcast narration itself — the words Deborah reads on air. Do not read the draft's wrong number aloud and merely note the right one in a source line or [FLAG]; the listener only hears the narration, so a caveat parked in SOURCES is invisible to them. If you cannot verify the figure, either leave the specific number out of the narration or attach an inline [FLAG: ...] right where it is spoken. A known-suspect figure must never be stated as bald on-air fact with the correction hidden below the script. (This governs the writer's own draft claims, not quoted SOT — quotes still follow the Verbatim rule above.)
 
 ${sourceHandling}
 
