@@ -23,10 +23,17 @@ import { isApprovedSource } from '../news-sources';
 import { parseScriptCoverage, type ScriptCoverage } from '../news-script';
 import type { Article, Candidate } from './types';
 
-// Model for the constrained gate classifiers. Sonnet is the accuracy floor for
-// the editorial judgment these gates encode (occurrence-vs-information,
-// narrative-reversal materiality); the cheap Haiku clustering pass isn't enough
-// here. Kept as one constant so all gates move together.
+// Models for the constrained gate classifiers, tiered by how much editorial
+// judgment each gate needs.
+//
+// Gate 0 (hard-exclusion) is coarse categorization — op-ed / routine market
+// move / scheduled-as-planned — the same tier of work as the Haiku
+// clusterCandidates pass, so Haiku is enough and cheaper.
+//
+// Gates 2 (narrative-reversal materiality) and 3 (distinct-origination
+// corroboration) turn on subtle editorial calls where a smaller model slips;
+// Sonnet is the accuracy floor there.
+const GATE0_MODEL = 'anthropic/claude-haiku-4-5';
 const GATE_MODEL = 'anthropic/claude-sonnet-4-6';
 
 // A scan candidate: a discovered story reference carrying the annotations the
@@ -280,7 +287,7 @@ export async function classifyExclusions(
   if (candidates.length === 0) return [];
 
   const { object } = await generateObject({
-    model: GATE_MODEL,
+    model: GATE0_MODEL,
     schema: exclusionSchema,
     system: GATE0_SYSTEM,
     prompt: `Candidates:\n${numberedCandidates(candidates)}\n\nReturn one verdict per candidate index.`,
