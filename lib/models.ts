@@ -17,9 +17,15 @@ export const MODELS: ChatModel[] = [
     contextWindow: 200_000,
   },
   {
+    id: 'anthropic/claude-sonnet-5',
+    name: 'Claude Sonnet 5',
+    description: 'Balanced speed and near-Opus intelligence. Recommended.',
+    contextWindow: 200_000,
+  },
+  {
     id: 'anthropic/claude-sonnet-4-6',
-    name: 'Claude Sonnet',
-    description: 'Balanced speed and intelligence. Recommended.',
+    name: 'Claude Sonnet 4.6',
+    description: 'Previous-generation Sonnet. Balanced speed and intelligence.',
     contextWindow: 200_000,
   },
   {
@@ -58,6 +64,12 @@ export const MODELS: ChatModel[] = [
     contextWindow: 2_000_000,
   },
 ];
+
+// The model selected by default in the UI and used as the server-side fallback
+// when a request arrives without an `x-model` header. Named explicitly rather
+// than encoded as an array index so the default can't drift when MODELS is
+// reordered.
+export const DEFAULT_MODEL_ID = 'anthropic/claude-sonnet-5';
 
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 

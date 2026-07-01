@@ -23,10 +23,11 @@ export const TEMPERATURE_PRESETS: TemperaturePreset[] = [
   { id: 'creative', label: 'Creative', value: 0.8, hint: 'Titles, ideas, brainstorming' },
 ];
 
-// Per-surface starting presets. These match each surface's pre-existing fixed
-// temperature exactly (news was 0.3, prep was 0.5) so making temperature
-// configurable does not change default behavior — it only adds new options.
-export const NEWS_DEFAULT_TEMPERATURE_PRESET: TemperaturePresetId = 'balanced';
+// Per-surface starting presets. Prep starts at Standard (0.5), its original
+// fixed value. News was raised from Balanced (0.3) → Standard (0.5): at 0.3 the
+// chat-path prose came out flat and monotone. This mirrors the orchestrator
+// writer bump in lib/orchestrator/script-craft.ts (SCRIPT_WRITER_TEMPERATURE).
+export const NEWS_DEFAULT_TEMPERATURE_PRESET: TemperaturePresetId = 'standard';
 export const PREP_DEFAULT_TEMPERATURE_PRESET: TemperaturePresetId = 'standard';
 
 const FALLBACK_PRESET = TEMPERATURE_PRESETS.find((p) => p.id === 'balanced')!;

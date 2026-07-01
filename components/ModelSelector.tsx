@@ -4,9 +4,9 @@ import { useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useClickOutside } from '@/lib/use-click-outside';
-import { MODELS, getContextWindow } from '@/lib/models';
+import { MODELS, getContextWindow, DEFAULT_MODEL_ID } from '@/lib/models';
 
-export { MODELS, getContextWindow };
+export { MODELS, getContextWindow, DEFAULT_MODEL_ID };
 
 type ModelSelectorProps = {
   selectedModel: string;

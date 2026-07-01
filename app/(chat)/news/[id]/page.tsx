@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 
 import { Header } from '@/components/Header';
-import { MODELS } from '@/components/ModelSelector';
+import { DEFAULT_MODEL_ID } from '@/components/ModelSelector';
 import { ChatComposer } from '@/components/ChatComposer';
 import { ChatErrorBanner } from '@/components/ChatErrorBanner';
 import { EmptyState } from '@/components/EmptyState';
@@ -101,7 +101,7 @@ function NewsBody({
   chatId: string;
   initialMessages: NewsUIMessage[];
 }) {
-  const [selectedModel, setSelectedModel] = useState(MODELS[1].id);
+  const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL_ID);
   const [selectedTemperature, setSelectedTemperature] =
     useState<TemperaturePresetId>(NEWS_DEFAULT_TEMPERATURE_PRESET);
   const [input, setInput] = useState('');

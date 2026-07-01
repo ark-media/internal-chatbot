@@ -28,7 +28,7 @@ import {
 } from 'lucide-react';
 
 import { Header } from '@/components/Header';
-import { MODELS } from '@/components/ModelSelector';
+import { DEFAULT_MODEL_ID } from '@/components/ModelSelector';
 import { ShowSelector } from '@/components/ShowSelector';
 import { ChatComposer } from '@/components/ChatComposer';
 import { ChatErrorBanner } from '@/components/ChatErrorBanner';
@@ -101,7 +101,7 @@ function PrepBody({
   chatId: string;
   initialMessages: PrepUIMessage[];
 }) {
-  const [selectedModel, setSelectedModel] = useState(MODELS[1].id);
+  const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL_ID);
   const [selectedTemperature, setSelectedTemperature] =
     useState<TemperaturePresetId>(PREP_DEFAULT_TEMPERATURE_PRESET);
   const [selectedShow, setSelectedShow] =

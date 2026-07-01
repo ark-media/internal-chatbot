@@ -11,7 +11,7 @@ import {
 } from 'ai';
 import { z } from 'zod';
 
-import { getContextWindow } from '@/lib/models';
+import { getContextWindow, DEFAULT_MODEL_ID } from '@/lib/models';
 import {
   countGuestAppearancesOnShow,
   getDossier,
@@ -598,7 +598,7 @@ export async function POST(req: Request) {
       console.warn(JSON.stringify({ event: 'chat.persist_user_error', err: String(err) }));
     }
   }
-  const model = req.headers.get('x-model') || 'anthropic/claude-sonnet-4-6';
+  const model = req.headers.get('x-model') || DEFAULT_MODEL_ID;
   const userText = lastUserText(messages);
   const queryHash = hashQuery(userText);
   const started = Date.now();
