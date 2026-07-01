@@ -20,6 +20,12 @@ const MAX_QUOTES_PER_ARTICLE = 5;
 // late-added article doesn't blow up the cached system block.
 const FALLBACK_EXCERPT_CHARS = 1500;
 
+// Temperature for the script writer (initial draft, revision loop, and
+// user-driven refinement). Raised from 0.3 → 0.5 to restore lexical variety
+// and natural rhythm; at 0.3 the prose came out flat and monotone, which read
+// as robotic. Kept below the fact-critical stages (extract/distill run at ≤0.1).
+const SCRIPT_WRITER_TEMPERATURE = 0.5;
+
 // Exported for unit testing — assembles the source digest the writer sees.
 export function buildSourceBlock(topics: TopicWithSources[], extras: Article[]): string {
   const lines: string[] = [];
@@ -165,7 +171,7 @@ Write the broadcast-ready script now. Begin your response with "SONIC ID:" — n
       providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
     },
     prompt,
-    temperature: 0.3,
+    temperature: SCRIPT_WRITER_TEMPERATURE,
   });
 
   return { fullText: text.trim(), metadata: computeMetadata(text) };
@@ -207,7 +213,7 @@ Apply the writer's request to the current script and return the full revised scr
       providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
     },
     prompt,
-    temperature: 0.3,
+    temperature: SCRIPT_WRITER_TEMPERATURE,
   });
 
   return { fullText: text.trim(), metadata: computeMetadata(text) };

@@ -47,17 +47,17 @@ const ADVISOR_SYSTEM = `You are a senior editor for *Ark News Daily*, a daily ne
 Your job: review the script against the editorial checklist and the gold-standard examples. Identify distinct problems, decide whether the script is ready, and return targeted corrections.
 
 Distinguish:
-- HARD failures (must be fixed): factual inaccuracy, claims not supported by sources, source-fidelity violations (orphaned superscripts, misquoted/misattributed material, missing FLAGs on uncertain claims), AND AI-cadence tells (see below).
-- SOFT feedback (guidance, not blockers): structural imbalance, clarity/jargon, audio pacing, word repetition.
+- HARD failures (must be fixed): factual inaccuracy, claims not supported by sources, source-fidelity violations (orphaned superscripts, misquoted/misattributed material, missing FLAGs on uncertain claims).
+- SOFT feedback (guidance, not blockers): structural imbalance, clarity/jargon, audio pacing, word repetition, AND AI-cadence tells (see below).
 
-AI-CADENCE TELLS (mark each as type "hard" — these make the script read as AI-written and are not acceptable). Flag EVERY instance you find:
+AI-CADENCE TELLS (mark each as type "soft"). These read as machine-written when they pile up, but an isolated one is not worth forcing a full rewrite — and over-scrubbing flattens the voice into a monotone, which is its own tell. Flag genuine instances, but do not hunt for borderline cases, and never demand the removal of natural emphasis or sentence-length variation:
 - Takeaway-as-its-own-beat: "Here's the problem." "Here's the thing." "Here's what matters." "But here's the catch."
 - Naming the tension instead of telling it: "And that's the real tension." "That's the paradox." "And that's the bind."
 - The "not X — it's Y" reframe used as a punchline.
 - Rhetorical question answered by a one-word/one-line fragment ("So what changed? Everything.").
 - Dramatic one-clause sentences for effect ("And it worked." "Until now." "Not anymore.").
 - Stock essay connectors ("Make no mistake," "The bigger picture," "At the end of the day," "The bottom line," "What's clear is").
-- Em-dash overuse (the most common AI tell). Flag it if the script averages more than one em-dash per block, uses two in one sentence, or uses them in back-to-back sentences. The correction should replace most em-dashes with commas, periods, or plain connectors.
+- Em-dash overuse (a common AI tell). Flag it only when the script leans on em-dashes heavily (two in one sentence, or back-to-back sentences). The correction should replace some em-dashes with commas, periods, or plain connectors.
 For each, the correction must rewrite the offending line in the show's voice (see the gold-standard examples) — fold the point into the surrounding prose or cut it. Do not just delete substance.
 
 Counting rule: each distinct issue counts as 1 problem (do NOT weight by severity). If the same defect appears in multiple places, it's still 1 problem with one correction — but distinct AI-cadence tells (different phrasings) are separate problems.
@@ -110,9 +110,10 @@ Review the script. Return a JSON object with: problems (array of {type, issue, d
   });
 
   // Defensive: enforce the decision rule in code rather than trusting the model.
-  // Loop on ANY hard failure (factual/source-fidelity/AI-cadence tell) or on
-  // 3+ problems of any kind. This guarantees even one or two AI-cadence tells —
-  // which the reviewer marks "hard" — trigger a revision instead of shipping.
+  // Loop on ANY hard failure (factual/source-fidelity) or on 3+ problems of any
+  // kind. AI-cadence tells are now SOFT: a lone stylistic tell no longer forces a
+  // rewrite pass (which tended to flatten the voice), but several still trigger a
+  // revision via the 3+ total-problems threshold.
   const hardCount = object.problems.filter((p) => p.type === 'hard').length;
   const decision: 'loop' | 'exit' =
     hardCount >= 1 || object.problems.length >= 3 ? 'loop' : 'exit';

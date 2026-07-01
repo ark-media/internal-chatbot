@@ -24,10 +24,10 @@ describe('resolveTemperature', () => {
     expect(resolveTemperature('0.9')).toBe(0.3);
   });
 
-  it('keeps the pre-existing per-surface defaults unchanged', () => {
-    // Making temperature configurable must not shift default behavior:
-    // news was fixed at 0.3, prep at 0.5.
-    expect(resolveTemperature(NEWS_DEFAULT_TEMPERATURE_PRESET)).toBe(0.3);
+  it('resolves the per-surface defaults', () => {
+    // News was raised from Balanced (0.3) → Standard (0.5) to combat flat,
+    // monotone prose; prep remains at Standard (0.5).
+    expect(resolveTemperature(NEWS_DEFAULT_TEMPERATURE_PRESET)).toBe(0.5);
     expect(resolveTemperature(PREP_DEFAULT_TEMPERATURE_PRESET)).toBe(0.5);
   });
 });
