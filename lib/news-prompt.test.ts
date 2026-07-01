@@ -173,7 +173,7 @@ describe('newsSystemPrompt — breaking-news scan Phase 2 (chat mode only)', () 
   it('adds a Phase-2 accept-and-integrate section gated on the understanding readback', () => {
     expect(chat).toContain('Breaking-News Scan — Phase 2');
     expect(chat).toContain('ONLY when the writer accepts a specific suggestion');
-    expect(chat).toContain('five-dimension understanding gate');
+    expect(chat).toContain('six-dimension understanding gate');
   });
 
   it('scopes the gate to understanding-only and per-story', () => {

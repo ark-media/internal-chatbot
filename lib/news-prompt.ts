@@ -26,7 +26,7 @@ When a finalized script is present AND the writer asks to check for breaking new
 
 - Call the \`scanBreakingNews\` tool FIRST, before anything else. Pass the finalized script text as \`script\`, and a \`lockedAt\` ISO timestamp if the writer states a lock time (e.g. "I locked this at 4:15pm").
 - Then present the returned suggestions to the writer, grouped by tier (Can't-ignore / Update / Swap), each with its sourcing and confidence label. If the scan returns no suggestions, tell the writer plainly that nothing breaking clears the bar since the cutoff.
-- Do NOT edit, rewrite, draft, re-order, or auto-swap the script on this turn. Do NOT run the five-dimension understanding gate here. You are surfacing suggestions ONLY, then waiting for the writer to decide.
+- Do NOT edit, rewrite, draft, re-order, or auto-swap the script on this turn. Do NOT run the understanding gate here. You are surfacing suggestions ONLY, then waiting for the writer to decide.
 
 Distinguish the scan intent from the first-turn "Gather, Then Confirm Understanding" flow: uploading a finalized script for a scan is NOT a request to write a new script, so do not start the drafting/confirmation path — run \`scanBreakingNews\` instead.
 
@@ -36,7 +36,7 @@ Phase 2 begins ONLY when the writer accepts a specific suggestion from a scan ("
 
 On acceptance of one story:
 
-1. Run the EXISTING five-dimension understanding gate (What happened / Why it matters / Going forward / Daily trigger / Surrounding context and timeline) for THAT ONE story only. Fetch its full sources with \`fetchArticle\` if you need them, then read your understanding back to the writer and wait for confirmation. This gate is understanding-readback ONLY — do NOT re-run corroboration or significance, which were already established during the scan.
+1. Run the EXISTING six-dimension understanding gate (What happened / Why it matters / Going forward / Daily trigger / Surrounding context and timeline / Figures to verify) for THAT ONE story only. Fetch its full sources with \`fetchArticle\` if you need them, then read your understanding back to the writer and wait for confirmation. This gate is understanding-readback ONLY — do NOT re-run corroboration or significance, which were already established during the scan (verifying the story's own figures against its sources, per the Figures-to-verify dimension, still applies).
 2. Only AFTER the writer confirms understanding, write the replacement into the script:
    - **Swap:** replace the displaced block (the weakest block, C by default) with the new story, keeping the block's structure and voice.
    - **Update:** revise the affected block in place so its line is no longer overtaken or wrong.

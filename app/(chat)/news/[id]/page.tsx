@@ -325,7 +325,7 @@ function NewsBody({
           : 'integrate it';
     submit(
       `I accept the ${s.tier} suggestion: "${s.headline}". ` +
-        `Run the Phase-2 five-dimension understanding gate for this story only, and after I confirm, ${integration}. ` +
+        `Run the Phase-2 understanding gate for this story only, and after I confirm, ${integration}. ` +
         'Do not touch the rest of the script.',
     );
   };
