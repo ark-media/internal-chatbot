@@ -11,6 +11,7 @@ import {
 import { z } from 'zod';
 
 import { sql } from '@/lib/db';
+import { DEFAULT_MODEL_ID } from '@/lib/models';
 import { lookupCorpus } from '@/lib/retrieval';
 import { webSearch } from '@/lib/web-search';
 import { newsSystemPrompt, newsContextForDate, getNewsExamples } from '@/lib/news-prompt';
@@ -481,7 +482,7 @@ export async function POST(req: Request) {
     );
   }
   const messages = validated.data;
-  const model = req.headers.get('x-model') || 'anthropic/claude-sonnet-4-6';
+  const model = req.headers.get('x-model') || DEFAULT_MODEL_ID;
   const temperature = resolveTemperature(req.headers.get('x-temperature'));
   const uploadError = validateUploads(messages);
   if (uploadError) {

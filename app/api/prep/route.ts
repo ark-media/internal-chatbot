@@ -16,6 +16,7 @@ import {
   getDossier,
   type DossierTurn,
 } from '@/lib/retrieval';
+import { DEFAULT_MODEL_ID } from '@/lib/models';
 import { webSearch, type WebSearchResult } from '@/lib/web-search';
 import { extractArticles, type ExtractedArticle } from '@/lib/url-fetch';
 import { extractPrepContext } from '@/lib/prep-extract';
@@ -558,7 +559,7 @@ export async function POST(req: Request) {
     );
   }
   const messages = validated.data;
-  const model = req.headers.get('x-model') || 'anthropic/claude-sonnet-4-6';
+  const model = req.headers.get('x-model') || DEFAULT_MODEL_ID;
   const temperature = resolveTemperature(req.headers.get('x-temperature'));
   // Show selection drives both the system prompt and whether we pre-load web
   // context. getPrepShow falls back to the default surface for anything

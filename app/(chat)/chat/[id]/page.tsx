@@ -14,7 +14,7 @@ import { Square, Sparkles, FileText, ChevronRight, Copy, CheckCircle2, Pencil, S
 
 import { MessageText } from '@/components/MessageText';
 import { SourcePanel } from '@/components/SourcePanel';
-import { MODELS, getContextWindow } from '@/components/ModelSelector';
+import { getContextWindow, DEFAULT_MODEL_ID } from '@/components/ModelSelector';
 import { ChatComposer } from '@/components/ChatComposer';
 import { ChatErrorBanner } from '@/components/ChatErrorBanner';
 import { Header } from '@/components/Header';
@@ -78,7 +78,7 @@ function ChatBody({
   chatId: string;
   initialMessages: ChatUIMessage[];
 }) {
-  const [selectedModel, setSelectedModel] = useState(MODELS[1].id);
+  const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL_ID);
   const [input, setInput] = useState('');
   const [openPanel, setOpenPanel] = useState<PanelView | null>(null);
   const [episodeCount, setEpisodeCount] = useState<number | null>(null);
