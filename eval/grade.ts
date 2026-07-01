@@ -742,7 +742,7 @@ const judgeSchema = z.object({
   factsCorrected: z
     .boolean()
     .describe(
-      'True if, for EVERY listed fact-check, the output does NOT assert the draft\'s incorrect value as plain fact — it instead uses the corrected value (exact match not required; a close/approximate figure counts) or flags the figure for verification. If the output repeats even one wrong draft figure as fact, this is false. If no fact-checks are listed, true.',
+      "True if, for EVERY listed fact-check, the output does NOT assert the draft's unsupported value as plain fact — it instead uses a figure within the correct value's stated range/sources (real-world figures vary by source, so a credible sourced figure in range counts; exact match is NOT required) or flags the figure for verification. If the output repeats a wrong draft figure as bald fact, this is false. If no fact-checks are listed, true.",
     ),
   factsDetail: z
     .string()
@@ -775,7 +775,7 @@ async function judgeAdaptation(
     system: {
       role: 'system',
       content:
-        'You grade a script-writing assistant for the audio news show Ark News Daily. The writer pasted a C-block draft written mostly in Hebrew (with an English soundbite and two song cues) and asked the assistant to TRANSLATE it to English and ADAPT it to the show voice. The assistant had live web search to verify figures. Grade strictly on translation completeness, adaptation quality, and fact-correction. Be demanding: any Hebrew left untranslated in the body means fullyEnglish is false; any incorrect draft figure asserted as fact means factsCorrected is false.',
+        "You grade a script-writing assistant for the audio news show Ark News Daily. The writer pasted a C-block draft written mostly in Hebrew (with an English soundbite and two song cues) and asked the assistant to TRANSLATE it to English and ADAPT it to the show voice. The assistant had live web search to verify figures. Grade strictly on translation completeness and adaptation quality. For fact-correction, the goal is that the assistant does NOT parrot the draft's unsupported figures — it should replace them with a credibly sourced figure (within the range noted in the fact-check, since real-world numbers legitimately vary by source) or flag them. Do NOT punish a well-sourced figure just because it differs from one specific value. Be demanding on the essentials: any Hebrew left untranslated in the body means fullyEnglish is false; repeating a draft's wrong figure as bald on-air fact means factsCorrected is false.",
     },
     prompt: `Assistant output to grade:\n\n${script}${goldRef}${factRef}`,
     temperature: 0,
