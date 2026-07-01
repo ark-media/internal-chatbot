@@ -56,6 +56,16 @@ describe('newsSystemPrompt — verbatim user-supplied quotes/SOT', () => {
         );
       });
 
+      // A translate-and-adapt run dropped the draft's two song cues entirely
+      // (omission, not a cold insert), so the writer must be told supplied
+      // music/anthem/ambient cues have to survive into the script and be framed.
+      it('forbids silently dropping a supplied music, song, or ambient cue', () => {
+        expect(prompt).toContain(
+          'Never silently drop a supplied music, song, anthem, or ambient-sound cue',
+        );
+        expect(prompt).toContain('Omitting the cue entirely is a failure');
+      });
+
       // The writer had live web search but kept reading the draft's wrong
       // "80 countries" on air while parking the correction in a SOURCES line
       // the listener never hears. Both paths can fact-check draft figures, so
@@ -89,16 +99,25 @@ describe('newsSystemPrompt — confirm-understanding gate (chat mode only)', () 
     expect(chat).toContain('Do not write the script on this turn');
   });
 
-  it('names all five understanding dimensions', () => {
+  it('names all six understanding dimensions', () => {
     for (const dimension of [
       'What happened',
       'Why it matters',
       'Going forward',
       'Daily trigger',
       'Surrounding context and timeline',
+      'Figures to verify',
     ]) {
       expect(chat).toContain(dimension);
     }
+  });
+
+  // The readback is where the writer commits to the corrected figure BEFORE
+  // drafting — locking it in here is what keeps the correction in the spoken
+  // narration instead of a footnote (Factual Accuracy Rule 9).
+  it('makes the writer verify draft figures during the readback, before drafting', () => {
+    expect(chat).toContain('Figures to verify');
+    expect(chat).toContain('commit now to putting the sourced value in the spoken narration');
   });
 
   it('distinguishes ongoing events from discrete/limited events in the timeline check', () => {
@@ -118,5 +137,55 @@ describe('newsSystemPrompt — confirm-understanding gate (chat mode only)', () 
   it('does NOT add the confirmation gate to the orchestrator (batch) path', () => {
     expect(orchestrator).not.toContain('Confirm Understanding');
     expect(orchestrator).not.toContain('Do not write the script on this turn');
+  });
+});
+
+describe('newsSystemPrompt — breaking-news scan Phase 1 (chat mode only)', () => {
+  const chat = newsSystemPrompt('chat');
+  const orchestrator = newsSystemPrompt('orchestrator');
+
+  it('adds a Phase-1 scan section that hard-gates on scanBreakingNews first', () => {
+    expect(chat).toContain('Breaking-News Scan — Phase 1');
+    expect(chat).toContain('scanBreakingNews');
+    expect(chat).toContain('HARD GATE');
+    expect(chat).toContain('Call the `scanBreakingNews` tool FIRST');
+  });
+
+  it('forbids editing or drafting the script on the scan turn — suggestions only', () => {
+    expect(chat).toContain('Do NOT edit, rewrite, draft, re-order, or auto-swap the script on this turn');
+    expect(chat).toContain('surfacing suggestions ONLY');
+  });
+
+  it('distinguishes the scan intent from the first-turn gather+confirm drafting flow', () => {
+    expect(chat).toContain('Distinguish the scan intent from the first-turn');
+    expect(chat).toContain('NOT a request to write a new script');
+  });
+
+  it('does NOT leak the scan gate into the orchestrator (batch) path', () => {
+    expect(orchestrator).not.toContain('Breaking-News Scan');
+    expect(orchestrator).not.toContain('scanBreakingNews');
+  });
+});
+
+describe('newsSystemPrompt — breaking-news scan Phase 2 (chat mode only)', () => {
+  const chat = newsSystemPrompt('chat');
+
+  it('adds a Phase-2 accept-and-integrate section gated on the understanding readback', () => {
+    expect(chat).toContain('Breaking-News Scan — Phase 2');
+    expect(chat).toContain('ONLY when the writer accepts a specific suggestion');
+    expect(chat).toContain('five-dimension understanding gate');
+  });
+
+  it('scopes the gate to understanding-only and per-story', () => {
+    expect(chat).toContain('understanding-readback ONLY');
+    expect(chat).toContain('do NOT re-run corroboration or significance');
+    expect(chat).toContain('accepting one suggestion does NOT integrate the others');
+  });
+
+  it('describes integration: replace displaced block (Swap) or revise affected block (Update), update SOURCES, no preamble', () => {
+    expect(chat).toContain('replace the displaced block');
+    expect(chat).toContain('revise the affected block');
+    expect(chat).toContain('Update the `SOURCES:` list');
+    expect(chat).toContain('with NO preamble');
   });
 });

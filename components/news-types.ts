@@ -1,4 +1,5 @@
 import type { UIMessage } from 'ai';
+import type { ScanResult } from '@/lib/orchestrator/breaking-scan';
 
 export type FetchArticleToolOutput = {
   url?: string;
@@ -43,4 +44,15 @@ export type NewsSource = {
   url: string;
 };
 
-export type NewsUIMessage = UIMessage<unknown, Record<string, never>>;
+// Re-export the scan result shape so the UI can type the breaking-suggestions
+// data part it renders.
+export type { ScanResult, Suggestion, Tier } from '@/lib/orchestrator/breaking-scan';
+
+// Typed UI data parts streamed by the news route. `breaking-suggestions` is the
+// scanBreakingNews tool's tiered output; the part type on the wire is
+// `data-breaking-suggestions`, mirroring the existing `data-sources` pattern.
+export type NewsDataParts = {
+  'breaking-suggestions': ScanResult;
+};
+
+export type NewsUIMessage = UIMessage<unknown, NewsDataParts>;

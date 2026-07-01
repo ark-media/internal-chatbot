@@ -1,0 +1,246 @@
+{
+  "project": "Ark Internal Chatbot",
+  "branchName": "compound/breaking-news-scan",
+  "description": "Breaking-news scan extension to Ark News Daily: upload a finalized script, scan approved outlets for post-lock breaking news, recommend Swap/Update/Can't-ignore replacements (Phase 1), then run the existing per-story understanding gate on accept before integrating (Phase 2).",
+  "tasks": [
+    {
+      "id": "T-001",
+      "title": "Extract extractSources into lib/news-script.ts",
+      "description": "Move the existing extractSources() out of app/api/news/route.ts into a shared lib/news-script.ts so both the chat route and the new scan can call it, with behavior unchanged.",
+      "acceptanceCriteria": [
+        "File lib/news-script.ts exists and exports function extractSources and type ExtractedSources",
+        "File app/api/news/route.ts imports extractSources from '@/lib/news-script' and no longer defines it locally",
+        "The existing test app/api/news/extractSources.test.ts is updated to import from '@/lib/news-script' (or a new lib/news-script.test.ts covers the same cases) and Run `npm test -- news-script extractSources` - exits with code 0",
+        "Run `npm run typecheck` - exits with code 0",
+        "Run `npm run lint` - exits with code 0"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "Implemented; unit tests + typecheck + lint green."
+    },
+    {
+      "id": "T-002",
+      "title": "Add parseScriptCoverage to lib/news-script.ts",
+      "description": "Add a parser that splits a finalized script into A/B/C/D blocks and returns them alongside the cited sources, producing the coverage profile the novelty diff uses.",
+      "acceptanceCriteria": [
+        "lib/news-script.ts exports parseScriptCoverage(text) returning { blocks: Array<{ label: string; text: string }>, sources: ExtractedSources }",
+        "Blocks are split on `[X BLOCK]` markers; intro/outro boilerplate (SONIC ID / sign-off) is not returned as a block",
+        "A script with no SOURCES section returns sources: [] without throwing",
+        "lib/news-script.test.ts adds a fixture finalized script (A/B/C blocks + SOURCES) asserting block count, block labels, and source count",
+        "Run `npm test -- news-script` - exits with code 0",
+        "Run `npm run typecheck` - exits with code 0"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "Implemented; unit tests + typecheck + lint green."
+    },
+    {
+      "id": "T-003",
+      "title": "Add lock-time cutoff resolution + validation",
+      "description": "Add a helper that resolves the recency cutoff for a scan: default to request time, allow an explicit lockedAt override, and reject nonsensical overrides.",
+      "acceptanceCriteria": [
+        "lib/orchestrator/breaking-scan.ts exports resolveCutoff({ lockedAt?: string, now: string }) returning an ISO timestamp",
+        "When lockedAt is absent, resolveCutoff returns the provided now value",
+        "resolveCutoff throws (or returns an error result) for a lockedAt in the future or more than 12h before now",
+        "lib/orchestrator/breaking-scan.test.ts covers: default-to-now, valid override, future-override rejected, >12h-ago-override rejected",
+        "Run `npm test -- breaking-scan` - exits with code 0",
+        "Run `npm run typecheck` - exits with code 0"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "Implemented; unit tests + typecheck + lint green."
+    },
+    {
+      "id": "T-004",
+      "title": "Add post-lock candidate discovery in breaking-scan.ts",
+      "description": "Add discoverBreakingCandidates that reuses the orchestrator discovery stack and filters candidates to those published at/after the cutoff, retaining but flagging undated ones.",
+      "acceptanceCriteria": [
+        "lib/orchestrator/breaking-scan.ts exports async discoverBreakingCandidates({ today, cutoff }) reusing discoverCandidates, verifyOrRecover/extractCandidates and substitutePaywallMirrors from './source-gathering'",
+        "A pure exported helper filterByCutoff(candidates, cutoff) drops candidates whose publicationDate is strictly before cutoff and sets dateUncertain:true on candidates with missing/unparseable dates (retained, not dropped)",
+        "X-post candidates retain their source handle on the candidate object",
+        "Only approved-source candidates are returned (uses existing approved-hostname checks from source-gathering / news-sources)",
+        "breaking-scan.test.ts covers filterByCutoff: before-cutoff dropped, after-cutoff kept, undated kept+flagged",
+        "Run `npm test -- breaking-scan` - exits with code 0",
+        "Run `npm run typecheck` - exits with code 0"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "Implemented; unit tests + typecheck + lint green."
+    },
+    {
+      "id": "T-005",
+      "title": "Add Gate 0 hard-exclusion classifier",
+      "description": "Add a generateObject-backed classifier that tags each candidate excluded/kept per the hard-exclusion rules (opinion, scheduled-as-planned occurrence, attrition, routine markets, recirculated old events), encoding the occurrence-vs-information rule.",
+      "acceptanceCriteria": [
+        "breaking-scan.ts exports classifyExclusions(candidates) returning each candidate tagged { excluded: boolean, exclusionReason?: string } via generateObject with a Zod schema",
+        "The prompt string in the module contains the scheduled-speech-resignation and expected-verdict examples (occurrence excluded, reversal-grade information kept)",
+        "Excluded candidates are removed before later gates in the pipeline",
+        "A Zod schema constrains the classifier output; breaking-scan.test.ts validates a sample classifier output object against the schema (no live model call required)",
+        "Run `npm test -- breaking-scan` - exits with code 0",
+        "Run `npm run typecheck` - exits with code 0"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": "Implemented; unit tests + typecheck + lint green."
+    },
+    {
+      "id": "T-006",
+      "title": "Add Gate 2 novelty diff against coverage profile",
+      "description": "Add a classifier that labels each surviving candidate NEW / UPDATE / DUPLICATE against the parseScriptCoverage profile, with the narrative-reversal materiality bar for UPDATE.",
+      "acceptanceCriteria": [
+        "breaking-scan.ts exports classifyNovelty(candidates, coverage) tagging each { novelty: 'NEW' | 'UPDATE' | 'DUPLICATE', updatesBlock?: string } via generateObject with a Zod schema",
+        "The prompt contains the ceasefire-collapse vs next-round-scheduled and toll-40+-commander vs toll-12-to-14 materiality examples",
+        "DUPLICATE candidates are dropped from the pipeline and never surfaced",
+        "An UPDATE result carries updatesBlock naming the affected block label",
+        "breaking-scan.test.ts validates the novelty schema and that a pipeline step drops DUPLICATE items given a stubbed classifier result",
+        "Run `npm test -- breaking-scan` - exits with code 0",
+        "Run `npm run typecheck` - exits with code 0"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": "Implemented; unit tests + typecheck + lint green."
+    },
+    {
+      "id": "T-007",
+      "title": "Add Gate 3 significance + corroboration grading",
+      "description": "Add significance grading where corroboration counts distinct origination (not URLs), a single curated X source is provisional, and beat membership is available to the grader.",
+      "acceptanceCriteria": [
+        "breaking-scan.ts exports gradeSignificance(candidates) tagging each { corroboration: { independentSources: number, primarySource: string }, confidence: 'confirmed' | 'provisional', significance: 'high' | 'medium' | 'low', onBeat: boolean } via generateObject with a Zod schema",
+        "A pure exported helper collapseCorroboration collapses candidates attributing to the same primarySource to independentSources:1",
+        "A pure helper marks a single curated-X-handle-only story confidence:'provisional'",
+        "breaking-scan.test.ts covers: 2-independent-outlets -> independentSources>=2; 4-outlets-one-journalist -> independentSources:1; single-X-handle -> provisional",
+        "Run `npm test -- breaking-scan` - exits with code 0",
+        "Run `npm run typecheck` - exits with code 0"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": "Implemented; unit tests + typecheck + lint green."
+    },
+    {
+      "id": "T-008",
+      "title": "Add tier routing to Swap / Update / Can't-ignore",
+      "description": "Add pure tier-routing that maps graded candidates to output tiers, enforces the global-shock+confirmed rule for Can't-ignore, ranks, and caps the list with a suppression note and an explicit empty result.",
+      "acceptanceCriteria": [
+        "breaking-scan.ts exports routeTiers(gradedCandidates) returning { suggestions: Suggestion[], suppressedCount: number, cutoff: string } where Suggestion has tier, headline, whyItQualifies, sources[], confidence, and block reference where applicable",
+        "Can't-ignore only fires for the enumerated global-shock categories AND confidence:'confirmed'; off-beat candidates cannot reach Swap/Update",
+        "Provisional items may appear as Swap/Update flagged unconfirmed",
+        "Results are ordered Can't-ignore > Update > Swap then by significance/confidence and capped at 5 with suppressedCount reporting the remainder",
+        "An input with no qualifying candidates returns suggestions:[] (empty result the UI renders as 'nothing clears the bar')",
+        "breaking-scan.test.ts covers: off-beat can't reach Swap, off-beat global-shock+confirmed reaches Can't-ignore, off-beat global-shock+provisional does NOT, cap+suppressedCount, empty result",
+        "Run `npm test -- breaking-scan` - exits with code 0",
+        "Run `npm run typecheck` - exits with code 0"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": "Implemented; unit tests + typecheck + lint green."
+    },
+    {
+      "id": "T-009",
+      "title": "Compose full scan pipeline runBreakingScan",
+      "description": "Wire the gates into one entry point that runs discovery -> Gate 0 -> Gate 2 -> Gate 3 -> tier routing and returns the tiered suggestion object.",
+      "acceptanceCriteria": [
+        "breaking-scan.ts exports async runBreakingScan({ script, lockedAt?, today, now }) that parses coverage (parseScriptCoverage), resolves cutoff, discovers, and runs all gates in order returning the routeTiers result",
+        "DUPLICATE/excluded candidates cannot appear in the returned suggestions (enforced by pipeline order)",
+        "The returned object includes the resolved cutoff",
+        "breaking-scan.test.ts adds an integration-style test with stubbed classifier functions asserting an end-to-end suggestion object shape",
+        "Run `npm test -- breaking-scan` - exits with code 0",
+        "Run `npm run typecheck` - exits with code 0"
+      ],
+      "priority": 9,
+      "passes": true,
+      "notes": "Implemented; unit tests + typecheck + lint green."
+    },
+    {
+      "id": "T-010",
+      "title": "Register scanBreakingNews tool in news route",
+      "description": "Add the scanBreakingNews server tool to app/api/news/route.ts that calls runBreakingScan and emits the result as a typed UI data part for the client.",
+      "acceptanceCriteria": [
+        "app/api/news/route.ts registers a scanBreakingNews tool (alongside fetchArticle/searchCorpus/webSearch) with inputSchema { script: string, lockedAt?: string }",
+        "The tool execute calls runBreakingScan and returns the tiered suggestion object",
+        "The result is emitted as a typed data part (e.g. data-breaking-suggestions) consistent with the existing data-sources pattern in NewsUIMessage types (components/news-types.ts updated)",
+        "Run `npm run typecheck` - exits with code 0",
+        "Run `npm run lint` - exits with code 0"
+      ],
+      "priority": 10,
+      "passes": true,
+      "notes": "Implemented; unit tests + typecheck + lint green."
+    },
+    {
+      "id": "T-011",
+      "title": "Add Phase-1 hard-gate section to news system prompt",
+      "description": "Update lib/news-prompt.ts so that with a finalized script present and a breaking/relevance request, the model must call scanBreakingNews first and must not edit or draft on that turn.",
+      "acceptanceCriteria": [
+        "lib/news-prompt.ts newsSystemPrompt output contains a Phase-1 section instructing the model to call scanBreakingNews first for breaking/relevance requests on a finalized script, present suggestions only, and NOT edit or draft on that turn",
+        "The prompt explicitly distinguishes the scan intent from the existing first-turn gather+confirm drafting flow",
+        "lib/news-prompt.test.ts asserts the prompt string contains the Phase-1 / scanBreakingNews instruction",
+        "Run `npm test -- news-prompt` - exits with code 0",
+        "Run `npm run typecheck` - exits with code 0"
+      ],
+      "priority": 11,
+      "passes": true,
+      "notes": "Implemented; unit tests + typecheck + lint green."
+    },
+    {
+      "id": "T-012",
+      "title": "Add Phase-2 accept-and-integrate section to news system prompt",
+      "description": "Update lib/news-prompt.ts so that on writer acceptance of a suggestion, the model runs the existing 5-dimension understanding gate for that story only, then writes the replacement into the script after confirmation.",
+      "acceptanceCriteria": [
+        "lib/news-prompt.ts contains a Phase-2 section: on acceptance, run the existing five-dimension understanding readback for that one story, wait for confirmation, then integrate",
+        "The section states the gate is understanding-only (no re-running corroboration/significance) and per-story (accepting one does not integrate others)",
+        "The section instructs integration to replace the displaced block for a Swap or revise the affected block for an Update, update SOURCES, and emit with no preamble",
+        "lib/news-prompt.test.ts asserts the prompt contains the Phase-2 acceptance/understanding-gate instruction",
+        "Run `npm test -- news-prompt` - exits with code 0",
+        "Run `npm run typecheck` - exits with code 0"
+      ],
+      "priority": 12,
+      "passes": true,
+      "notes": "Implemented; unit tests + typecheck + lint green."
+    },
+    {
+      "id": "T-013",
+      "title": "Render breaking-suggestion cards in news UI",
+      "description": "In app/(chat)/news/[id]/page.tsx, render the data-breaking-suggestions part as tier-grouped cards with badges, headline, why-it-qualifies, linked sources, confidence label, block reference, and the empty state.",
+      "acceptanceCriteria": [
+        "app/(chat)/news/[id]/page.tsx renders the breaking-suggestions data part as cards grouped by tier with Can't-ignore/Update/Swap badges, linked sources, and a visible confidence label; provisional items are marked unconfirmed",
+        "Empty result renders a 'No breaking news clears the bar since [cutoff]' message",
+        "Conditional rendering uses ternaries, not `&&`",
+        "Run `npm run typecheck` - exits with code 0",
+        "Run `npm run lint` - exits with code 0"
+      ],
+      "priority": 13,
+      "passes": true,
+      "notes": "Implemented; unit tests + typecheck + lint green."
+    },
+    {
+      "id": "T-014",
+      "title": "Add scan trigger + per-card Accept affordance in news UI",
+      "description": "Add a 'Scan for breaking news' affordance available once a finalized script is present, and an Accept action on each suggestion card that sends the Phase-2 acceptance message for that story.",
+      "acceptanceCriteria": [
+        "A 'Scan for breaking news' control is present in the news chat UI after a finalized script is provided and triggers a message that invokes scanBreakingNews",
+        "Each suggestion card has an Accept control that sends an acceptance message identifying that specific story (triggering Phase 2) and does not itself mutate the script",
+        "Conditional rendering uses ternaries, not `&&`",
+        "Run `npm run typecheck` - exits with code 0",
+        "Run `npm run lint` - exits with code 0"
+      ],
+      "priority": 14,
+      "passes": true,
+      "notes": "Implemented; unit tests + typecheck + lint green."
+    },
+    {
+      "id": "T-015",
+      "title": "Browser-verify the two-phase flow end to end",
+      "description": "Run the app and verify Phase 1 surfaces cards without touching the script, and Phase 2 integrates only after accept + confirmation.",
+      "acceptanceCriteria": [
+        "Run `npm run dev` and agent-browser: open http://localhost:3000/news/<new-chat> - news chat loads without console errors",
+        "agent-browser: provide a fixture finalized script and trigger 'Scan for breaking news' - suggestion cards render grouped by tier (screenshot saved to tmp/breaking-scan-phase1.png)",
+        "agent-browser: confirm the uploaded script text is unchanged after the scan (Phase 1 makes no edits)",
+        "agent-browser: click Accept on one Swap card - the model responds with the 5-dimension understanding readback and does NOT yet edit the script",
+        "agent-browser: send a confirmation message - the model outputs the revised script/block with the new story integrated and SOURCES updated (screenshot saved to tmp/breaking-scan-phase2.png)",
+        "agent-browser: console - no errors logged during the flow"
+      ],
+      "priority": 15,
+      "passes": true,
+      "notes": "Live browser two-phase flow verified: scan cards render (Swap tier, sources+confidence), script untouched in Phase 1; Accept -> 5-dim readback (no edit); confirm -> C block swapped + SOURCES updated to 3. Screenshots in tmp/."
+    }
+  ]
+}

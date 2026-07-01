@@ -15,6 +15,8 @@ import { DEFAULT_MODEL_ID } from '@/lib/models';
 import { lookupCorpus } from '@/lib/retrieval';
 import { webSearch } from '@/lib/web-search';
 import { newsSystemPrompt, newsContextForDate, getNewsExamples } from '@/lib/news-prompt';
+import { extractSources } from '@/lib/news-script';
+import { runBreakingScan } from '@/lib/orchestrator/breaking-scan';
 import { ensureTable, getCached, setCached, cacheKey } from '@/lib/tool-cache';
 import { ensureEnglish } from '@/lib/translate';
 import {
@@ -319,130 +321,6 @@ function decodeDataUrl(url: string): string | null {
   }
 }
 
-// -- Source extraction -------------------------------------------------------
-
-type ExtractedSources = Array<{
-  num: number;
-  title: string;
-  url: string;
-  date?: string;
-  flags?: string;
-}>;
-
-function extractSources(text: string): { script: string; sources: ExtractedSources } {
-  // Find the SOURCES heading at the start of a line. Tolerate:
-  //   - any divider before it (---, ***, ___, or none),
-  //   - heading variants (SOURCES, Sources, "Sources:", "## Sources"),
-  //   - smart quotes / extra punctuation around the colon.
-  // A strict prior regex required `\n---\nSOURCES:\n` exactly and silently
-  // returned zero sources whenever the model drifted, persisting scripts
-  // with empty source lists.
-  const headingMatch = text.match(/(^|\n)[#\s>*]*sources\b[\s:．·.\-—]*\n/i);
-  if (!headingMatch || headingMatch.index === undefined) {
-    console.warn(
-      JSON.stringify({
-        event: 'news.extract_sources_format_not_found',
-        textLength: text.length,
-      })
-    );
-    return { script: text, sources: [] };
-  }
-
-  // Trim any trailing divider (---, ***, ___) or whitespace from the
-  // script body so it doesn't end with the separator.
-  const scriptEnd = headingMatch.index + (headingMatch[1] === '\n' ? 1 : 0);
-  const script = text
-    .slice(0, scriptEnd)
-    .replace(/\n[\s>*#]*[-*_]{3,}\s*$/, '')
-    .replace(/\s+$/, '');
-  const sourcesText = text.slice(headingMatch.index + headingMatch[0].length);
-  const sources: ExtractedSources = [];
-
-  // Parse lines like: "1. Title — URL — Date [FLAG: note]"
-  // Handles em-dashes in titles by identifying URLs and dates via pattern matching.
-  // Examples that now parse correctly:
-  // - "1. Reuters — Analysis — https://example.com — May 2026" (em-dash in title)
-  // - "2. BBC Report — https://bbc.com/news" (missing date)
-  // - "3. NYT: The Story — Full Text — https://nytimes.com [FLAG: blocked]" (complex title)
-  const lines = sourcesText.split('\n').filter((l) => l.trim());
-  let parseErrors = 0;
-  let parseMethod: 'strict' | 'smart' = 'strict';
-
-  for (const line of lines) {
-    // First, try strict parsing: number. Title — URL — optional(Date) optional([FLAG: ...])
-    // Require URL to start with http:// or https:// to avoid matching em-dashes in titles.
-    const strictMatch = line.match(
-      /^(\d+)\.\s+(.+?)\s+—\s+(https?:\/\/[^\s]+)(?:\s+—\s+(.+?))?(?:\s+\[FLAG:\s+(.+?)\])?$/
-    );
-    if (strictMatch) {
-      sources.push({
-        num: parseInt(strictMatch[1], 10),
-        title: strictMatch[2].trim(),
-        url: strictMatch[3].trim(),
-        date: strictMatch[4]?.trim(),
-        flags: strictMatch[5]?.trim(),
-      });
-      continue;
-    }
-
-    // Fallback: smart parsing that identifies URLs and dates by pattern.
-    // This handles em-dashes in titles by recognizing field types.
-    const numMatch = line.match(/^(\d+)\.\s+(.+)$/);
-    if (numMatch) {
-      const num = parseInt(numMatch[1], 10);
-      const rest = numMatch[2];
-      parseMethod = 'smart';
-
-      // Extract flag if present (always at the end: [FLAG: ...])
-      const flagMatch = rest.match(/\[FLAG:\s+(.+?)\]$/);
-      const flagText = flagMatch?.[1]?.trim();
-      const withoutFlag = flagMatch ? rest.slice(0, flagMatch.index).trim() : rest;
-
-      // Find URL: look for http:// or https:// followed by non-whitespace
-      const urlMatch = withoutFlag.match(/https?:\/\/[^\s]+/);
-      if (!urlMatch) {
-        parseErrors++;
-        continue;
-      }
-
-      const url = urlMatch[0];
-      const urlStartIndex = withoutFlag.indexOf(url);
-      const titlePart = withoutFlag.slice(0, urlStartIndex).trim();
-      const datePart = withoutFlag.slice(urlStartIndex + url.length).trim();
-
-      // Clean up title: remove trailing em-dash if present
-      const cleanTitle = titlePart.replace(/\s+—\s*$/, '').trim();
-
-      // Clean up date: remove leading em-dash if present
-      const cleanDate = datePart.replace(/^\s*—\s+/, '').trim() || undefined;
-
-      sources.push({
-        num,
-        title: cleanTitle,
-        url,
-        date: cleanDate,
-        flags: flagText,
-      });
-    } else {
-      parseErrors++;
-    }
-  }
-
-  if (parseErrors > 0) {
-    console.warn(
-      JSON.stringify({
-        event: 'news.extract_sources_parse_errors',
-        totalLines: lines.length,
-        parseErrors,
-        successfulParses: sources.length,
-        parseMethod,
-      })
-    );
-  }
-
-  return { script, sources };
-}
-
 // -- Route handler -----------------------------------------------------------
 
 export async function POST(req: Request) {
@@ -569,49 +447,84 @@ export async function POST(req: Request) {
   const messagesForModel = stripStaleToolOutputs(
     normalized.map((m) => ({
       ...m,
-      parts: m.parts?.filter((p) => p.type !== 'data-sources') ?? [],
+      // Drop UI-only data parts (sources + breaking-suggestions) from the
+      // history handed to the model.
+      parts:
+        m.parts?.filter(
+          (p) => p.type !== 'data-sources' && p.type !== 'data-breaking-suggestions',
+        ) ?? [],
     })),
   );
 
   const allMessages = [...contextMessages, ...messagesForModel];
-
-  const result = streamText({
-    model,
-    system: {
-      role: 'system',
-      content: baseSystemPrompt,
-      providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
-    },
-    messages: await convertToModelMessages(allMessages),
-    tools: {
-      fetchArticle: fetchArticleTool,
-      searchCorpus: createSearchCorpusTool(arkNewsDailyShowId),
-      webSearch: webSearchTool,
-    },
-    stopWhen: stepCountIs(8),
-    temperature,
-    // Propagate client disconnect / Stop into the provider call so the model
-    // stops generating instead of burning tokens to completion.
-    abortSignal: req.signal,
-    onFinish: ({ usage, finishReason, steps }) => {
-      const toolCalls = steps.flatMap((s) => s.toolCalls ?? []);
-      console.log(
-        JSON.stringify({
-          event: 'news.finish',
-          ms: Date.now() - started,
-          finishReason,
-          toolCalls: toolCalls.map((t) => t.toolName),
-          inputTokens: usage?.inputTokens,
-          outputTokens: usage?.outputTokens,
-          cachedInputTokens: usage?.cachedInputTokens,
-        }),
-      );
-    },
-  });
+  const modelMessages = await convertToModelMessages(allMessages);
+  const nowIso = new Date().toISOString();
 
   const stream = createUIMessageStream<NewsUIMessage>({
     originalMessages: messages as NewsUIMessage[],
     execute: ({ writer }) => {
+      // scanBreakingNews runs the deterministic breaking-scan pipeline (T-001…
+      // T-009) and streams its tiered suggestions to the client as a typed
+      // `data-breaking-suggestions` part, mirroring the data-sources pattern.
+      // It performs NO script edits — Phase 1 is suggestions-only.
+      const scanBreakingNewsTool = tool({
+        description:
+          "Scan the approved news outlets for breaking news that broke AFTER a finalized script was locked, and return ranked Swap / Update / Can't-ignore suggestions. Call this (and only this) when a finalized script is present and the writer asks to check for breaking news or more relevant stories. Do NOT edit or draft the script on this turn — present the suggestions and wait.",
+        inputSchema: z.object({
+          script: z.string().describe('The full finalized script text to scan against.'),
+          lockedAt: z
+            .string()
+            .optional()
+            .describe('ISO timestamp the script was locked; defaults to the request time.'),
+        }),
+        execute: async ({ script, lockedAt }) => {
+          const scan = await runBreakingScan({
+            script,
+            lockedAt,
+            today,
+            now: nowIso,
+            signal: req.signal,
+          });
+          writer.write({ type: 'data-breaking-suggestions', data: scan });
+          return scan;
+        },
+      });
+
+      const result = streamText({
+        model,
+        system: {
+          role: 'system',
+          content: baseSystemPrompt,
+          providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
+        },
+        messages: modelMessages,
+        tools: {
+          fetchArticle: fetchArticleTool,
+          searchCorpus: createSearchCorpusTool(arkNewsDailyShowId),
+          webSearch: webSearchTool,
+          scanBreakingNews: scanBreakingNewsTool,
+        },
+        stopWhen: stepCountIs(8),
+        temperature,
+        // Propagate client disconnect / Stop into the provider call so the
+        // model stops generating instead of burning tokens to completion.
+        abortSignal: req.signal,
+        onFinish: ({ usage, finishReason, steps }) => {
+          const toolCalls = steps.flatMap((s) => s.toolCalls ?? []);
+          console.log(
+            JSON.stringify({
+              event: 'news.finish',
+              ms: Date.now() - started,
+              finishReason,
+              toolCalls: toolCalls.map((t) => t.toolName),
+              inputTokens: usage?.inputTokens,
+              outputTokens: usage?.outputTokens,
+              cachedInputTokens: usage?.cachedInputTokens,
+            }),
+          );
+        },
+      });
+
       writer.merge(
         result.toUIMessageStream<NewsUIMessage>({
           sendSources: false,
@@ -639,6 +552,17 @@ export async function POST(req: Request) {
         ];
         if (sources.length > 0) {
           persistedParts.push({ type: 'data-sources', data: sources });
+        }
+
+        // Persist any breaking-scan suggestions emitted this turn so the cards
+        // survive a reload, consistent with the data-sources persistence above.
+        for (const part of responseMessage.parts ?? []) {
+          if (part.type === 'data-breaking-suggestions') {
+            persistedParts.push({
+              type: 'data-breaking-suggestions',
+              data: (part as { data: unknown }).data,
+            });
+          }
         }
 
         await persistAssistantMessage({

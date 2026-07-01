@@ -22,6 +22,7 @@ import {
   Copy,
   Pencil,
   ScrollText,
+  Radar,
 } from 'lucide-react';
 
 import { Header } from '@/components/Header';
@@ -31,7 +32,13 @@ import { ChatErrorBanner } from '@/components/ChatErrorBanner';
 import { EmptyState } from '@/components/EmptyState';
 import { MarkdownRenderer } from '@/components/MarkdownRenderer';
 import { KindBadge } from '@/components/ui/KindBadge';
-import type { NewsUIMessage, NewsSource } from '@/components/news-types';
+import type {
+  NewsUIMessage,
+  NewsSource,
+  ScanResult,
+  Suggestion,
+  Tier,
+} from '@/components/news-types';
 import { cn } from '@/lib/cn';
 import { chatFetch } from '@/lib/chat-fetch';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
@@ -282,6 +289,47 @@ function NewsBody({
     resetCopySuccess();
   };
 
+  // A finalized script is "present" once the conversation carries block-marked
+  // script text (pasted or generated) or an uploaded file the writer may have
+  // dropped in. Gates the "Scan for breaking news" affordance.
+  const hasFinalizedScript = useMemo(
+    () =>
+      messages.some((m) =>
+        (m.parts ?? []).some(
+          (p) =>
+            (p.type === 'text' && /\[[A-D]\s+BLOCK\]/i.test(p.text)) || p.type === 'file',
+        ),
+      ),
+    [messages],
+  );
+
+  // Phase 1: ask the model to run scanBreakingNews against the finalized script
+  // already in context. Explicitly suggestions-only — no edits on this turn.
+  const triggerScan = () => {
+    submit(
+      'Scan for breaking news that may have broken since I locked this finalized script. ' +
+        'Call scanBreakingNews and show me the Swap / Update / Can\'t-ignore suggestions. ' +
+        'Do not edit or redraft the script on this turn.',
+    );
+  };
+
+  // Phase 2: accept one suggestion. Sends an acceptance message that identifies
+  // the specific story; it does NOT itself mutate the script — the model runs
+  // the understanding gate first and integrates only after confirmation.
+  const acceptSuggestion = (s: Suggestion) => {
+    const integration =
+      s.tier === 'Update' && s.block
+        ? `revise the ${s.block} block`
+        : s.block
+          ? `swap it into the ${s.block} block`
+          : 'integrate it';
+    submit(
+      `I accept the ${s.tier} suggestion: "${s.headline}". ` +
+        `Run the Phase-2 five-dimension understanding gate for this story only, and after I confirm, ${integration}. ` +
+        'Do not touch the rest of the script.',
+    );
+  };
+
   const extractScriptText = useCallback(() => {
     const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
     if (!lastAssistantMsg) return null;
@@ -387,6 +435,8 @@ function NewsBody({
                 sources={allSources}
                 onEdit={handleEdit}
                 isEditing={editingMessageId === m.id}
+                onAccept={acceptSuggestion}
+                busy={busy}
               />
             ))}
 
@@ -545,6 +595,25 @@ function NewsBody({
         {showUndoToast ? (
           <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-blue-900/90 backdrop-blur text-blue-100 px-4 py-2.5 rounded-lg text-sm border border-blue-500/20 animate-in fade-in slide-in-from-bottom-2 duration-300 z-50">
             ✓ Message updated
+          </div>
+        ) : null}
+
+        {/* Scan-for-breaking-news trigger (Phase 1) — available once a
+            finalized script is present in the conversation. */}
+        {hasFinalizedScript && !busy ? (
+          <div className="border-t border-overlay/10 px-6 py-2.5">
+            <button
+              type="button"
+              onClick={triggerScan}
+              className={cn(
+                'inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm',
+                'bg-amber-500/15 text-amber-200 transition hover:bg-amber-500/25',
+              )}
+              title="Scan approved outlets for breaking news since this script was locked"
+            >
+              <Radar className="h-4 w-4" />
+              Scan for breaking news
+            </button>
           </div>
         ) : null}
 
@@ -714,12 +783,16 @@ function MessageRow({
   sources,
   onEdit,
   isEditing,
+  onAccept,
+  busy,
 }: {
   message: NewsUIMessage;
   onSourceClick: (source: NewsSource) => void;
   sources: NewsSource[];
   onEdit?: (message: NewsUIMessage) => void;
   isEditing?: boolean;
+  onAccept: (s: Suggestion) => void;
+  busy: boolean;
 }) {
   if (message.role === 'user') {
     const textParts = message.parts?.filter((p) => p.type === 'text') ?? [];
@@ -774,7 +847,13 @@ function MessageRow({
   return (
     <div className="ark-fade-up flex justify-start">
       <div className="max-w-[90%] rounded-2xl rounded-bl-md bg-overlay/[0.04] px-4 py-3 text-fg">
-        <MessageContent message={message} onSourceClick={onSourceClick} sources={sources} />
+        <MessageContent
+          message={message}
+          onSourceClick={onSourceClick}
+          sources={sources}
+          onAccept={onAccept}
+          busy={busy}
+        />
       </div>
     </div>
   );
@@ -784,14 +863,21 @@ function MessageContent({
   message,
   onSourceClick,
   sources,
+  onAccept,
+  busy,
 }: {
   message: NewsUIMessage;
   onSourceClick: (source: NewsSource) => void;
   sources: NewsSource[];
+  onAccept: (s: Suggestion) => void;
+  busy: boolean;
 }) {
   return message.parts?.map((part, i) => {
     if (part.type === 'text') {
       return <NewsMarkdown key={i} text={part.text} onSourceClick={onSourceClick} sources={sources} />;
+    }
+    if (part.type === 'data-breaking-suggestions') {
+      return <BreakingSuggestions key={i} data={part.data} onAccept={onAccept} busy={busy} />;
     }
     if (part.type === 'tool-fetchArticle') {
       const state = (part as { state?: string }).state;
@@ -832,6 +918,153 @@ function ToolCallChip({ name, status }: { name: string; status: 'in-flight' | 'd
       {status === 'in-flight' ? <Loader2 className="mr-1 inline h-3 w-3 animate-spin" /> : null}
       {name}
     </span>
+  );
+}
+
+/* Breaking-news scan (Phase 1) suggestion cards */
+
+const TIER_ORDER: Tier[] = ["Can't-ignore", 'Update', 'Swap'];
+
+const TIER_STYLES: Record<Tier, string> = {
+  "Can't-ignore": 'bg-rose-500/20 text-rose-200',
+  Update: 'bg-amber-500/20 text-amber-200',
+  Swap: 'bg-sky-500/20 text-sky-200',
+};
+
+function formatCutoff(cutoff: string): string {
+  const d = new Date(cutoff);
+  if (Number.isNaN(d.getTime())) return cutoff;
+  return d.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function BreakingSuggestions({
+  data,
+  onAccept,
+  busy,
+}: {
+  data: ScanResult;
+  onAccept: (s: Suggestion) => void;
+  busy: boolean;
+}) {
+  const cutoffLabel = formatCutoff(data.cutoff);
+
+  if (data.suggestions.length === 0) {
+    return (
+      <div className="my-2 rounded-xl border border-overlay/10 bg-overlay/[0.03] px-4 py-3 text-sm text-fg/70">
+        No breaking news clears the bar since {cutoffLabel}.
+      </div>
+    );
+  }
+
+  const groups = TIER_ORDER.map((tier) => ({
+    tier,
+    items: data.suggestions.filter((s) => s.tier === tier),
+  })).filter((g) => g.items.length > 0);
+
+  return (
+    <div className="my-2 flex flex-col gap-4">
+      <div className="text-xs uppercase tracking-[0.2em] text-fg/40">
+        Breaking-news scan · since {cutoffLabel}
+      </div>
+      {groups.map((group) => (
+        <div key={group.tier} className="flex flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <span
+              className={cn(
+                'rounded-full px-2.5 py-0.5 text-[0.72rem] font-semibold uppercase tracking-wide',
+                TIER_STYLES[group.tier],
+              )}
+            >
+              {group.tier}
+            </span>
+            <span className="text-[0.72rem] text-fg/40">
+              {group.items.length} {group.items.length === 1 ? 'story' : 'stories'}
+            </span>
+          </div>
+          {group.items.map((s, i) => (
+            <SuggestionCard key={i} s={s} onAccept={onAccept} busy={busy} />
+          ))}
+        </div>
+      ))}
+      {data.suppressedCount > 0 ? (
+        <div className="text-[0.75rem] text-fg/40">
+          +{data.suppressedCount} more below the cap were suppressed.
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SuggestionCard({
+  s,
+  onAccept,
+  busy,
+}: {
+  s: Suggestion;
+  onAccept: (s: Suggestion) => void;
+  busy: boolean;
+}) {
+  const blockLabel = s.block
+    ? s.tier === 'Update'
+      ? `Updates the ${s.block} block`
+      : `Would replace the ${s.block} block`
+    : null;
+
+  return (
+    <div className="rounded-xl border border-overlay/10 bg-overlay/[0.04] px-4 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="font-display text-[0.98rem] font-semibold leading-snug text-fg">
+            {s.headline}
+          </div>
+          <div className="mt-1 text-[0.85rem] leading-relaxed text-fg/70">{s.whyItQualifies}</div>
+        </div>
+        {s.flaggedUnconfirmed ? (
+          <span className="shrink-0 rounded-md bg-amber-400/15 px-2 py-0.5 text-[0.7rem] font-medium text-amber-200">
+            Unconfirmed · single source
+          </span>
+        ) : (
+          <span className="shrink-0 rounded-md bg-emerald-400/15 px-2 py-0.5 text-[0.7rem] font-medium text-emerald-200">
+            {s.confidence === 'confirmed' ? 'Confirmed' : 'Provisional'}
+          </span>
+        )}
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.78rem]">
+        {blockLabel ? <span className="text-fg/50">{blockLabel}</span> : null}
+        {s.sources.map((src, i) => (
+          <a
+            key={i}
+            href={src.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="max-w-[240px] truncate text-cyan-400 underline transition hover:text-cyan-300"
+          >
+            {src.handle ?? src.title}
+          </a>
+        ))}
+      </div>
+
+      <div className="mt-3">
+        <button
+          type="button"
+          onClick={() => onAccept(s)}
+          disabled={busy}
+          className={cn(
+            'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[0.8rem] font-medium',
+            'bg-overlay/10 text-fg/80 transition hover:bg-overlay/20 hover:text-fg',
+            'disabled:cursor-not-allowed disabled:opacity-50',
+          )}
+        >
+          Accept
+        </button>
+      </div>
+    </div>
   );
 }
 
