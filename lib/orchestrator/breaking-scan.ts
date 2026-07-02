@@ -17,6 +17,7 @@ import {
   discoverCandidates,
   discoverXPosts,
   extractCandidates,
+  searchRecentApproved,
   substitutePaywallMirrors,
 } from './source-gathering';
 import { discoverRssCandidates } from './rss';
@@ -196,35 +197,133 @@ export function filterByCutoff<T extends { publicationDate: string | null }>(
   return out;
 }
 
+// -- Per-story follow-up discovery -------------------------------------------
+// General beat discovery only catches a development to an in-script story if it
+// happens to surface one. This closes that gap: it turns each block of the
+// locked script into a targeted news-search query and searches the approved
+// outlets for fresh developments on THAT story, so an update to a story the
+// writer is already running reliably reaches Gate 2 (which still decides UPDATE
+// vs DUPLICATE — the materiality bar is unchanged).
+
+export type FollowupQuery = { block: string; query: string };
+
+export const followupQuerySchema = z.object({
+  queries: z.array(
+    z.object({
+      block: z.string().describe('The block label this query targets (A/B/C/D)'),
+      query: z
+        .string()
+        .describe('A short news-search query (key actors + core event) to find the latest on this block\'s story'),
+    }),
+  ),
+});
+
+// How far back the follow-up search reaches. The scan cutoff is same-day (≤12h),
+// but 2 days covers a late-yesterday lock and Tavily's day-granular `days` param.
+const FOLLOWUP_DAYS = 2;
+const FOLLOWUP_RESULTS_PER_QUERY = 6;
+
+const FOLLOWUP_SYSTEM = `You turn each block of a finalized news script (Ark News Daily — Israel, Jews, the Middle East) into a concise news-search query that will surface the LATEST developments on that same story.
+
+For each block, output the key actors + the core event in 3–8 words — the kind of query a wire-service search understands (e.g. "Gaza ceasefire", "Khamenei funeral Iran", "IDF southern Lebanon strike", "Israel judicial reform vote"). Do NOT add editorial or opinion words, and do NOT invent facts beyond the block. Skip a block only if it carries no identifiable news story (pure boilerplate or an evergreen segment). Return one query per block that has a story.`;
+
+// Ask a cheap model for one search query per script block. Returns [] for an
+// empty script. The queries drive searchRecentApproved below.
+export async function extractFollowupQueries(
+  coverage: ScriptCoverage,
+  signal?: AbortSignal,
+): Promise<FollowupQuery[]> {
+  if (coverage.blocks.length === 0) return [];
+  const numbered = coverage.blocks
+    .map((b) => `[${b.label} BLOCK] ${b.text.replace(/\s+/g, ' ').trim().slice(0, 300)}`)
+    .join('\n');
+  const { object } = await generateObject({
+    model: GATE0_MODEL,
+    schema: followupQuerySchema,
+    system: FOLLOWUP_SYSTEM,
+    prompt: `Script blocks:\n${numbered}\n\nReturn one search query per block that has an identifiable news story.`,
+    providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
+    abortSignal: signal,
+  });
+  return object.queries;
+}
+
+// The follow-up sub-pipeline's injectable seams, so it can be tested without a
+// live model or network. Production uses the real query extractor + search.
+export type FollowupDeps = {
+  extractQueries: (coverage: ScriptCoverage, signal?: AbortSignal) => Promise<FollowupQuery[]>;
+  search: (query: string, signal?: AbortSignal) => Promise<Candidate[]>;
+};
+
+const defaultFollowupDeps: FollowupDeps = {
+  extractQueries: extractFollowupQueries,
+  search: (query, signal) =>
+    searchRecentApproved(query, { days: FOLLOWUP_DAYS, maxResults: FOLLOWUP_RESULTS_PER_QUERY, signal }),
+};
+
+// Search the approved outlets for fresh developments on each in-script story.
+// Returns deduped, approved, cutoff-filtered Candidates; the caller folds these
+// into the main discovery pool, where they go through the same mirror/extract/
+// gate path as beat candidates. Each per-query search is best-effort — one
+// failing query shouldn't sink the rest.
+export async function discoverScriptFollowups(
+  opts: { coverage: ScriptCoverage; cutoff: string; signal?: AbortSignal },
+  deps: FollowupDeps = defaultFollowupDeps,
+): Promise<Candidate[]> {
+  const queries = await deps.extractQueries(opts.coverage, opts.signal);
+  if (queries.length === 0) return [];
+
+  const perQuery = await Promise.all(
+    queries.map((q) => deps.search(q.query, opts.signal).catch(() => [] as Candidate[])),
+  );
+
+  const seen = new Set<string>();
+  const merged: Candidate[] = [];
+  for (const c of perQuery.flat()) {
+    if (seen.has(c.url) || !isApprovedSource(c.url)) continue;
+    seen.add(c.url);
+    merged.push(c);
+  }
+  return filterByCutoff(merged, opts.cutoff);
+}
+
 // Discover post-lock candidates for a scan. Reuses the orchestrator discovery
 // stack — `discoverCandidates` (Tavily beat queries, already approval-filtered
-// and paywall-mirrored) plus `discoverXPosts` (the curated handles) — swaps any
-// residual hard-paywall URLs via `substitutePaywallMirrors`, filters to the
-// cutoff, then verifies + extracts survivors with `extractCandidates` (which
-// runs `verifyOrRecover` under the hood). Returns approved-source candidates
-// only, with X handles preserved and undated stories flagged.
+// and paywall-mirrored) plus `discoverXPosts` (the curated handles) plus
+// `discoverScriptFollowups` (targeted searches for developments to the script's
+// own stories) — swaps any residual hard-paywall URLs via
+// `substitutePaywallMirrors`, filters to the cutoff, then verifies + extracts
+// survivors with `extractCandidates` (which runs `verifyOrRecover` under the
+// hood). RSS items are appended after extraction (they already carry real URLs
+// and precise timestamps). Returns approved-source candidates only, with X
+// handles preserved and undated stories flagged.
 export async function discoverBreakingCandidates(opts: {
   today: string;
   cutoff: string;
+  coverage: ScriptCoverage;
   signal?: AbortSignal;
 }): Promise<BreakingCandidate[]> {
-  const { today, cutoff, signal } = opts;
+  const { today, cutoff, coverage, signal } = opts;
 
-  const [beat, xPosts, rss] = await Promise.all([
+  const [beat, xPosts, rss, followups] = await Promise.all([
     discoverCandidates(today, '', signal),
     // X discovery is best-effort — a grounded-Gemini outage shouldn't sink the
     // whole scan, which still has the beat outlets.
     discoverXPosts(today, signal).catch(() => [] as Candidate[]),
     // RSS discovery is best-effort too — a feed outage shouldn't sink the scan.
     discoverRssCandidates({ signal }).catch(() => [] as Candidate[]),
+    // Per-story follow-up discovery is best-effort as well.
+    discoverScriptFollowups({ coverage, cutoff, signal }).catch(() => [] as Candidate[]),
   ]);
 
   // Merge + dedupe by URL, remembering which URLs came from an X handle so the
   // handle survives extraction (extractCandidates returns bare Articles).
+  // Follow-up candidates join the beat pool so they get the same paywall-mirror
+  // + extraction (refined dates) + gate treatment.
   const seen = new Set<string>();
   const merged: Candidate[] = [];
   const handleByUrl = new Map<string, string>();
-  for (const c of [...beat, ...xPosts]) {
+  for (const c of [...beat, ...xPosts, ...followups]) {
     if (seen.has(c.url)) continue;
     seen.add(c.url);
     merged.push(c);
@@ -620,6 +719,18 @@ export type ScanResult = {
   cutoff: string;
 };
 
+// Stage events emitted as the pipeline runs, so the UI can surface live progress
+// instead of dead air across the ~15–40s discovery + three-gate sequence. Each
+// stage reports how many candidates survived it; 'grading' has no count (Gate 3
+// is in flight) and 'done' reports the final suggestion count.
+export type ScanProgress =
+  | { stage: 'discovering' }
+  | { stage: 'discovered'; count: number }
+  | { stage: 'exclusion'; count: number }
+  | { stage: 'novelty'; count: number }
+  | { stage: 'grading' }
+  | { stage: 'done'; count: number };
+
 // The C block is the shortest, softest close and is the weakest by design — the
 // natural slot a Swap candidate would displace. (v1 heuristic; the writer can
 // override which block they consider most droppable in a later version.)
@@ -719,7 +830,12 @@ export function routeTiers(gradedCandidates: BreakingCandidate[], cutoff: string
 // end-to-end with stubs, no live model or network calls. Production uses the
 // real implementations.
 export type BreakingScanDeps = {
-  discover: (opts: { today: string; cutoff: string; signal?: AbortSignal }) => Promise<BreakingCandidate[]>;
+  discover: (opts: {
+    today: string;
+    cutoff: string;
+    coverage: ScriptCoverage;
+    signal?: AbortSignal;
+  }) => Promise<BreakingCandidate[]>;
   classifyExclusions: (candidates: BreakingCandidate[], signal?: AbortSignal) => Promise<BreakingCandidate[]>;
   classifyNovelty: (
     candidates: BreakingCandidate[],
@@ -737,26 +853,41 @@ const defaultDeps: BreakingScanDeps = {
 };
 
 export async function runBreakingScan(
-  opts: { script: string; lockedAt?: string; today: string; now: string; signal?: AbortSignal },
+  opts: {
+    script: string;
+    lockedAt?: string;
+    today: string;
+    now: string;
+    signal?: AbortSignal;
+    onProgress?: (ev: ScanProgress) => void;
+  },
   deps: BreakingScanDeps = defaultDeps,
 ): Promise<ScanResult> {
   const { script, lockedAt, today, now, signal } = opts;
+  const emit = opts.onProgress ?? (() => {});
 
   const coverage = parseScriptCoverage(script);
   const cutoff = resolveCutoff({ lockedAt, now });
 
-  const discovered = await deps.discover({ today, cutoff, signal });
+  emit({ stage: 'discovering' });
+  const discovered = await deps.discover({ today, cutoff, coverage, signal });
+  emit({ stage: 'discovered', count: discovered.length });
 
   // Gate 0: hard-exclusion. Excluded candidates are dropped before any later
   // gate sees them.
   const kept = dropExcluded(await deps.classifyExclusions(discovered, signal));
+  emit({ stage: 'exclusion', count: kept.length });
 
   // Gate 2: novelty vs. coverage. DUPLICATEs are dropped and never surfaced.
   const novel = dropDuplicates(await deps.classifyNovelty(kept, coverage, signal));
+  emit({ stage: 'novelty', count: novel.length });
 
   // Gate 3: significance + corroboration.
+  emit({ stage: 'grading' });
   const graded = await deps.gradeSignificance(novel, signal);
 
   // Tier routing echoes the resolved cutoff back in the result.
-  return routeTiers(graded, cutoff);
+  const result = routeTiers(graded, cutoff);
+  emit({ stage: 'done', count: result.suggestions.length });
+  return result;
 }

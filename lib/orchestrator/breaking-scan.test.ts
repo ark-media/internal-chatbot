@@ -13,7 +13,9 @@ import {
   exclusionSchema,
   filterByCutoff,
   resolveCutoff,
+  discoverScriptFollowups,
   type BreakingCandidate,
+  type ScanProgress,
 } from './breaking-scan';
 
 // A small candidate factory for gate tests.
@@ -332,6 +334,63 @@ describe('T-008: tier routing', () => {
   });
 });
 
+describe('discoverScriptFollowups', () => {
+  const coverage = { blocks: [{ label: 'A', text: 'A Gaza ceasefire is holding.' }], sources: [] };
+  const CUTOFF = '2026-06-30T20:15:00.000Z';
+
+  it('searches each query and merges approved, deduped, post-cutoff candidates', async () => {
+    const out = await discoverScriptFollowups(
+      { coverage, cutoff: CUTOFF },
+      {
+        extractQueries: async () => [
+          { block: 'A', query: 'Gaza ceasefire' },
+          { block: 'B', query: 'Khamenei funeral' },
+        ],
+        search: async (q) =>
+          q === 'Gaza ceasefire'
+            ? [
+                { title: 'Ceasefire collapses', url: 'https://reuters.com/ceasefire', source: 'Reuters', publicationDate: '2026-07-01' },
+                { title: 'dup url', url: 'https://reuters.com/ceasefire', source: 'Reuters', publicationDate: '2026-07-01' },
+                { title: 'old story', url: 'https://reuters.com/old', source: 'Reuters', publicationDate: '2026-06-01' },
+                { title: 'off-list', url: 'https://example.com/x', source: 'example', publicationDate: '2026-07-01' },
+              ]
+            : [{ title: 'Funeral latest', url: 'https://jpost.com/funeral', source: 'JPost', publicationDate: '2026-07-01' }],
+      },
+    );
+    // Dedup collapses the repeated URL, the pre-cutoff story and the off-list
+    // domain are dropped, leaving one survivor per query.
+    expect(out.map((c) => c.url).sort()).toEqual([
+      'https://jpost.com/funeral',
+      'https://reuters.com/ceasefire',
+    ]);
+  });
+
+  it('returns [] when the script has no blocks (no queries to run)', async () => {
+    const out = await discoverScriptFollowups(
+      { coverage: { blocks: [], sources: [] }, cutoff: CUTOFF },
+      { extractQueries: async () => [], search: async () => [] },
+    );
+    expect(out).toEqual([]);
+  });
+
+  it('survives a failing per-query search', async () => {
+    const out = await discoverScriptFollowups(
+      { coverage, cutoff: CUTOFF },
+      {
+        extractQueries: async () => [
+          { block: 'A', query: 'boom' },
+          { block: 'B', query: 'ok' },
+        ],
+        search: async (q) => {
+          if (q === 'boom') throw new Error('search 500');
+          return [{ title: 'ok', url: 'https://reuters.com/ok', source: 'Reuters', publicationDate: '2026-07-01' }];
+        },
+      },
+    );
+    expect(out.map((c) => c.url)).toEqual(['https://reuters.com/ok']);
+  });
+});
+
 describe('T-009: runBreakingScan pipeline', () => {
   const SCRIPT = `[A BLOCK]
 HOST:
@@ -404,5 +463,45 @@ SOURCES:
     );
     expect(result.cutoff).toBe('2026-06-30T20:15:00.000Z');
     expect(result.suggestions).toEqual([]);
+  });
+
+  it('emits stage progress in pipeline order with survivor counts', async () => {
+    const events: ScanProgress[] = [];
+    await runBreakingScan(
+      {
+        script: SCRIPT,
+        today: '2026-06-30',
+        now: '2026-06-30T22:00:00.000Z',
+        onProgress: (ev) => events.push(ev),
+      },
+      {
+        discover: async () => [
+          cand({ title: 'a', url: 'https://reuters.com/a' }),
+          cand({ title: 'b', url: 'https://reuters.com/b' }),
+        ],
+        // Drop one at exclusion, keep the rest through to a single NEW suggestion.
+        classifyExclusions: async (cs) =>
+          cs.map((c, i) => ({ ...c, excluded: i === 0 })),
+        classifyNovelty: async (cs) => cs.map((c) => ({ ...c, novelty: 'NEW' as const })),
+        gradeSignificance: async (cs) =>
+          cs.map((c) => ({
+            ...c,
+            onBeat: true,
+            confidence: 'confirmed' as const,
+            significance: 'high' as const,
+            globalShock: false,
+            corroboration: { independentSources: 2, primarySource: 'Reuters' },
+          })),
+      },
+    );
+
+    expect(events).toEqual([
+      { stage: 'discovering' },
+      { stage: 'discovered', count: 2 },
+      { stage: 'exclusion', count: 1 },
+      { stage: 'novelty', count: 1 },
+      { stage: 'grading' },
+      { stage: 'done', count: 1 },
+    ]);
   });
 });

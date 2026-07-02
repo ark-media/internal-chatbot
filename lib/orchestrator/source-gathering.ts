@@ -787,6 +787,23 @@ export async function keywordSearch(
   return tavilySearch({ query, maxResults: 12, signal });
 }
 
+// Recency-scoped approved-outlet search. Like keywordSearch but bounded to the
+// last `days`, so results skew to fresh developments rather than the most
+// relevant all-time coverage. Used by the breaking scan's per-story follow-up
+// discovery, where the point is "what's the latest on this story", not a general
+// lookup.
+export async function searchRecentApproved(
+  query: string,
+  opts: { days: number; maxResults?: number; signal?: AbortSignal },
+): Promise<Candidate[]> {
+  return tavilySearch({
+    query,
+    maxResults: opts.maxResults ?? 6,
+    days: opts.days,
+    signal: opts.signal,
+  });
+}
+
 // Discover → approval-filter → dedupe/cap. No URL verification, no Tavily
 // extraction — this is the raw candidate pool the writer triages. Verification
 // and extraction are deferred to `extractCandidates`, run later on only the

@@ -35,7 +35,7 @@ import {
   persistIncomingMessages,
   deleteMessageAndSubsequent,
 } from '@/lib/chats';
-import type { NewsUIMessage } from '@/components/news-types';
+import type { NewsUIMessage, ScanProgressSnapshot } from '@/components/news-types';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -451,7 +451,10 @@ export async function POST(req: Request) {
       // history handed to the model.
       parts:
         m.parts?.filter(
-          (p) => p.type !== 'data-sources' && p.type !== 'data-breaking-suggestions',
+          (p) =>
+            p.type !== 'data-sources' &&
+            p.type !== 'data-breaking-suggestions' &&
+            p.type !== 'data-breaking-progress',
         ) ?? [],
     })),
   );
@@ -478,12 +481,35 @@ export async function POST(req: Request) {
             .describe('ISO timestamp the script was locked; defaults to the request time.'),
         }),
         execute: async ({ script, lockedAt }) => {
+          // Accumulate stage events into one snapshot and stream it as a single
+          // id-reconciled part (same id → the client updates it in place), so
+          // the writer sees a live checklist instead of dead air while discovery
+          // + the three gates run. It's not transient — it lives in message.parts
+          // for the live view — but the persistence block below copies parts
+          // explicitly and skips it, so it vanishes on reload, leaving just the
+          // suggestion cards.
+          const progress: ScanProgressSnapshot = {};
           const scan = await runBreakingScan({
             script,
             lockedAt,
             today,
             now: nowIso,
             signal: req.signal,
+            onProgress: (ev) => {
+              switch (ev.stage) {
+                case 'discovering': progress.started = true; break;
+                case 'discovered': progress.discovered = ev.count; break;
+                case 'exclusion': progress.afterExclusion = ev.count; break;
+                case 'novelty': progress.afterNovelty = ev.count; break;
+                case 'grading': progress.grading = true; break;
+                case 'done': progress.suggestions = ev.count; break;
+              }
+              writer.write({
+                type: 'data-breaking-progress',
+                id: 'scan-progress',
+                data: { ...progress },
+              });
+            },
           });
           writer.write({ type: 'data-breaking-suggestions', data: scan });
           return scan;

@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type ReactNode,
 } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
@@ -36,6 +37,7 @@ import type {
   NewsUIMessage,
   NewsSource,
   ScanResult,
+  ScanProgressSnapshot,
   Suggestion,
   Tier,
 } from '@/components/news-types';
@@ -907,6 +909,9 @@ function MessageContent({
     if (part.type === 'text') {
       return <NewsMarkdown key={i} text={part.text} onSourceClick={onSourceClick} sources={sources} />;
     }
+    if (part.type === 'data-breaking-progress') {
+      return <BreakingProgress key={i} data={part.data} />;
+    }
     if (part.type === 'data-breaking-suggestions') {
       return <BreakingSuggestions key={i} data={part.data} onAccept={onAccept} busy={busy} />;
     }
@@ -950,6 +955,61 @@ function ToolCallChip({ name, status }: { name: string; status: 'in-flight' | 'd
       {name}
     </span>
   );
+}
+
+/* Breaking-news scan (Phase 1) live progress checklist */
+
+// Ordered stages of the scan pipeline, mapped to the accumulated snapshot. Each
+// completed stage renders as a checked line; the first not-yet-complete stage
+// renders as the active (spinner) line, and later stages stay hidden until
+// reached — so the checklist grows as the pipeline advances.
+function BreakingProgress({ data }: { data: ScanProgressSnapshot }) {
+  const steps: Array<{ done: boolean; text: string; pending: string }> = [
+    {
+      done: data.discovered !== undefined,
+      text: `${data.discovered} ${data.discovered === 1 ? 'story' : 'stories'} found since the lock`,
+      pending: 'Scanning approved outlets…',
+    },
+    {
+      done: data.afterExclusion !== undefined,
+      text: `${data.afterExclusion} clear the first filter`,
+      pending: 'Filtering out routine coverage…',
+    },
+    {
+      done: data.afterNovelty !== undefined,
+      text: `${data.afterNovelty} new or updated vs. your script`,
+      pending: 'Comparing against your script…',
+    },
+    {
+      done: data.suggestions !== undefined,
+      text: `${data.suggestions} ${data.suggestions === 1 ? 'suggestion' : 'suggestions'}`,
+      pending: 'Grading significance…',
+    },
+  ];
+
+  const lines: ReactNode[] = [];
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i];
+    if (s.done) {
+      lines.push(
+        <div key={i} className="flex items-center gap-2 text-fg/45">
+          <CheckCircle2 className="h-3 w-3 shrink-0 text-green-400/70" />
+          <span>{s.text}</span>
+        </div>,
+      );
+    } else {
+      // First incomplete step is the active frontier; stop after it.
+      lines.push(
+        <div key={i} className="flex items-center gap-2 text-fg/60">
+          <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+          <span>{s.pending}</span>
+        </div>,
+      );
+      break;
+    }
+  }
+
+  return <div className="flex flex-col gap-1.5 pl-12 text-xs tracking-wide">{lines}</div>;
 }
 
 /* Breaking-news scan (Phase 1) suggestion cards */
