@@ -297,7 +297,9 @@ function NewsBody({
       messages.some((m) =>
         (m.parts ?? []).some(
           (p) =>
-            (p.type === 'text' && /\[[A-D]\s+BLOCK\]/i.test(p.text)) || p.type === 'file',
+            (p.type === 'text' &&
+              /(?:^|\n)[ \t>*#]*\[?[ \t]*[A-D][ \t]+BLOCK\b/i.test(p.text)) ||
+            p.type === 'file',
         ),
       ),
     [messages],

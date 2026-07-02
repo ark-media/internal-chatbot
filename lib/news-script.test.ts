@@ -74,6 +74,39 @@ Another block.`;
     const { blocks } = parseScriptCoverage('Just some prose with no markers.');
     expect(blocks).toEqual([]);
   });
+
+  it('parses bare (unbracketed) A/B/C block headers from a pasted script', () => {
+    // Externally-authored finalized scripts use bare headers and inline
+    // superscript footnotes rather than the tool's own `[A BLOCK]` + SOURCES form.
+    const bareScript = `It's Thursday, July 2nd.
+I'm Deborah Pardes and this is Ark News Daily.
+
+A BLOCK
+Today marks 1,000 days since October 7th¹.
+
+B BLOCK
+A Democratic Socialist knocked off a 15-term incumbent².
+
+C BLOCK
+The creators of Fauda are issuing a warning to viewers³.
+
+I'm Deborah Pardes, and this is Ark News Daily`;
+    const { blocks, sources } = parseScriptCoverage(bareScript);
+    expect(blocks.map((b) => b.label)).toEqual(['A', 'B', 'C']);
+    expect(blocks[0].text).toContain('1,000 days');
+    expect(blocks[2].text).toContain('Fauda');
+    // No SOURCES list — footnotes are not parsed, so sources is empty.
+    expect(sources).toEqual([]);
+    // The intro is not mistaken for a block despite the "A" in the outro.
+    expect(blocks[0].text).not.toContain('this is Ark News Daily');
+  });
+
+  it('does not match prose that merely contains the word "block"', () => {
+    const prose = `HOST intro line here.
+Officials met to discuss the blockade today.
+We covered a lot on the blocks this week.`;
+    expect(parseScriptCoverage(prose).blocks).toEqual([]);
+  });
 });
 
 describe('extractSources (via shared module)', () => {

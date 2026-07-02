@@ -21,9 +21,13 @@ export type ScriptBlock = { label: string; text: string };
 // already cites.
 export type ScriptCoverage = { blocks: ScriptBlock[]; sources: ExtractedSources };
 
-// Matches a `[A BLOCK]` / `[C block]` structural marker and captures the label
-// letter. Tolerant of casing and interior spacing.
-const BLOCK_MARKER = /\[\s*([A-Za-z])\s+BLOCK\s*\]/gi;
+// Matches an `[A BLOCK]` / `[C block]` / bare `A BLOCK` structural marker at the
+// start of a line and captures the label letter. The tool's own drafts bracket
+// the markers, but writers also paste externally-authored finalized scripts that
+// use bare headers, so the brackets are optional. Anchored to a line start (after
+// optional markdown/quote prefixes) and requiring a word boundary after BLOCK so
+// prose like "on the blocks today" or "a blockade" never matches.
+const BLOCK_MARKER = /(?:^|\n)[ \t>*#]*\[?[ \t]*([A-Za-z])[ \t]+BLOCK\b[ \t]*\]?/gi;
 
 // Strip the recurring sign-off boilerplate ("I'm Deborah Pardes, and this is
 // Ark News Daily.") and any trailing divider from the tail of a block so the

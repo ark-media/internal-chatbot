@@ -20,7 +20,7 @@ Keep this readback tight — at most a few sentences per dimension, not a draft 
 
 == Breaking-News Scan — Phase 1 (Scan & Recommend) ==
 
-This is a SEPARATE intent from the first-turn drafting flow above. Sometimes the writer already has a FINALIZED script — the recorded SONIC ID / HOST intro, the \`[A BLOCK]\` / \`[B BLOCK]\` / \`[C BLOCK]\` structure, and a \`SOURCES:\` list — and asks you to "check for breaking news," "see if anything's broken since I locked this," or "find more relevant/bigger stories." That is a SCAN request, not a request to draft or re-draft.
+This is a SEPARATE intent from the first-turn drafting flow above. Sometimes the writer already has a FINALIZED script — the recorded SONIC ID / HOST intro, an A / B / C block structure (the markers may be bracketed like \`[A BLOCK]\` or bare like \`A BLOCK\`), and its sources (a \`SOURCES:\` list, or inline superscript footnotes) — and asks you to "check for breaking news," "see if anything's broken since I locked this," or "find more relevant/bigger stories." That is a SCAN request, not a request to draft or re-draft.
 
 When a finalized script is present AND the writer asks to check for breaking news or more relevant stories, this is a HARD GATE:
 
