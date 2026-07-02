@@ -101,6 +101,35 @@ export default function NewsPage() {
   return <NewsBody chatId={chatId} initialMessages={initialMessages} />;
 }
 
+// Labels shown next to the typing indicator while a tool is in flight, keyed by
+// the on-the-wire `tool-*` part type. This makes the status reflect the actual
+// operation (e.g. a breaking-news scan) instead of a generic "Generating script…".
+const IN_FLIGHT_TOOL_LABELS: Record<string, string> = {
+  'tool-scanBreakingNews': 'Scanning news sources…',
+  'tool-fetchArticle': 'Fetching article…',
+  'tool-searchCorpus': 'Loading style examples…',
+  'tool-webSearch': 'Searching the web…',
+};
+
+// Derive the busy-indicator label from what is actually happening this turn. An
+// in-flight tool call is the most accurate signal (e.g. a breaking-news scan);
+// before one streams, fall back to the generic fetch/draft phases.
+function busyLabel(messages: NewsUIMessage[], status: string): string {
+  const last = messages[messages.length - 1];
+  if (last?.role === 'assistant' && last.parts) {
+    for (let i = last.parts.length - 1; i >= 0; i--) {
+      const part = last.parts[i];
+      const label = IN_FLIGHT_TOOL_LABELS[part.type];
+      const state = (part as { state?: string }).state;
+      if (label && (state === 'input-streaming' || state === 'input-available')) {
+        return label;
+      }
+    }
+  }
+
+  return status === 'submitted' ? 'Fetching articles…' : 'Generating script…';
+}
+
 function NewsBody({
   chatId,
   initialMessages,
@@ -309,8 +338,8 @@ function NewsBody({
   // already in context. Explicitly suggestions-only — no edits on this turn.
   const triggerScan = () => {
     submit(
-      'Scan for breaking news that may have broken since I locked this finalized script. ' +
-        'Call scanBreakingNews and show me the Swap / Update / Can\'t-ignore suggestions. ' +
+      'Check for breaking news that may have broken since I locked this finalized script, ' +
+        'and show me the Swap / Update / Can\'t-ignore suggestions. ' +
         'Do not edit or redraft the script on this turn.',
     );
   };
@@ -327,7 +356,7 @@ function NewsBody({
           : 'integrate it';
     submit(
       `I accept the ${s.tier} suggestion: "${s.headline}". ` +
-        `Run the Phase-2 understanding gate for this story only, and after I confirm, ${integration}. ` +
+        `Walk me through your understanding of this story first, and after I confirm, ${integration}. ` +
         'Do not touch the rest of the script.',
     );
   };
@@ -446,7 +475,7 @@ function NewsBody({
               <div className="flex items-center gap-3 pl-12 text-xs text-fg/50">
                 <TypingDots />
                 <span className="tracking-wide">
-                  {status === 'submitted' ? 'Fetching articles…' : 'Generating script…'}
+                  {busyLabel(messages, status)}
                 </span>
                 <button
                   type="button"
