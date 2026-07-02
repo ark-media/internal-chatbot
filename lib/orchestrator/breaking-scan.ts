@@ -19,6 +19,7 @@ import {
   extractCandidates,
   substitutePaywallMirrors,
 } from './source-gathering';
+import { discoverRssCandidates } from './rss';
 import { isApprovedSource } from '../news-sources';
 import { parseScriptCoverage, type ScriptCoverage } from '../news-script';
 import type { Article, Candidate } from './types';
@@ -146,21 +147,45 @@ function xHandleOf(url: string): string | null {
   return `@${segs[0]}`;
 }
 
-// Coarse recency filter. Drops candidates whose publication day is strictly
-// before the cutoff day; keeps same-day-or-later candidates (day granularity
-// can't prove a same-day story predates the lock, so it's deferred to the
-// gates). Candidates with a missing or unparseable date are retained but
-// flagged `dateUncertain: true` rather than silently dropped — the design
-// intentionally hands undated stories to Gate-3 judgment. Pure and generic so
-// it can run on raw candidates and on extracted articles alike.
+// Does a date string carry a real clock time, or is it a bare calendar date?
+// Discovery/search candidates are date-only (YYYY-MM-DD); post-extraction
+// articles carry Tavily Extract's publish timestamp ("Wed, 02 Jul 2026 09:14:00
+// GMT"). Only a real time-of-day can prove a same-day story published before the
+// lock — a bare date can't, so it's treated at day granularity.
+function hasClockTime(raw: string): boolean {
+  return /\d{1,2}:\d{2}/.test(raw);
+}
+
+// Recency filter against the resolved cutoff. When a candidate carries a precise
+// publish timestamp (post-extraction articles do), it's compared at INSTANT
+// granularity, so a story that published this morning — before a 1:20pm lock —
+// is dropped instead of surviving as "same day". Without a clock time the filter
+// falls back to day granularity: same-day-or-later is kept and deferred to the
+// gates (day resolution can't prove it predates the lock), and a missing or
+// unparseable date is retained but flagged `dateUncertain: true` rather than
+// silently dropped — the design intentionally hands undated stories to Gate-3
+// judgment. Pure and generic so it runs on raw candidates and extracted articles
+// alike; the pre-extraction pass is date-only, so it stays coarse there.
 export function filterByCutoff<T extends { publicationDate: string | null }>(
   candidates: T[],
   cutoff: string,
 ): Array<T & { dateUncertain?: boolean }> {
   const cutoffDay = toDay(cutoff);
+  const cutoffMs = Date.parse(cutoff);
   const out: Array<T & { dateUncertain?: boolean }> = [];
   for (const c of candidates) {
-    const day = toDay(c.publicationDate);
+    const raw = c.publicationDate;
+    // Precise timestamp available → compare as an absolute instant.
+    if (raw && hasClockTime(raw) && !Number.isNaN(cutoffMs)) {
+      const ms = Date.parse(raw);
+      if (!Number.isNaN(ms)) {
+        if (ms < cutoffMs) continue; // provably before the lock → drop
+        out.push(c);
+        continue;
+      }
+    }
+    // Date-only or unparseable → day granularity.
+    const day = toDay(raw);
     if (day === null) {
       out.push({ ...c, dateUncertain: true });
       continue;
@@ -185,11 +210,13 @@ export async function discoverBreakingCandidates(opts: {
 }): Promise<BreakingCandidate[]> {
   const { today, cutoff, signal } = opts;
 
-  const [beat, xPosts] = await Promise.all([
+  const [beat, xPosts, rss] = await Promise.all([
     discoverCandidates(today, '', signal),
     // X discovery is best-effort — a grounded-Gemini outage shouldn't sink the
     // whole scan, which still has the beat outlets.
     discoverXPosts(today, signal).catch(() => [] as Candidate[]),
+    // RSS discovery is best-effort too — a feed outage shouldn't sink the scan.
+    discoverRssCandidates({ signal }).catch(() => [] as Candidate[]),
   ]);
 
   // Merge + dedupe by URL, remembering which URLs came from an X handle so the
@@ -220,7 +247,7 @@ export async function discoverBreakingCandidates(opts: {
   // Re-apply the cutoff with the refined extraction dates, re-attach handles,
   // and drop anything that somehow left the approved set.
   const refined = filterByCutoff(articles, cutoff).filter((a) => isApprovedSource(a.url));
-  return refined.map((a): BreakingCandidate => {
+  const beatCandidates = refined.map((a): BreakingCandidate => {
     const handle = handleByUrl.get(a.url) ?? xHandleOf(a.url) ?? undefined;
     return {
       title: a.title,
@@ -233,6 +260,24 @@ export async function discoverBreakingCandidates(opts: {
       ...(handle ? { sourceHandle: handle } : {}),
     };
   });
+
+  // RSS candidates carry real article URLs and precise feed timestamps, so they
+  // skip verification + extraction (the scan classifies from headline + date,
+  // not body). Cutoff-filter them with the feed timestamps — at instant
+  // granularity, since the pubDates carry a clock time — drop anything not
+  // approved, and dedupe by URL against the extracted beat/X set.
+  const beatUrls = new Set(beatCandidates.map((c) => c.url));
+  const rssCandidates = filterByCutoff(rss, cutoff)
+    .filter((c) => isApprovedSource(c.url) && !beatUrls.has(c.url))
+    .map((c): BreakingCandidate => ({
+      title: c.title,
+      url: c.url,
+      source: c.source,
+      publicationDate: c.publicationDate,
+      dateUncertain: c.dateUncertain,
+    }));
+
+  return [...beatCandidates, ...rssCandidates];
 }
 
 // -- Gate 0: hard-exclusion classifier ---------------------------------------
@@ -542,7 +587,8 @@ export function collapseCorroboration(candidates: BreakingCandidate[]): Breaking
 
 // -- Tier routing → Swap / Update / Can't-ignore -----------------------------
 // Routes graded candidates to output tiers, ranks them, and caps the list.
-//   Swap        — NEW + on-beat + significant, framed against the weakest block.
+//   Swap        — NEW + on-beat + HIGH significance, framed against the weakest
+//                 block. Medium/low on-beat stories don't clear the Swap bar.
 //   Update      — a material UPDATE to an in-script story.
 //   Can't-ignore — global-shock only (the sole off-beat-eligible tier), and it
 //                  requires confidence:'confirmed'.
@@ -590,7 +636,10 @@ function tierFor(c: BreakingCandidate): Tier | null {
   // Every other tier requires the story to be on Ark's beat.
   if (!c.onBeat) return null;
   if (c.novelty === 'UPDATE') return 'Update';
-  if (c.novelty === 'NEW') return 'Swap';
+  // A Swap displaces a block from a locked script, so the bar is a genuinely
+  // HIGH-significance new story — medium/low on-beat filler must not bump a
+  // block. (The significance grade otherwise only ranks; here it gates.)
+  if (c.novelty === 'NEW' && c.significance === 'high') return 'Swap';
   return null;
 }
 

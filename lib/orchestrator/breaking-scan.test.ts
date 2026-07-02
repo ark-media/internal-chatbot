@@ -87,6 +87,25 @@ describe('filterByCutoff', () => {
     expect(kept).toHaveLength(2);
     expect(kept.every((c) => c.dateUncertain === true)).toBe(true);
   });
+
+  it('drops a same-day story whose precise timestamp predates the lock', () => {
+    // cutoff is 2026-06-30T20:15Z; a story timestamped earlier the same day is
+    // provably pre-lock and must not survive as "same day".
+    const kept = filterByCutoff(
+      [{ url: 'https://reuters.com/morning', publicationDate: 'Tue, 30 Jun 2026 09:14:00 GMT' }],
+      cutoff,
+    );
+    expect(kept).toHaveLength(0);
+  });
+
+  it('keeps a same-day story whose precise timestamp is after the lock', () => {
+    const kept = filterByCutoff(
+      [{ url: 'https://reuters.com/evening', publicationDate: 'Tue, 30 Jun 2026 21:00:00 GMT' }],
+      cutoff,
+    );
+    expect(kept.map((c) => c.url)).toEqual(['https://reuters.com/evening']);
+    expect(kept[0].dateUncertain).toBeUndefined();
+  });
 });
 
 describe('Gate 0: exclusion classifier', () => {
@@ -237,6 +256,19 @@ describe('T-008: tier routing', () => {
   it('off-beat NEW cannot reach Swap', () => {
     const { suggestions } = routeTiers([graded({ onBeat: false, novelty: 'NEW' })], CUTOFF);
     expect(suggestions).toHaveLength(0);
+  });
+
+  it('a medium/low-significance NEW on-beat story does not clear the Swap bar', () => {
+    const medium = routeTiers([graded({ novelty: 'NEW', significance: 'medium' })], CUTOFF);
+    expect(medium.suggestions).toHaveLength(0);
+    const low = routeTiers([graded({ novelty: 'NEW', significance: 'low' })], CUTOFF);
+    expect(low.suggestions).toHaveLength(0);
+  });
+
+  it('a high-significance NEW on-beat story reaches Swap', () => {
+    const { suggestions } = routeTiers([graded({ novelty: 'NEW', significance: 'high' })], CUTOFF);
+    expect(suggestions).toHaveLength(1);
+    expect(suggestions[0].tier).toBe('Swap');
   });
 
   it('off-beat global-shock + confirmed reaches Can\'t-ignore', () => {
