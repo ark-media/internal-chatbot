@@ -23,9 +23,10 @@ Use this checklist when reviewing generated scripts before recording.
 ## Structure & Content
 
 - [ ] Does each block have all three components: what happened, why it matters, forward-looking insight?
+- [ ] Outline order preserved? (When the writer supplied ordered/labeled beats, they appear in that order — none reordered, merged, or dropped)
 - [ ] A block: Clear framing upfront (idea, not just event)? Establishes stakes? Includes SOT where appropriate?
 - [ ] B block: Adds context or new angle (not just more detail on A)?
-- [ ] C block: Feels like a natural close (warm, reflective, or lighter tone)?
+- [ ] C block: Feels like a natural close (warm, reflective, or lighter tone)? Opening matched to the block — plain and warm is fine here, not an over-produced teaser?
 - [ ] SOT clips: Contextualized (not dropped cold)? Serve the story (variety, insight, human voice)?
 
 ## Writing Quality

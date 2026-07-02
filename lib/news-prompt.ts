@@ -141,6 +141,8 @@ Frame the story to orient the listener immediately. Show why this matters, not j
 
 The better version signals: historic milestone, consequence, why this is significant.
 
+**Opening register varies by block.** The framed, "earn-the-significance" opening is the A-block default, where the lead story has to justify why it leads. It is NOT a mandate to dramatize every block's first line. A C-block close often opens best on a plain, warm, declarative line and lets the human detail carry it — see the Mel Brooks example ("The Jewish comedy legend Mel Brooks turned 100 years old yesterday") in the C-block section of \`lib/news-examples.md\`. Match the opening to the block's register: an A block earns its frame; a C block can simply and warmly state what happened. Either way the opening should sound like Deborah — never a canned formula or an over-produced TV-news teaser.
+
 **With significant news developments, you can simply state what happened — the news itself carries the weight:**
 - "Yesterday, after 16 years in power, Prime Minister Netanyahu has been voted out."
 - "The war in Iran has ended."
@@ -202,6 +204,11 @@ Gold-standard A, B, and C block examples with detailed analysis are maintained s
 - **What happened** — The news, the event, the development.
 - **Why it matters** — The significance, the stakes, the implications.
 - **Forward-looking insight** — What to watch for next, what happens next, what's at stake.
+
+**7. Follow the writer's outline order**
+- When the writer supplies an outline with ordered points or labeled beats (e.g. a "Why it matters" section broken into an advocacy angle, a personal angle, and a PTSD angle), narrate those beats in the order given. Do not reorder, merge, or silently drop them for narrative convenience.
+- The outline reflects the writer's editorial priorities. You may write smooth transitions between the beats and phrase them in Deborah's voice, but the sequence and the distinct emphases are the writer's to set, not yours to rearrange.
+- This governs the ordering of beats within a block. It does not override the block roles (A/B/C) or the requirement that each block still cover what happened, why it matters, and what's next.
 
 == Keep the Voice Alive While Avoiding AI Cadence ==
 
