@@ -15,8 +15,10 @@ import { DEFAULT_MODEL_ID } from '@/lib/models';
 import { lookupCorpus } from '@/lib/retrieval';
 import { webSearch } from '@/lib/web-search';
 import { newsSystemPrompt, newsContextForDate, getNewsExamples } from '@/lib/news-prompt';
-import { extractSources } from '@/lib/news-script';
+import { extractSources, parseScriptCoverage } from '@/lib/news-script';
 import { runBreakingScan } from '@/lib/orchestrator/breaking-scan';
+import { buildReviewerSystemContent, reflectLoop } from '@/lib/orchestrator/reflect';
+import { computeMetadata } from '@/lib/orchestrator/script-craft';
 import { ensureTable, getCached, setCached, cacheKey } from '@/lib/tool-cache';
 import { ensureEnglish } from '@/lib/translate';
 import {
@@ -465,7 +467,7 @@ export async function POST(req: Request) {
 
   const stream = createUIMessageStream<NewsUIMessage>({
     originalMessages: messages as NewsUIMessage[],
-    execute: ({ writer }) => {
+    execute: async ({ writer }) => {
       // scanBreakingNews runs the deterministic breaking-scan pipeline (T-001…
       // T-009) and streams its tiered suggestions to the client as a typed
       // `data-breaking-suggestions` part, mirroring the data-sources pattern.
@@ -551,12 +553,100 @@ export async function POST(req: Request) {
         },
       });
 
+      // Stream tool activity and data parts (scan progress/suggestions, busy
+      // label) live, but withhold the model's TEXT: a script-writing turn shows
+      // only the post-reflect final draft, so the reader never watches an
+      // unreviewed draft type out and then mutate. Non-script turns are still
+      // buffered the same way and emitted verbatim below.
       writer.merge(
-        result.toUIMessageStream<NewsUIMessage>({
-          sendSources: false,
-          sendReasoning: false,
-        }),
+        result
+          .toUIMessageStream<NewsUIMessage>({
+            sendSources: false,
+            sendReasoning: false,
+          })
+          .pipeThrough(
+            new TransformStream({
+              transform(chunk, controller) {
+                if (
+                  chunk.type === 'text-start' ||
+                  chunk.type === 'text-delta' ||
+                  chunk.type === 'text-end'
+                ) {
+                  return;
+                }
+                controller.enqueue(chunk);
+              },
+            }),
+          ),
       );
+
+      let draftText: string;
+      try {
+        draftText = await result.text;
+      } catch {
+        // Aborted or a provider error — the merged stream already surfaced the
+        // failure. Nothing to reflect on or emit.
+        return;
+      }
+
+      // The reflect loop is a script-editor pass, so it only runs when the turn
+      // actually produced a broadcast script (block-structured output). Q&A,
+      // breaking-news scans, translations, and article fetches are emitted as
+      // written. Detection is post-hoc on the finished draft — see the
+      // "buffer, then show final" design.
+      const isScript = parseScriptCoverage(draftText).blocks.length >= 1;
+      let finalText = draftText;
+
+      if (isScript) {
+        try {
+          // In the orchestrator the reviewer checks citations against
+          // pre-approved sources; here the only sources available are the ones
+          // the draft itself cites, so the check is limited to orphaned/
+          // misnumbered superscripts rather than fabricated sourcing.
+          const { sources } = extractSources(draftText);
+          const sourceList = sources
+            .map(
+              (s) =>
+                `- ${s.title} (${s.date ?? 'unknown'})${s.flags ? ` [FLAG: ${s.flags}]` : ''}: ${s.url}`,
+            )
+            .join('\n');
+
+          // Reuse the writer's own system (base rules + examples + date
+          // context) so the re-craft stays in voice. No source block: the
+          // corrections are targeted edits to the existing draft, which already
+          // carries the facts — reflect never re-researches.
+          const cachedSystemContent = `${baseSystemPrompt}\n\n== Reference Examples ==\n\n${examples}\n\n== Date Context ==\n\n${dateContext}`;
+          const cachedReviewerSystemContent = await buildReviewerSystemContent({
+            exampleScripts: examples,
+          });
+
+          const outcome = await reflectLoop({
+            initialScript: { fullText: draftText, metadata: computeMetadata(draftText) },
+            sourceList,
+            cachedSystemContent,
+            cachedReviewerSystemContent,
+          });
+          finalText = outcome.finalScript.fullText;
+
+          console.log(
+            JSON.stringify({
+              event: 'news.reflect',
+              ms: Date.now() - started,
+              iterations: outcome.iterations,
+              history: outcome.history,
+            }),
+          );
+        } catch (err) {
+          // Reflect failure falls back to the unreviewed draft rather than
+          // dropping the turn — finalText is still the original draft.
+          console.warn(JSON.stringify({ event: 'news.reflect_error', err: String(err) }));
+        }
+      }
+
+      const textId = 'news-final';
+      writer.write({ type: 'text-start', id: textId });
+      writer.write({ type: 'text-delta', id: textId, delta: finalText });
+      writer.write({ type: 'text-end', id: textId });
     },
     onFinish: async ({ responseMessage }) => {
       if (!chatId) return;

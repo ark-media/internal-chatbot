@@ -121,9 +121,17 @@ export async function POST(req: Request) {
       craftScript({ cachedSystemContent }),
     ]);
 
+    // The reviewer checks that every superscript citation maps to a real
+    // source. Build that list from the pre-approved topics (ground truth here,
+    // unlike the freeform news chat which derives it from the script itself).
+    const sourceList = approvedTopics
+      .flatMap((t) => t.articles.map((r) => r.article))
+      .map((a) => `- ${a.source} — ${a.title} (${a.publicationDate ?? 'unknown'})${a.isFlagged ? ' [outside-window]' : ''}: ${a.url}`)
+      .join('\n');
+
     const outcome = await reflectLoop({
       initialScript,
-      approvedTopics,
+      sourceList,
       cachedSystemContent,
       cachedReviewerSystemContent,
     });

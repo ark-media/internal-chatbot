@@ -7,7 +7,6 @@ import { craftScript } from './script-craft';
 import type {
   ReviewResult,
   Script,
-  TopicWithSources,
 } from './types';
 
 const reviewSchema = z.object({
@@ -77,14 +76,9 @@ const REVIEWER_MAX_OUTPUT_TOKENS = 2000;
 async function reviewScript(opts: {
   script: Script;
   reviewerSystemContent: string;
-  approvedTopics: TopicWithSources[];
+  sourceList: string;
 }): Promise<ReviewResult> {
-  const { script, reviewerSystemContent, approvedTopics } = opts;
-
-  const sourceList = approvedTopics
-    .flatMap((t) => t.articles.map((r) => r.article))
-    .map((a) => `- ${a.source} — ${a.title} (${a.publicationDate ?? 'unknown'})${a.isFlagged ? ' [outside-window]' : ''}: ${a.url}`)
-    .join('\n');
+  const { script, reviewerSystemContent, sourceList } = opts;
 
   const prompt = `APPROVED SOURCES (every superscript citation in the script should map to one of these):
 
@@ -185,11 +179,15 @@ export type ReflectOutcome = {
 
 export async function reflectLoop(opts: {
   initialScript: Script;
-  approvedTopics: TopicWithSources[];
+  // Pre-formatted "APPROVED SOURCES" list the reviewer checks superscript
+  // citations against — one `- source — title (date): url` line per source.
+  // The orchestrator builds this from approved topics; the freeform news chat
+  // builds it from the script's own SOURCES section.
+  sourceList: string;
   cachedSystemContent: string;
   cachedReviewerSystemContent: string;
 }): Promise<ReflectOutcome> {
-  const { initialScript, approvedTopics, cachedSystemContent, cachedReviewerSystemContent } = opts;
+  const { initialScript, sourceList, cachedSystemContent, cachedReviewerSystemContent } = opts;
 
   let script = initialScript;
   const history: ReflectOutcome['history'] = [];
@@ -197,7 +195,7 @@ export async function reflectLoop(opts: {
   for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     let review: ReviewResult;
     try {
-      review = await reviewScript({ script, reviewerSystemContent: cachedReviewerSystemContent, approvedTopics });
+      review = await reviewScript({ script, reviewerSystemContent: cachedReviewerSystemContent, sourceList });
     } catch (err) {
       // If the reviewer call fails, fall back to the writer's own judgment
       // and exit the loop with the latest draft.
