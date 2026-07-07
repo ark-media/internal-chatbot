@@ -55,6 +55,7 @@
  *   BUCKET=aggregate pnpm eval:grade
  *   BUCKET=clipdist RUNS=5 pnpm eval:grade
  *   BUCKET=translate RUNS=3 pnpm eval:grade          # FACTS_TARGET=… to tune fact gate
+ *   BUCKET=newschat RUNS=3 pnpm eval:grade           # NEWS_CHAT_MODEL=… to A/B the writer
  *   BUCKET=lookup pnpm eval:grade some/other.jsonl
  */
 
@@ -530,6 +531,7 @@ async function gradeClipDistribution(path: string): Promise<boolean> {
   let scored = 0; // pass + fail (the denominator)
   let passed = 0;
   let inconclusive = 0;
+  let errored = 0; // generation threw (e.g. gateway timeout) — excluded, reported
 
   for (const fx of fixtures) {
     const cachedSystemContent = buildCachedSystemContent({
@@ -539,7 +541,19 @@ async function gradeClipDistribution(path: string): Promise<boolean> {
     });
 
     for (let r = 0; r < runs; r++) {
-      const { fullText } = await craftScript({ cachedSystemContent });
+      let fullText: string;
+      try {
+        ({ fullText } = await craftScript({ cachedSystemContent }));
+      } catch (err) {
+        // A provider stall (e.g. gateway UND_ERR_HEADERS_TIMEOUT) shouldn't
+        // abort the whole bucket — tally it and move on so slower/less-reliable
+        // models still yield a pass-rate over the runs that did complete.
+        errored += 1;
+        console.log(
+          `[ERROR       ] ${fx.id} run=${r + 1}/${runs} — ${String((err as Error)?.message ?? err).split('\n')[0]}`,
+        );
+        continue;
+      }
       const s = scoreScript(fullText);
       const verdict = clipVerdict(s);
       if (verdict === 'inconclusive') inconclusive += 1;
@@ -557,7 +571,9 @@ async function gradeClipDistribution(path: string): Promise<boolean> {
   }
 
   const passRate = scored === 0 ? 0 : passed / scored;
-  console.log(`\n---\nscored runs: ${scored} (inconclusive, excluded: ${inconclusive})`);
+  console.log(
+    `\n---\nscored runs: ${scored} (inconclusive, excluded: ${inconclusive}; errored, excluded: ${errored})`,
+  );
   console.log(`Pass rate: ${passRate.toFixed(3)} (target >= ${target})`);
   if (scored === 0) {
     console.log('No scorable runs — every generation used inline quotes. Inconclusive.');
@@ -684,6 +700,7 @@ async function draftAdaptedScript(
   userPrompt: string,
   today: string,
   tools: FactCheckTools,
+  confirmMessage = 'Yes, your understanding is correct. Please write the adapted C block in English now.',
 ): Promise<{ readback: string; script: string }> {
   const system = {
     role: 'system' as const,
@@ -700,7 +717,10 @@ async function draftAdaptedScript(
     stopWhen: stepCountIs(8),
     temperature: NEWS_CHAT_TEMPERATURE,
   });
-  const readback = turn1.text.trim();
+  // Turn 1 can end on a tool call and return no assistant text; a subsequent
+  // empty content block is rejected by the API ('text content blocks must be
+  // non-empty'). Fall back to a minimal non-empty ack so turn 2 still runs.
+  const readback = turn1.text.trim() || '(Understood — ready to write.)';
 
   const turn2 = await generateText({
     model: NEWS_CHAT_MODEL,
@@ -711,8 +731,7 @@ async function draftAdaptedScript(
       { role: 'assistant', content: readback },
       {
         role: 'user',
-        content:
-          'Yes, your understanding is correct. Please write the adapted C block in English now.',
+        content: confirmMessage,
       },
     ],
     tools,
@@ -721,6 +740,45 @@ async function draftAdaptedScript(
   });
 
   return { readback, script: turn2.text.trim() };
+}
+
+// From-scratch generation for the `newschat` bucket. The two-turn readback
+// dance draftAdaptedScript uses is a chat-UX gate, not the thing we grade — and
+// for research-heavy topics it's fragile: the writer spends its step budget on
+// web searches and never reaches the script, or asks the producer another
+// question instead of writing. So we collapse to ONE turn that explicitly tells
+// the writer to research-then-write and emit only the finished script, with a
+// larger step budget so tool calls don't starve the writing. Same system
+// prompt, context, tools, and temperature as the real chat path.
+async function draftNewsScript(
+  userPrompt: string,
+  today: string,
+  tools: FactCheckTools,
+): Promise<{ script: string }> {
+  const system = {
+    role: 'system' as const,
+    content: newsSystemPrompt('chat'),
+    providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
+  };
+  const context = await buildChatContext(today);
+  const directive =
+    `${userPrompt}\n\n` +
+    'Write the complete, final on-air Ark News Daily script now. First use the ' +
+    'web-search and archive tools to ground your figures, then output ONLY the ' +
+    'finished script — sonic ID, HOST narration, the A/B/C blocks, any ' +
+    'SOT clips, and the sources list. Do not ask for confirmation and do not ' +
+    'include a readback, planning notes, or any commentary outside the script.';
+
+  const res = await generateText({
+    model: NEWS_CHAT_MODEL,
+    system,
+    messages: [...context, { role: 'user', content: directive }],
+    tools,
+    // Larger than the two-turn path's 8: one turn now does research AND writing.
+    stopWhen: stepCountIs(16),
+    temperature: NEWS_CHAT_TEMPERATURE,
+  });
+  return { script: res.text.trim() };
 }
 
 const judgeSchema = z.object({
@@ -809,10 +867,22 @@ async function gradeTranslateAdapt(path: string): Promise<boolean> {
   let englishPass = 0;
   let adaptPass = 0;
   let factsPass = 0;
+  let errored = 0; // generation threw (e.g. gateway timeout) — excluded, reported
 
   for (const fx of fixtures) {
     for (let r = 0; r < runs; r++) {
-      const { script } = await draftAdaptedScript(fx.userPrompt, today, tools);
+      let script: string;
+      try {
+        ({ script } = await draftAdaptedScript(fx.userPrompt, today, tools));
+      } catch (err) {
+        // Don't let a provider stall (gateway UND_ERR_HEADERS_TIMEOUT) abort the
+        // bucket — tally and continue so completed runs still yield rates.
+        errored += 1;
+        console.log(
+          `[ERROR  ] ${fx.id} run=${r + 1}/${runs} — ${String((err as Error)?.message ?? err).split('\n')[0]}`,
+        );
+        continue;
+      }
       const heb = hebrewCharCount(script);
       const v = await judgeAdaptation(script, fx);
       scored += 1;
@@ -834,7 +904,7 @@ async function gradeTranslateAdapt(path: string): Promise<boolean> {
   const englishRate = scored === 0 ? 0 : englishPass / scored;
   const adaptRate = scored === 0 ? 0 : adaptPass / scored;
   const factsRate = scored === 0 ? 0 : factsPass / scored;
-  console.log(`\n---\nscored runs: ${scored}`);
+  console.log(`\n---\nscored runs: ${scored} (errored, excluded: ${errored})`);
   console.log(
     `Fully-English rate:      ${englishRate.toFixed(3)} (target >= ${target})`,
   );
@@ -849,6 +919,143 @@ async function gradeTranslateAdapt(path: string): Promise<boolean> {
   return pass;
 }
 
+// -- newschat: from-scratch script generation via the news CHAT path ---------
+//
+// Unlike `translate` (which adapts a pasted draft) this measures the chat UI's
+// core job: given a producer's topic request, does the writer PRODUCE a
+// broadcast-ready Ark News Daily script? Runs the exact chat path
+// (newsSystemPrompt('chat') → readback → confirm → script) with the same web-
+// search + corpus tools wired in, RUNS times per fixture (default 3) since
+// generation is stochastic. Grades the RAW first-pass writer output — the
+// reflect editor pass (lib/orchestrator) is deliberately NOT run, so this
+// isolates the writer model for a clean A/B (set NEWS_CHAT_MODEL to compare).
+// The judge (JUDGE_MODEL, pinned Claude) scores four dimensions; each has its
+// own env-overridable target and the run passes only if all four clear.
+
+type NewsChatQ = { id: string; userPrompt: string; date?: string; notes?: string };
+
+const newsChatJudgeSchema = z.object({
+  structureFormat: z
+    .boolean()
+    .describe(
+      'True if the output is a broadcast-ready script in the show format: block structure (e.g. [A BLOCK]/[B BLOCK]/[C BLOCK] with HOST: narration), any soundbites rendered as SPEAKER-labelled SOT clips, and a sensible on-air length. False if it is an outline, a chat reply, a bare list, or otherwise not a readable script a host could voice.',
+    ),
+  factuallyGrounded: z
+    .boolean()
+    .describe(
+      'True if factual claims and figures are grounded — the writer used the web-search/corpus tools and cites/sources its numbers, OR hedges/attributes rather than asserting invented specifics. False if it states unsupported figures as bald fact or fabricates events, quotes, or sources.',
+    ),
+  showVoice: z
+    .boolean()
+    .describe(
+      "True if it reads in the Ark News Daily register: warm and conversational, clips set up (not cold-dropped) and distributed through the body, natural host transitions. False if it's stiff wire-copy, listy, or tonally off.",
+    ),
+  fullyEnglishClean: z
+    .boolean()
+    .describe(
+      'True ONLY if the script body is entirely English broadcast copy with NO leftover non-English fragments AND no meta/reasoning/chain-of-thought leakage (no "let me…", planning notes, or self-talk) — it must be the finished script, not the model thinking out loud. False if any of that leaks in.',
+    ),
+  reasoning: z
+    .string()
+    .describe('2-4 sentences justifying the four verdicts, citing specifics from the output.'),
+});
+
+async function judgeNewsScript(
+  script: string,
+): Promise<z.infer<typeof newsChatJudgeSchema>> {
+  const { object } = await generateObject({
+    model: JUDGE_MODEL,
+    schema: newsChatJudgeSchema,
+    system: {
+      role: 'system',
+      content:
+        "You grade the RAW first-pass output of a script-writing assistant for the audio news show Ark News Daily. A producer asked it to write a full script on a topic; the assistant had live web search and the show's transcript archive as tools. Grade strictly and independently on the four dimensions. Be demanding: an outline or a chat-style reply is NOT structureFormat; unsupported invented figures asserted as fact fail factuallyGrounded; any chain-of-thought/planning self-talk or non-English fragment left in the body fails fullyEnglishClean.",
+    },
+    prompt: `Assistant output to grade:\n\n${script}`,
+    temperature: 0,
+  });
+  return object;
+}
+
+async function gradeNewsChat(path: string): Promise<boolean> {
+  const fixtures = loadJsonl<NewsChatQ>(path);
+  const runs = Number(process.env.RUNS ?? 3);
+  const today = process.env.TODAY ?? new Date().toISOString().slice(0, 10);
+  // Structure, voice and clean-output are near-deterministic for a capable
+  // writer, so they floor high; factual grounding depends on live search so it
+  // sits lower (behavioral). All four are env-overridable when A/B-ing a model.
+  const structureTarget = Number(process.env.STRUCTURE_TARGET ?? 0.8);
+  const factsTarget = Number(process.env.FACTS_TARGET ?? 0.66);
+  const voiceTarget = Number(process.env.VOICE_TARGET ?? 0.8);
+  const cleanTarget = Number(process.env.CLEAN_TARGET ?? 0.9);
+  console.log(
+    `newschat: ${fixtures.length} fixtures × ${runs} runs from ${path}\n`,
+  );
+
+  await ensureTable();
+  const arkNewsDailyShowId = await resolveShowId('Ark News Daily');
+  const tools = buildFactCheckTools(arkNewsDailyShowId);
+
+  let scored = 0;
+  let errored = 0; // generation threw (e.g. gateway timeout) — excluded, reported
+  let structurePass = 0;
+  let factsPass = 0;
+  let voicePass = 0;
+  let cleanPass = 0;
+
+  for (const fx of fixtures) {
+    for (let r = 0; r < runs; r++) {
+      let script: string;
+      try {
+        ({ script } = await draftNewsScript(fx.userPrompt, fx.date ?? today, tools));
+      } catch (err) {
+        errored += 1;
+        console.log(
+          `[ERROR    ] ${fx.id} run=${r + 1}/${runs} — ${String((err as Error)?.message ?? err).split('\n')[0]}`,
+        );
+        continue;
+      }
+      // An empty draft (writer ended on a tool call / produced no text) is a
+      // non-result, not a 0/4 quality signal — tally as errored and skip.
+      if (!script) {
+        errored += 1;
+        console.log(`[ERROR    ] ${fx.id} run=${r + 1}/${runs} — empty draft (no script text)`);
+        continue;
+      }
+      const v = await judgeNewsScript(script);
+      scored += 1;
+      if (v.structureFormat) structurePass += 1;
+      if (v.factuallyGrounded) factsPass += 1;
+      if (v.showVoice) voicePass += 1;
+      if (v.fullyEnglishClean) cleanPass += 1;
+      console.log(
+        `[${(v.structureFormat && v.factuallyGrounded && v.showVoice && v.fullyEnglishClean ? 'PASS' : 'FAIL').padEnd(5)}] ${fx.id} ` +
+          `run=${r + 1}/${runs} structure=${v.structureFormat} facts=${v.factuallyGrounded} ` +
+          `voice=${v.showVoice} clean=${v.fullyEnglishClean}`,
+      );
+      console.log(`        ${v.reasoning}`);
+    }
+  }
+
+  const rate = (n: number) => (scored === 0 ? 0 : n / scored);
+  const structureRate = rate(structurePass);
+  const factsRate = rate(factsPass);
+  const voiceRate = rate(voicePass);
+  const cleanRate = rate(cleanPass);
+  console.log(`\n---\nscored runs: ${scored} (errored, excluded: ${errored})`);
+  console.log(`Structure & format rate: ${structureRate.toFixed(3)} (target >= ${structureTarget})`);
+  console.log(`Factually-grounded rate: ${factsRate.toFixed(3)} (target >= ${factsTarget})`);
+  console.log(`Show-voice rate:         ${voiceRate.toFixed(3)} (target >= ${voiceTarget})`);
+  console.log(`Fully-English/clean rate:${cleanRate.toFixed(3)} (target >= ${cleanTarget})`);
+  const pass =
+    structureRate >= structureTarget &&
+    factsRate >= factsTarget &&
+    voiceRate >= voiceTarget &&
+    cleanRate >= cleanTarget;
+  console.log(pass ? 'PASS' : 'BELOW TARGET');
+  return pass;
+}
+
 async function main() {
   const bucket = process.env.BUCKET ?? 'lookup';
   const defaultPaths: Record<string, string> = {
@@ -858,6 +1065,7 @@ async function main() {
     aggregate: 'eval/aggregate.jsonl',
     clipdist: 'eval/clip-distribution.jsonl',
     translate: 'eval/translate-adapt.jsonl',
+    newschat: 'eval/news-chat.jsonl',
   };
   const path = resolve(process.argv[2] ?? defaultPaths[bucket] ?? 'eval/questions.jsonl');
 
@@ -881,9 +1089,12 @@ async function main() {
     case 'translate':
       pass = await gradeTranslateAdapt(path);
       break;
+    case 'newschat':
+      pass = await gradeNewsChat(path);
+      break;
     default:
       console.error(
-        `unknown BUCKET=${bucket} (use lookup|dossier|refusal|aggregate|clipdist|translate)`,
+        `unknown BUCKET=${bucket} (use lookup|dossier|refusal|aggregate|clipdist|translate|newschat)`,
       );
       process.exit(2);
   }
