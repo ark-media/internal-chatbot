@@ -34,6 +34,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { MarkdownRenderer } from '@/components/MarkdownRenderer';
 import { KindBadge } from '@/components/ui/KindBadge';
 import type {
+  DraftSnapshot,
   NewsUIMessage,
   NewsSource,
   ScanResult,
@@ -905,9 +906,17 @@ function MessageContent({
   onAccept: (s: Suggestion) => void;
   busy: boolean;
 }) {
+  // The final text part supersedes the provisional draft: once it lands, the
+  // draft is stale and rendering both would show the script twice.
+  const hasFinalText = message.parts?.some((p) => p.type === 'text') ?? false;
+
   return message.parts?.map((part, i) => {
     if (part.type === 'text') {
       return <NewsMarkdown key={i} text={part.text} onSourceClick={onSourceClick} sources={sources} />;
+    }
+    if (part.type === 'data-draft') {
+      if (hasFinalText) return null;
+      return <DraftScript key={i} data={part.data} onSourceClick={onSourceClick} sources={sources} />;
     }
     if (part.type === 'data-breaking-progress') {
       return <BreakingProgress key={i} data={part.data} />;
@@ -944,6 +953,39 @@ function MessageContent({
     }
     return null;
   });
+}
+
+/* The model's text as it streams, before the editor pass has approved it */
+
+// Rendered only while there is no final text part. The banner is the whole
+// point: a script shown here may still be rewritten by the reflect pass, and
+// the reader needs to know that the words in front of them are not final.
+function DraftScript({
+  data,
+  onSourceClick,
+  sources,
+}: {
+  data: DraftSnapshot;
+  onSourceClick: (source: NewsSource) => void;
+  sources: NewsSource[];
+}) {
+  const reviewing = data.status === 'reviewing';
+  return (
+    <div className="ark-fade-up">
+      <div
+        className={cn(
+          'mb-2 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[0.75rem] font-medium',
+          reviewing ? 'bg-amber-500/20 text-amber-200' : 'bg-blue-500/20 text-blue-200',
+        )}
+      >
+        <Loader2 className="h-3 w-3 animate-spin" />
+        {reviewing ? 'Draft — editor reviewing…' : 'Drafting…'}
+      </div>
+      <div className={cn(reviewing && 'opacity-70')}>
+        <NewsMarkdown text={data.text} onSourceClick={onSourceClick} sources={sources} />
+      </div>
+    </div>
+  );
 }
 
 function ToolCallChip({ name, status }: { name: string; status: 'in-flight' | 'done' }) {

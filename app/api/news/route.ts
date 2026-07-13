@@ -42,6 +42,18 @@ import type { NewsUIMessage, ScanProgressSnapshot } from '@/components/news-type
 export const runtime = 'nodejs';
 export const maxDuration = 300;
 
+// Id of the reconciled `data-draft` part. Stable across every write in a turn
+// so the client updates one part in place instead of appending a new one per
+// token.
+const DRAFT_PART_ID = 'news-draft';
+
+// Wall-clock point, measured from the start of the request, past which the
+// reflect pass may no longer run or continue. Sits below `maxDuration` (300s)
+// with enough headroom to write the final text and persist the message —
+// production was timing out at the ceiling and returning nothing, and an
+// unreviewed script beats no script.
+const REFLECT_DEADLINE_MS = 240_000;
+
 // -- Tavily Extract wrapper --------------------------------------------------
 
 type TavilyExtractResponse =
@@ -553,11 +565,15 @@ export async function POST(req: Request) {
         },
       });
 
-      // Stream tool activity and data parts (scan progress/suggestions, busy
-      // label) live, but withhold the model's TEXT: a script-writing turn shows
-      // only the post-reflect final draft, so the reader never watches an
-      // unreviewed draft type out and then mutate. Non-script turns are still
-      // buffered the same way and emitted verbatim below.
+      // Stream the model's text live, but as a provisional `data-draft` part
+      // rather than a real text part. Withholding it entirely (the previous
+      // design) meant a script turn showed nothing at all for 2-3 minutes, and
+      // a 300s timeout killed the function with the whole draft still buffered
+      // — the editors' "it crashes and gives no response". Now the words appear
+      // within seconds and survive on screen even if the turn later dies, while
+      // the draft stays visibly unapproved until reflect either ships or
+      // rewrites it. The authoritative text part is written once, at the end.
+      let draftSoFar = '';
       writer.merge(
         result
           .toUIMessageStream<NewsUIMessage>({
@@ -567,11 +583,14 @@ export async function POST(req: Request) {
           .pipeThrough(
             new TransformStream({
               transform(chunk, controller) {
-                if (
-                  chunk.type === 'text-start' ||
-                  chunk.type === 'text-delta' ||
-                  chunk.type === 'text-end'
-                ) {
+                if (chunk.type === 'text-start' || chunk.type === 'text-end') return;
+                if (chunk.type === 'text-delta') {
+                  draftSoFar += chunk.delta;
+                  writer.write({
+                    type: 'data-draft',
+                    id: DRAFT_PART_ID,
+                    data: { text: draftSoFar, status: 'streaming' },
+                  });
                   return;
                 }
                 controller.enqueue(chunk);
@@ -592,12 +611,32 @@ export async function POST(req: Request) {
       // The reflect loop is a script-editor pass, so it only runs when the turn
       // actually produced a broadcast script (block-structured output). Q&A,
       // breaking-news scans, translations, and article fetches are emitted as
-      // written. Detection is post-hoc on the finished draft — see the
-      // "buffer, then show final" design.
+      // written. Detection is post-hoc on the finished draft.
       const isScript = parseScriptCoverage(draftText).blocks.length >= 1;
+
+      // Never let the editor pass push the request past the function ceiling.
+      // Reflect is a quality improvement on a draft we ALREADY have — shipping
+      // the unreviewed draft is strictly better than a 300s timeout that
+      // returns nothing at all. If the writer alone has already eaten the
+      // budget, skip reflect; otherwise cap it at whatever time is left.
+      const elapsed = Date.now() - started;
+      const reflectBudgetMs = REFLECT_DEADLINE_MS - elapsed;
+      const skipReflect = isScript && reflectBudgetMs <= 0;
+      if (skipReflect) {
+        console.warn(JSON.stringify({ event: 'news.reflect_skipped_over_budget', elapsed }));
+      }
+
       let finalText = draftText;
 
-      if (isScript) {
+      if (isScript && !skipReflect) {
+        // Park the draft on screen as visibly-unapproved while the editor pass
+        // runs, so the reader knows the text they are looking at may still move.
+        writer.write({
+          type: 'data-draft',
+          id: DRAFT_PART_ID,
+          data: { text: draftText, status: 'reviewing' },
+        });
+
         try {
           // In the orchestrator the reviewer checks citations against
           // pre-approved sources; here the only sources available are the ones
@@ -607,7 +646,7 @@ export async function POST(req: Request) {
           const sourceList = sources
             .map(
               (s) =>
-                `- ${s.title} (${s.date ?? 'unknown'})${s.flags ? ` [FLAG: ${s.flags}]` : ''}: ${s.url}`,
+                `- ${s.title} (${s.date ?? 'unknown'})${s.flags ? ` [FLAG: ${s.flags}]` : ''}: ${s.url ?? '(no url)'}`,
             )
             .join('\n');
 
@@ -620,22 +659,39 @@ export async function POST(req: Request) {
             exampleScripts: examples,
           });
 
-          const outcome = await reflectLoop({
-            initialScript: { fullText: draftText, metadata: computeMetadata(draftText) },
-            sourceList,
-            cachedSystemContent,
-            cachedReviewerSystemContent,
-          });
-          finalText = outcome.finalScript.fullText;
-
-          console.log(
-            JSON.stringify({
-              event: 'news.reflect',
-              ms: Date.now() - started,
-              iterations: outcome.iterations,
-              history: outcome.history,
+          // Race the loop against the remaining budget. On expiry we keep the
+          // draft we already have rather than letting the function be killed
+          // mid-reflect with nothing to show.
+          const outcome = await Promise.race([
+            reflectLoop({
+              initialScript: { fullText: draftText, metadata: computeMetadata(draftText) },
+              sourceList,
+              cachedSystemContent,
+              cachedReviewerSystemContent,
             }),
-          );
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), reflectBudgetMs)),
+          ]);
+
+          if (outcome === null) {
+            console.warn(
+              JSON.stringify({
+                event: 'news.reflect_deadline',
+                ms: Date.now() - started,
+                budgetMs: reflectBudgetMs,
+              }),
+            );
+          } else {
+            finalText = outcome.finalScript.fullText;
+
+            console.log(
+              JSON.stringify({
+                event: 'news.reflect',
+                ms: Date.now() - started,
+                iterations: outcome.iterations,
+                history: outcome.history,
+              }),
+            );
+          }
         } catch (err) {
           // Reflect failure falls back to the unreviewed draft rather than
           // dropping the turn — finalText is still the original draft.
@@ -643,6 +699,10 @@ export async function POST(req: Request) {
         }
       }
 
+      // The authoritative text. Once this lands the client drops the
+      // provisional draft part, so the reader ends on exactly one copy of the
+      // script — the reviewed one when reflect ran, the draft verbatim when it
+      // didn't.
       const textId = 'news-final';
       writer.write({ type: 'text-start', id: textId });
       writer.write({ type: 'text-delta', id: textId, delta: finalText });
