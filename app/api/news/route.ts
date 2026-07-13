@@ -11,7 +11,7 @@ import {
 import { z } from 'zod';
 
 import { sql } from '@/lib/db';
-import { DEFAULT_MODEL_ID } from '@/lib/models';
+import { DEFAULT_MODEL_ID, supportsTemperature } from '@/lib/models';
 import { lookupCorpus } from '@/lib/retrieval';
 import { webSearch } from '@/lib/web-search';
 import { newsSystemPrompt, newsContextForDate, getNewsExamples } from '@/lib/news-prompt';
@@ -475,6 +475,32 @@ export async function POST(req: Request) {
 
   const allMessages = [...contextMessages, ...messagesForModel];
   const modelMessages = await convertToModelMessages(allMessages);
+
+  // Cache breakpoints. Anthropic caches the prompt prefix up to and INCLUDING
+  // each marked message, so what matters is where the marks sit:
+  //
+  //   1. the system prompt (marked at the streamText call below) — stable
+  //      across every request;
+  //   2. the context acknowledgement — everything before it is the date context
+  //      plus the full reference example scripts, a large static block that is
+  //      identical on every request from every editor;
+  //   3. the last history message — freezes the conversation so far so the
+  //      multi-step tool loop (up to 8 steps) reads it from cache instead of
+  //      re-sending fetched article bodies and corpus excerpts on every step.
+  //
+  // Only (1) existed before, which is why production logged ~13.5k cached
+  // tokens against a 140-200k prompt: the examples block and the whole
+  // conversation were re-tokenized on every call.
+  const cachePoint = { anthropic: { cacheControl: { type: 'ephemeral' as const } } };
+  // The ack is the last of the two context messages. Guard on the role rather
+  // than trusting the index: if convertToModelMessages ever stops mapping these
+  // 1:1, we skip the breakpoint instead of marking an arbitrary message.
+  const contextAck = modelMessages[contextMessages.length - 1];
+  if (contextAck?.role === 'assistant') contextAck.providerOptions = cachePoint;
+  const lastHistoryMessage = modelMessages.at(-1);
+  if (lastHistoryMessage && lastHistoryMessage !== contextAck) {
+    lastHistoryMessage.providerOptions = cachePoint;
+  }
   const nowIso = new Date().toISOString();
 
   const stream = createUIMessageStream<NewsUIMessage>({
@@ -545,7 +571,9 @@ export async function POST(req: Request) {
           scanBreakingNews: scanBreakingNewsTool,
         },
         stopWhen: stepCountIs(8),
-        temperature,
+        // Omitted entirely for models that reject the parameter (Sonnet 5) —
+        // passing it only produced a gateway warning per call and was dropped.
+        temperature: supportsTemperature(model) ? temperature : undefined,
         // Propagate client disconnect / Stop into the provider call so the
         // model stops generating instead of burning tokens to completion.
         abortSignal: req.signal,

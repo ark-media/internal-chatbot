@@ -16,7 +16,7 @@ import {
   getDossier,
   type DossierTurn,
 } from '@/lib/retrieval';
-import { DEFAULT_MODEL_ID } from '@/lib/models';
+import { DEFAULT_MODEL_ID, supportsTemperature } from '@/lib/models';
 import { webSearch, type WebSearchResult } from '@/lib/web-search';
 import { extractArticles, type ExtractedArticle } from '@/lib/url-fetch';
 import { extractPrepContext } from '@/lib/prep-extract';
@@ -751,7 +751,9 @@ export async function POST(req: Request) {
       webSearch: webSearchTool,
     },
     stopWhen: stepCountIs(6),
-    temperature,
+    // Omitted entirely for models that reject the parameter (Sonnet 5) —
+    // passing it only produced a gateway warning per call and was dropped.
+    temperature: supportsTemperature(model) ? temperature : undefined,
     // Propagate client disconnect / Stop into the provider call so the model
     // stops generating instead of burning tokens to completion.
     abortSignal: req.signal,

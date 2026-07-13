@@ -7,6 +7,12 @@ export type ChatModel = {
   name: string;
   description: string;
   contextWindow: number;
+  // Whether the model accepts a `temperature` parameter. Claude Sonnet 5
+  // does not: the gateway logs "The feature \"temperature\" is not supported
+  // ... and will be ignored" on every single call and drops it. Sending it
+  // anyway is noise, and it silently makes the temperature picker a no-op —
+  // callers should omit the parameter instead. Absent means supported.
+  supportsTemperature?: boolean;
 };
 
 export const MODELS: ChatModel[] = [
@@ -21,6 +27,7 @@ export const MODELS: ChatModel[] = [
     name: 'Claude Sonnet 5',
     description: 'Balanced speed and near-Opus intelligence. Recommended.',
     contextWindow: 200_000,
+    supportsTemperature: false,
   },
   {
     id: 'anthropic/claude-sonnet-4-6',
@@ -75,4 +82,12 @@ const DEFAULT_CONTEXT_WINDOW = 200_000;
 
 export function getContextWindow(modelId: string): number {
   return MODELS.find((m) => m.id === modelId)?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+}
+
+// Callers should omit `temperature` entirely when this is false — the model
+// rejects the parameter rather than clamping it. Unknown model ids default to
+// supported, so a model added to the gateway before it's added here still gets
+// its temperature honored.
+export function supportsTemperature(modelId: string): boolean {
+  return MODELS.find((m) => m.id === modelId)?.supportsTemperature ?? true;
 }
