@@ -140,6 +140,64 @@ describe('newsSystemPrompt — confirm-understanding gate (chat mode only)', () 
   });
 });
 
+describe('newsSystemPrompt — scope of the request (chat mode only)', () => {
+  // A writer asked for "a story for one block" covering three developments in
+  // the same story (the strait, Trump's blockade, the Saudi strikes) and got a
+  // full A/B/C episode back: the prompt described the full-episode skeleton as
+  // the only output shape, so the writer naming three threads read as three
+  // stories. The orchestrator path always produces a full episode and has no
+  // writer to scope the request, so the rule is chat-only.
+  const chat = newsSystemPrompt('chat');
+  const orchestrator = newsSystemPrompt('orchestrator');
+
+  it('tells the writer to read the request for scope and write only that', () => {
+    expect(chat).toContain('Scope: Write Only What the Writer Asked For');
+    expect(chat).toContain('the scope they asked for overrides both');
+  });
+
+  it('defines the single-block scope: one block, no SONIC ID, intro, or sign-off', () => {
+    expect(chat).toContain('a story for one block today');
+    expect(chat).toContain(
+      'Write ONE block: no SONIC ID, no HOST intro, no sign-off, and no other blocks',
+    );
+  });
+
+  it('keeps several developments named in a one-block request inside ONE block', () => {
+    expect(chat).toContain(
+      'A single-block request that names several developments is still ONE block',
+    );
+    expect(chat).toContain('Do not promote each development into its own block');
+  });
+
+  it('defaults to a full episode when the writer does not scope the request', () => {
+    expect(chat).toContain('the default when the writer does not scope the request');
+  });
+
+  it('scales the word target to the scope instead of the episode target', () => {
+    expect(chat).toContain('Word targets scale with scope');
+    expect(chat).toContain('not an episode');
+  });
+
+  it('makes the assistant state the scope it understood in the first-turn readback', () => {
+    const readback = chat.indexOf('Open the readback by stating the **scope**');
+    const scopeSection = chat.indexOf('== Scope: Write Only What the Writer Asked For ==');
+    expect(readback).toBeGreaterThanOrEqual(0);
+    // The readback references the scope rules, so they must follow it.
+    expect(scopeSection).toBeGreaterThan(readback);
+  });
+
+  it('drops the block-count assertion that the script is always 2–4 blocks', () => {
+    expect(chat).not.toContain('The script has exactly 2–4 story blocks');
+    expect(chat).toContain(
+      'A full episode has exactly 2–4 story blocks; a request scoped to a single block has exactly one',
+    );
+  });
+
+  it('does NOT add the scope rules to the orchestrator (batch) path', () => {
+    expect(orchestrator).not.toContain('Scope: Write Only What the Writer Asked For');
+  });
+});
+
 describe('newsSystemPrompt — breaking-news scan Phase 1 (chat mode only)', () => {
   const chat = newsSystemPrompt('chat');
   const orchestrator = newsSystemPrompt('orchestrator');
