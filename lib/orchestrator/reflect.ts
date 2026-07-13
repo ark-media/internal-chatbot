@@ -192,6 +192,14 @@ export async function reflectLoop(opts: {
   let script = initialScript;
   const history: ReflectOutcome['history'] = [];
 
+  // A soft-only draft gets at most ONE revision pass. The reviewer can always
+  // find three stylistic tells in any draft, so the "3+ problems" rule on its
+  // own never cleared: every script burned all MAX_ITERATIONS (3 reviews + 2
+  // re-crafts, ~150s on top of the writer) and then shipped a draft the
+  // reviewer still called "loop" — exiting by exhaustion, not approval. Hard
+  // failures (factual / source-fidelity) still loop until fixed or capped.
+  let softRevisionUsed = false;
+
   for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     let review: ReviewResult;
     try {
@@ -203,15 +211,23 @@ export async function reflectLoop(opts: {
       return { finalScript: script, iterations: iteration, history };
     }
 
+    // Spend the single soft-only revision, then exit rather than looping on
+    // stylistic feedback forever.
+    const softOnly = review.problems.every((p) => p.type !== 'hard');
+    const decision: 'loop' | 'exit' =
+      review.decision === 'loop' && softOnly && softRevisionUsed ? 'exit' : review.decision;
+
     history.push({
       iteration,
-      decision: review.decision,
+      decision,
       problemCount: review.problems.length,
     });
 
-    if (review.decision === 'exit' || iteration === MAX_ITERATIONS) {
+    if (decision === 'exit' || iteration === MAX_ITERATIONS) {
       return { finalScript: script, iterations: iteration, history };
     }
+
+    if (softOnly) softRevisionUsed = true;
 
     try {
       script = await craftScript({

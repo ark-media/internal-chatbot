@@ -118,4 +118,43 @@ describe('extractSources (via shared module)', () => {
       url: 'https://timesofisrael.com/ceasefire',
     });
   });
+
+  // The prompt's own SOURCES template permits "[URL if available]", and real
+  // drafts routinely cite an outlet + headline with no link. These lines were
+  // being dropped, emptying the source list entirely — which made the reflect
+  // reviewer flag every citation as unverified and pinned the loop at max
+  // iterations. Verbatim shape of a real logged draft (chat 8810d454).
+  it('keeps numbered source lines that carry no URL', () => {
+    const { sources } = extractSources(
+      [
+        'HOST: The vote is set for October 27.¹',
+        '',
+        'SOURCES:',
+        '',
+        '1. Jerusalem Post / Yahoo News, "Hostile actors seeking to undermine Israeli elections, Herzog and Shin Bet chief warn," July 9, 2026',
+        '2. Same source — covers the comptroller’s audit and the October 27 election date.',
+      ].join('\n'),
+    );
+
+    expect(sources).toHaveLength(2);
+    expect(sources[0]).toMatchObject({ num: 1 });
+    expect(sources[0].title).toContain('Jerusalem Post');
+    expect(sources[0].url).toBeUndefined();
+    expect(sources[1]).toMatchObject({ num: 2 });
+  });
+
+  it('still parses a URL-bearing line when mixed with URL-less ones', () => {
+    const { sources } = extractSources(
+      [
+        'SOURCES:',
+        '',
+        '1. Reuters, "No link on this one," July 9, 2026',
+        '2. BBC — https://bbc.com/news — July 10, 2026',
+      ].join('\n'),
+    );
+
+    expect(sources).toHaveLength(2);
+    expect(sources[0].url).toBeUndefined();
+    expect(sources[1]).toMatchObject({ num: 2, url: 'https://bbc.com/news' });
+  });
 });

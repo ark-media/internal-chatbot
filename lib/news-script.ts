@@ -3,10 +3,16 @@
 // breaking-news scan (which needs both the cited sources and the block
 // structure to diff post-lock candidates against what the script covers).
 
+// `url` is optional: the prompt's own SOURCES template permits a URL-less
+// entry ("[URL if available]"), and writers' finalized scripts routinely cite
+// an outlet and headline with no link. Such a source is still a real source —
+// dropping it silently emptied the list, which made the reflect reviewer treat
+// every superscript as an unverified citation (a hard failure) and pinned the
+// loop at max iterations.
 export type ExtractedSources = Array<{
   num: number;
   title: string;
-  url: string;
+  url?: string;
   date?: string;
   flags?: string;
 }>;
@@ -131,10 +137,12 @@ export function extractSources(text: string): { script: string; sources: Extract
       const flagText = flagMatch?.[1]?.trim();
       const withoutFlag = flagMatch ? rest.slice(0, flagMatch.index).trim() : rest;
 
-      // Find URL: look for http:// or https:// followed by non-whitespace
+      // Find URL: look for http:// or https:// followed by non-whitespace.
+      // A line with no URL is still a valid source (outlet + headline, no
+      // link) — keep it, with the whole remainder as the title.
       const urlMatch = withoutFlag.match(/https?:\/\/[^\s]+/);
       if (!urlMatch) {
-        parseErrors++;
+        sources.push({ num, title: withoutFlag.trim(), flags: flagText });
         continue;
       }
 
