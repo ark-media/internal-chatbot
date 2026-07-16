@@ -106,6 +106,10 @@ export type ScriptRun = {
   revisionCount: number;
   lastDistilledVersion?: number;
   errorMessage: string | null;
+  // Editorial note from sourcing when the pool couldn't fully fill the scope
+  // (thin rundown, out-of-window fallbacks). Distinct from errorMessage: not a
+  // failure, just context the conductor uses to explain gaps honestly.
+  sourcingNote?: string | null;
   updatedAt: string;
   // Monotonic row version, bumped on every persist. Kept for optimistic-
   // concurrency use; the sourcing claim now CASes on stage (see claimSourcing).
@@ -134,6 +138,7 @@ export function newRun(opts: {
     episodeVersions: [],
     revisionCount: 0,
     errorMessage: null,
+    sourcingNote: null,
     updatedAt: new Date(0).toISOString(),
     version: 0,
   };

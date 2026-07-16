@@ -78,6 +78,13 @@ describe('buildRunStateContext', () => {
     expect(cx).not.toContain('assembleEpisode'); // not all approved
   });
 
+  it('surfaces a sourcing note when the pool left slots unfilled', () => {
+    const thin = { ...baseRun(), topics: [topic('A')], sourcingNote: 'only one fresh story on the beat today' };
+    expect(buildRunStateContext(thin)).toContain('Sourcing note: only one fresh story on the beat today');
+    // No note line when the rundown is full.
+    expect(buildRunStateContext(baseRun())).not.toContain('Sourcing note:');
+  });
+
   it('offers assembly only when every in-scope block is approved (episode scope)', () => {
     let run = baseRun();
     for (const i of [0, 1, 2]) {

@@ -53,6 +53,7 @@ function buildPayload(run: ScriptRun): RunStatePayload {
     revisionCount: run.revisionCount,
     lastDistilledVersion: run.lastDistilledVersion,
     errorMessage: run.errorMessage,
+    sourcingNote: run.sourcingNote ?? null,
   };
 }
 
@@ -139,6 +140,7 @@ export async function loadRun(chatId: string): Promise<ScriptRun | null> {
     revisionCount: row.state.revisionCount ?? 0,
     lastDistilledVersion: row.state.lastDistilledVersion,
     errorMessage: row.state.errorMessage ?? null,
+    sourcingNote: row.state.sourcingNote ?? null,
     updatedAt,
     version: row.version ?? 0,
   };

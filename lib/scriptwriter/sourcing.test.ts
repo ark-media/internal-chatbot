@@ -101,6 +101,16 @@ describe('mapSelection', () => {
     expect(backups[0].headline).toBe('b1');
     expect(backups[0].sources[0].url).toBe('u2');
   });
+
+  it('passes the insufficient-pool signal through and yields no stories when the selector refuses', () => {
+    const { stories, insufficientPool } = mapSelection(
+      { stories: [], backups: [], insufficientPool: { reason: 'no fresh on-beat news today' } },
+      candidates,
+      { type: 'episode' },
+    );
+    expect(stories).toHaveLength(0);
+    expect(insufficientPool?.reason).toBe('no fresh on-beat news today');
+  });
 });
 
 describe('attachDistilled', () => {

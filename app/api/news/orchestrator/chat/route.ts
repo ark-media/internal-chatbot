@@ -195,7 +195,7 @@ export async function POST(req: Request) {
             run = { ...run, scope: await parseScopeFromPrompt(run.originalPrompt) };
           }
           const examples = await getNewsExamples();
-          const { topics, backups, candidates } = await sourceStories({
+          const { topics, backups, candidates, insufficientPool } = await sourceStories({
             today: run.today,
             scope: run.scope,
             guidance: run.originalPrompt ?? undefined,
@@ -203,18 +203,60 @@ export async function POST(req: Request) {
             onProgress,
             signal: req.signal,
           });
+          const snapshotCandidates = candidates.map((c) => ({
+            title: c.title,
+            url: c.url,
+            source: c.source,
+            publicationDate: c.publicationDate,
+          }));
+
+          if (topics.length === 0) {
+            // The pool couldn't support a single valid block. Surface that
+            // honestly — never fabricate block cards — and stay in 'sourcing'
+            // so the next message retries (news may break through the day).
+            const reason =
+              insufficientPool?.reason ??
+              'No stories in the pool met the freshness and newsworthiness bar for today.';
+            const fallbacks = backups.length > 0
+              ? backups.map((b) => {
+                  const s = b.sources[0];
+                  const meta = s
+                    ? ` (${s.source}${s.publicationDate ? `, ${s.publicationDate}` : ''})`
+                    : '';
+                  return `- ${b.headline}${meta}`;
+                })
+              : snapshotCandidates.slice(0, 5).map(
+                  (c) => `- ${c.title} (${c.source}${c.publicationDate ? `, ${c.publicationDate}` : ''})`,
+                );
+            run = {
+              ...run,
+              stage: 'sourcing',
+              topics: [],
+              backups,
+              candidates: snapshotCandidates,
+              errorMessage: null,
+              sourcingNote: reason,
+            };
+            await saveRun(run);
+            transientOnly = true;
+            const message = `I couldn't put together a valid rundown from today's sourcing.\n\n${reason}\n\nClosest items I found — all outside the acceptable window or off-beat, so use one only if you want to deliberately opt in:\n${fallbacks.join('\n')}\n\nReply when you'd like me to try sourcing again.`;
+            writer.write({ type: 'text-start' as const, id: 'sourcing-thin' });
+            writer.write({ type: 'text-delta' as const, id: 'sourcing-thin', delta: message });
+            writer.write({ type: 'text-end' as const, id: 'sourcing-thin' });
+            return;
+          }
+
           run = {
             ...run,
             stage: 'working',
             topics,
             backups,
-            candidates: candidates.map((c) => ({
-              title: c.title,
-              url: c.url,
-              source: c.source,
-              publicationDate: c.publicationDate,
-            })),
+            candidates: snapshotCandidates,
             errorMessage: null,
+            // A thin-but-usable rundown carries the selector's note so the
+            // conductor can explain the unfilled slots instead of implying
+            // they exist.
+            sourcingNote: insufficientPool?.reason ?? null,
           };
           await saveRun(run);
           writer.write({

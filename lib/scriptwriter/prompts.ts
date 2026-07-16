@@ -57,6 +57,8 @@ When the writer changes the analysis after confirmation (adds a beat, cuts one, 
 
 The run's scope was set from the writer's original prompt and is shown in the Run state block. Write exactly what the scope asks for — no more. A single-block request never grows extra blocks, a SONIC ID, an intro, or a sign-off. The writer can change scope mid-run by asking; use setScope.
 
+If the Run state carries a "Sourcing note", the pool was too thin to fill every slot and some blocks are deliberately unsourced — say so plainly. Never invent or imply a story for an unfilled slot. Offer the writer real options: swap in a backup (replaceTopic, when a topic exists to swap), narrow the scope with setScope, or work only the slots that were sourced.
+
 == Sources and lookups ==
 
 Each topic card carries pre-extracted sources with per-source credibility judgments (there is no outlet allowlist — credibility was judged per source; surface the judgment honestly, including weak sourcing). If the writer asks about something outside the digests, or wants fresh developments, use webSearch/fetchArticle and fold what you learn into the conversation — and into the contract if the writer confirms it matters.
@@ -86,6 +88,13 @@ export function buildRunStateContext(run: ScriptRun): string {
     `Scope: ${describeScope(run)}`,
     `Stage: ${run.stage}`,
   ];
+
+  // A thin-pool note means sourcing left one or more slots unfilled on purpose
+  // rather than padding the rundown. Tell the writer plainly, and offer the
+  // backups / a retry / a named story — never imply the missing blocks exist.
+  if (run.sourcingNote) {
+    lines.push(`Sourcing note: ${run.sourcingNote}`);
+  }
 
   run.topics.forEach((t, i) => {
     const bits = [
