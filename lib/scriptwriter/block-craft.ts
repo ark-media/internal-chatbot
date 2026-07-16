@@ -1,12 +1,13 @@
 // Stage 3: block writing. Opus 4.8 drafts one block at a time against the
 // confirmed substance contract, streaming deltas to the client. Each fresh
-// draft gets ONE review pass (the writer is the gate, so no reflect loop):
-// hard failures trigger a single silent correction pass; soft problems become
-// editor notes for the writer to act on in chat.
+// draft gets ONE review pass (the writer is the gate, so no reflect loop).
+// The reviewer's own decision gates the fix: any hard failure, or 3+ distinct
+// problems, triggers a single silent correction pass. One or two isolated soft
+// problems stay editor notes for the writer to act on in chat.
 
 import { streamText } from 'ai';
 
-import { reviewScript } from '../orchestrator/reflect';
+import { PILEUP_THRESHOLD, reviewScript } from '../orchestrator/reflect';
 import { computeMetadata } from '../orchestrator/script-craft';
 import type { ReviewCorrection } from '../orchestrator/types';
 import { buildBlockPrompt } from './prompts';
@@ -103,10 +104,10 @@ export function buildReviewSourceList(sources: StorySource[]): string {
     .join('\n');
 }
 
-// One review pass over a fresh draft. Hard failures (factual, source
-// fidelity) → one silent Opus correction pass; soft problems → surfaced as
-// editor notes. Review failure falls back to the unreviewed draft — the
-// writer is still the gate.
+// One review pass over a fresh draft, gated on the reviewer's own decision:
+// any hard failure, or 3+ distinct problems, → one silent Opus correction
+// pass; anything less → surfaced as editor notes. Review failure falls back to
+// the unreviewed draft — the writer is still the gate.
 export async function reviewBlock(opts: {
   slot: BlockSlot;
   draftText: string;
@@ -139,14 +140,15 @@ export async function reviewBlock(opts: {
     .filter((p) => p.type === 'soft')
     .map((p) => `${p.issue}: ${p.detail}`);
 
-  if (hard.length === 0) {
+  // reviewScript already decided this in code: "loop" on any hard failure, or
+  // on 3+ distinct problems of any kind. Honour it rather than re-deciding on
+  // `hard` alone — a block whose only defects are soft still earns a pass once
+  // the tells pile up, which is exactly the threshold the reviewer prompt
+  // describes ("read as machine-written when they pile up").
+  if (review.decision === 'exit') {
     return { finalText: draftText, hardFixApplied: false, editorNotes: softNotes };
   }
 
-  // Hard failures only: apply the reviewer's corrections in one silent pass.
-  // Soft corrections are deliberately withheld — auto-applying them is what
-  // flattened the voice in the old reflect loop.
-  //
   // Match a correction to a hard problem by meaningful text overlap. The length
   // floor stops an empty or near-empty issue/problem string from matching
   // everything (bare `includes('')` is always true).
@@ -159,7 +161,15 @@ export async function reviewBlock(opts: {
       return iss.length >= MIN_MATCH_LEN && (prob.includes(iss) || iss.includes(prob));
     });
   });
-  const toApply = hardCorrections.length > 0 ? hardCorrections : review.corrections;
+
+  // Isolated hard failure (fewer than 3 problems total): fix the hard ones and
+  // leave soft corrections withheld — auto-applying a lone stylistic note is
+  // what flattened the voice in the old reflect loop. Once problems pile up,
+  // apply everything: the pile-up IS the defect, and one pass can't flatten
+  // the way the old loop's repeated scrubbing did.
+  const pileUp = review.problems.length >= PILEUP_THRESHOLD;
+  const toApply =
+    !pileUp && hardCorrections.length > 0 ? hardCorrections : review.corrections;
 
   try {
     const { text } = await draftBlock({
@@ -171,7 +181,14 @@ export async function reviewBlock(opts: {
       onDelta,
       signal,
     });
-    return { finalText: text, hardFixApplied: true, editorNotes: softNotes };
+    // Notes for problems we just corrected would read as outstanding work
+    // against text that no longer contains them, so only the withheld ones
+    // survive as notes. A pile-up pass applies every correction, so nothing does.
+    return {
+      finalText: text,
+      hardFixApplied: true,
+      editorNotes: pileUp ? [] : softNotes,
+    };
   } catch (err) {
     if (signal?.aborted) throw err;
     console.warn(

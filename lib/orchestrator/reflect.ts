@@ -67,6 +67,12 @@ Decision rule:
 
 Corrections must be specific and directly implementable. Don't say "improve voice" — quote the offending text and suggest exact replacement language. Don't invent new content; the corrections should preserve every factual claim already cited.`;
 
+// Distinct-problem count at which the reviewer stops advising and asks for a
+// revision pass, per the "read as machine-written when they pile up" rule in
+// ADVISOR_SYSTEM. Exported so block-craft's fix gate can't drift from the
+// decision rule that produced it.
+export const PILEUP_THRESHOLD = 3;
+
 // Cap on the reviewer's output. The schema is structured (≤N problems +
 // corrections), so unbounded generation just produces verbose `detail` and
 // `suggestedFix` fields — one observed run cost $0.39 mostly from 12k output
@@ -110,7 +116,7 @@ Review the script. Return a JSON object with: problems (array of {type, issue, d
   // revision via the 3+ total-problems threshold.
   const hardCount = object.problems.filter((p) => p.type === 'hard').length;
   const decision: 'loop' | 'exit' =
-    hardCount >= 1 || object.problems.length >= 3 ? 'loop' : 'exit';
+    hardCount >= 1 || object.problems.length >= PILEUP_THRESHOLD ? 'loop' : 'exit';
 
   return {
     problems: object.problems,
