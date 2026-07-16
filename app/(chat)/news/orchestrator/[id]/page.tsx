@@ -36,13 +36,14 @@ import type {
 import { chatFetch } from '@/lib/chat-fetch';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
 
+// Quick-start presets, sent verbatim as the brief. The empty full-episode
+// default is offered separately as "Find today's stories".
 const START_EXAMPLES = [
-  '',
   'Write me a single C block — something warm or cultural for the close.',
   'Just an A block on the biggest story of the day.',
 ];
 
-const START_EXAMPLE_LABELS = ['Full episode (A/B/C)', 'Single C block', 'Single A block'];
+const START_EXAMPLE_LABELS = ['Single C block', 'Single A block'];
 
 function todayISO(): string {
   const d = new Date();
@@ -158,25 +159,50 @@ function StartCard({
             Today&apos;s <span className="text-sky-brand">script</span>
           </h1>
           <p className="mt-2 text-sm leading-relaxed text-fg/60">
-            Say what you need — a full episode, specific blocks, or one block on a story you
-            name. Leave it empty for the default: the day&apos;s three most interesting stories,
-            written as A/B/C blocks with your sign-off at every step.
+            Say what you need — a full episode, specific blocks, one block on a story you
+            name, or paste an article link to draft from that story. Leave it empty for the
+            default: the day&apos;s three most interesting stories, written as A/B/C blocks with
+            your sign-off at every step.
           </p>
-          <textarea
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            rows={3}
-            placeholder='e.g. "Write me a B block on the Hormuz shipping fees" — or leave empty for a full episode'
-            className="mt-4 w-full resize-none rounded-xl border border-overlay/15 bg-overlay/[0.03] px-4 py-3 text-sm text-fg placeholder:text-fg/30 focus:border-sky-brand/40 focus:outline-none"
-          />
+          <div className="relative mt-4">
+            <textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  if (!starting && prompt.trim().length > 0) void start();
+                }
+              }}
+              rows={3}
+              placeholder='e.g. "Write me a B block on the Hormuz shipping fees", paste an article link, or leave empty for a full episode'
+              className="w-full resize-none rounded-xl border border-overlay/15 bg-overlay/[0.03] py-3 pl-4 pr-14 text-sm text-fg placeholder:text-fg/30 focus:border-sky-brand/40 focus:outline-none"
+            />
+            <button
+              type="button"
+              disabled={starting || prompt.trim().length === 0}
+              onClick={() => start()}
+              aria-label="Send"
+              className="absolute bottom-3 right-3 flex h-9 w-9 items-center justify-center rounded-lg bg-sky-brand/20 text-sky-brand-soft transition hover:bg-sky-brand/30 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {starting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <ArrowUp className="h-4 w-4" />
+              )}
+            </button>
+          </div>
           <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="text-[0.75rem] text-fg/40">Or a quick start:</span>
             <button
               type="button"
               disabled={starting}
-              onClick={() => start()}
-              className="inline-flex items-center gap-2 rounded-lg bg-sky-brand/20 px-4 py-2 text-sm font-medium text-sky-brand-soft transition hover:bg-sky-brand/30 disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={() => {
+                setPrompt('');
+                void start('');
+              }}
+              className="rounded-full border border-overlay/20 bg-overlay/[0.03] px-3 py-1 text-[0.75rem] text-fg/60 transition hover:border-overlay/40 hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               Find today&apos;s stories
             </button>
             {START_EXAMPLES.map((ex, i) => (
@@ -193,6 +219,9 @@ function StartCard({
                 {START_EXAMPLE_LABELS[i]}
               </button>
             ))}
+          </div>
+          <div className="mt-2 text-[0.68rem] text-fg/35">
+            Enter to send · Shift + Enter for newline
           </div>
           {error ? (
             <div className="mt-3 rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-200">
@@ -514,6 +543,7 @@ function MessageRow({
                 topics={part.data as TopicCardData[]}
                 onPick={onPick}
                 busy={busy}
+                hasBackups={run.backups.length > 0}
               />
             );
           case 'data-block': {

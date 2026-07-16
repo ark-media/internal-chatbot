@@ -36,10 +36,14 @@ export function TopicProposalCards({
   topics,
   onPick,
   busy,
+  hasBackups,
 }: {
   topics: TopicCardData[];
   onPick: (text: string) => void;
   busy: boolean;
+  // Whether the run has any backup stories to swap in. When false, the swap
+  // action is hidden — there's nothing to swap to (e.g. a URL-sourced run).
+  hasBackups: boolean;
 }) {
   return (
     <div className="flex flex-col gap-3">
@@ -127,14 +131,16 @@ export function TopicProposalCards({
               >
                 Work this story
               </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => onPick(`Swap the ${t.slot} block story for one of the backups.`)}
-                className="rounded-full border border-overlay/20 bg-overlay/[0.03] px-3 py-1 text-[0.74rem] text-fg/70 transition hover:border-overlay/40 hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Swap for a backup
-              </button>
+              {hasBackups ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onPick(`Swap the ${t.slot} block story for one of the backups.`)}
+                  className="rounded-full border border-overlay/20 bg-overlay/[0.03] px-3 py-1 text-[0.74rem] text-fg/70 transition hover:border-overlay/40 hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Swap for a backup
+                </button>
+              ) : null}
             </div>
           ) : null}
         </div>

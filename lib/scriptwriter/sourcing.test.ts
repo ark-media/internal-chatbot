@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Candidate } from '../orchestrator/types';
-import type { StorySource } from './types';
-import { attachDistilled, discoveryDays, mapSelection, mergeRoundRobin } from './sourcing';
+import type { Scope, StorySource } from './types';
+import {
+  attachDistilled,
+  discoveryDays,
+  extractUrls,
+  mapSelection,
+  mergeRoundRobin,
+  slotsForUrlStories,
+} from './sourcing';
 
 function cand(url: string, date: string | null = '2026-07-14'): Candidate {
   return { title: `title ${url}`, url, source: 'example.com', publicationDate: date };
@@ -110,6 +117,58 @@ describe('mapSelection', () => {
     );
     expect(stories).toHaveLength(0);
     expect(insufficientPool?.reason).toBe('no fresh on-beat news today');
+  });
+});
+
+describe('extractUrls', () => {
+  it('pulls a single link out of a brief', () => {
+    expect(
+      extractUrls('help me write a draft based on this story: https://example.com/a/b'),
+    ).toEqual(['https://example.com/a/b']);
+  });
+
+  it('trims trailing sentence punctuation a writer types after a link', () => {
+    expect(extractUrls('see https://example.com/story.')).toEqual(['https://example.com/story']);
+    expect(extractUrls('(https://example.com/story)')).toEqual(['https://example.com/story']);
+  });
+
+  it('dedupes and caps at a full episode (3)', () => {
+    expect(
+      extractUrls('https://a.com https://b.com https://a.com https://c.com https://d.com'),
+    ).toEqual(['https://a.com', 'https://b.com', 'https://c.com']);
+  });
+
+  it('returns nothing for a brief with no links', () => {
+    expect(extractUrls('just a C block on the biggest story')).toEqual([]);
+  });
+});
+
+describe('slotsForUrlStories', () => {
+  const single = (slot: 'A' | 'B' | 'C'): Scope => ({ type: 'single', slot });
+
+  it('honors a B/C slot only when the writer named that block outright', () => {
+    expect(slotsForUrlStories(single('C'), 1, 'write me a C block based on this link')).toEqual(['C']);
+    expect(slotsForUrlStories(single('B'), 1, 'just a B block on this one')).toEqual(['B']);
+    expect(
+      slotsForUrlStories({ type: 'blocks', slots: ['A', 'C'] }, 2, 'give me the A and C blocks from these'),
+    ).toEqual(['A', 'C']);
+  });
+
+  it('defaults a lone unnamed link to the lead (A), not the parser-guessed B', () => {
+    // "help me write a draft based on <link>" has no explicit block, so the
+    // scope parser guesses single/B — but a lone pasted story is the lead.
+    expect(slotsForUrlStories(single('B'), 1, 'help me write a draft based on this story:')).toEqual(['A']);
+  });
+
+  it('falls back to on-air order when the count does not match the named slots', () => {
+    expect(slotsForUrlStories({ type: 'episode' }, 1, 'draft from these')).toEqual(['A']);
+    expect(slotsForUrlStories(single('C'), 2, 'a C block, and another from this link')).toEqual(['A', 'B']);
+  });
+
+  it('does not treat "blockchain" or a URL as a named block', () => {
+    expect(slotsForUrlStories(single('B'), 1, 'draft on the blockchain bill from https://x.com/b/c')).toEqual([
+      'A',
+    ]);
   });
 });
 

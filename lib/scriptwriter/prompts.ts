@@ -204,7 +204,13 @@ Sources for this block are pre-curated and supplied below under "Story Sources".
 
 **Credibility:** there is no outlet allowlist. Each source carries a 0–100 credibility judgment. Lean on the strongest sources for load-bearing claims; attribute weaker sourcing explicitly in the prose ("according to...") and add an inline [FLAG: ...] where the sourcing is genuinely thin.
 
-**Publication-date validation:** sources outside the acceptable window are marked \`[outside acceptable date window]\`; do not use them unless essential, and if you do, attach \`[FLAG: article outside acceptable publication window — editor approval required]\`. Publication dates never appear in the script itself.`;
+**Attribute to the reporting, never narrate our newsroom.** Naming the outlet that did the reporting is good journalism and strengthens a claim — "according to a Time investigation", "an Israeli official told Time". But the host read is the finished story, not a status report on how we assembled it. NEVER write process narration into the spoken copy: no "we're working off the [outlet] writeup", no "this hasn't been independently verified by Ark News Daily", no "the underlying reporting is from...", no describing what we did or didn't confirm. That is editorial metadata, not broadcast copy — if a sourcing caveat truly matters, it belongs in a terse [FLAG], not in a spoken sentence.
+
+**Lead with the story, not the sourcing scaffolding.** Open the block on what actually happened, in one clean, easily-parsed sentence, then attribute — not "A new investigation in [outlet] by reporter [name] says that [nested clauses]...". Keep the first sentence short enough to say in one breath; move the "who reported it" and the subject's résumé into the following sentences.
+
+**[FLAG: ...] is a short editorial marker for the human writer, not spoken copy** — one brief clause (e.g. \`[FLAG: single-source, needs a second confirm]\`), never a full sentence or paragraph woven into the read. The writer deletes flags before broadcast, so they must not carry story content the read depends on.
+
+**Publication-date validation:** sources outside the acceptable window are marked \`[outside acceptable date window]\`; do not use them unless essential, and if you do, attach a terse \`[FLAG: outside publication window — editor approval]\`. Publication dates never appear in the script itself.`;
 
 const blockOutputRules = (slot: BlockSlot) => `== Output Format (single block) ==
 

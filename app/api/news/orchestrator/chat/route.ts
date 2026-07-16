@@ -26,7 +26,12 @@ import { stripStaleToolOutputs } from '@/lib/strip-tool-outputs';
 import { ensureTable as ensureToolCacheTable } from '@/lib/tool-cache';
 import { CONDUCTOR_SYSTEM, buildRunStateContext } from '@/lib/scriptwriter/prompts';
 import { parseScopeFromPrompt } from '@/lib/scriptwriter/scope';
-import { sourceStories, type SourcingProgress } from '@/lib/scriptwriter/sourcing';
+import {
+  extractUrls,
+  sourceFromUrls,
+  sourceStories,
+  type SourcingProgress,
+} from '@/lib/scriptwriter/sourcing';
 import {
   claimSourcing,
   ensureScriptRunTables,
@@ -189,20 +194,36 @@ export async function POST(req: Request) {
         };
 
         try {
+          // A brief that links specific article(s) pins the run to those sources:
+          // skip open-web discovery and build a block per link instead.
+          const urls = run.originalPrompt ? extractUrls(run.originalPrompt) : [];
+
           // Scope comes from the original prompt (start page); parse before
-          // discovery since targeted mode changes the queries.
+          // discovery since targeted mode changes the queries. Strip any pasted
+          // URLs first so a raw link never leaks into the scope's storyHint —
+          // only the writer's instruction words ("a C block based on…") shape it.
           if (run.originalPrompt) {
-            run = { ...run, scope: await parseScopeFromPrompt(run.originalPrompt) };
+            const scopeText = urls.reduce((t, u) => t.split(u).join(' '), run.originalPrompt);
+            run = { ...run, scope: await parseScopeFromPrompt(scopeText) };
           }
-          const examples = await getNewsExamples();
-          const { topics, backups, candidates, insufficientPool } = await sourceStories({
-            today: run.today,
-            scope: run.scope,
-            guidance: run.originalPrompt ?? undefined,
-            examples: examples.slice(0, 8000),
-            onProgress,
-            signal: req.signal,
-          });
+          const { topics, backups, candidates, insufficientPool } =
+            urls.length > 0
+              ? await sourceFromUrls({
+                  urls,
+                  today: run.today,
+                  scope: run.scope,
+                  guidance: run.originalPrompt ?? undefined,
+                  onProgress,
+                  signal: req.signal,
+                })
+              : await sourceStories({
+                  today: run.today,
+                  scope: run.scope,
+                  guidance: run.originalPrompt ?? undefined,
+                  examples: (await getNewsExamples()).slice(0, 8000),
+                  onProgress,
+                  signal: req.signal,
+                });
           const snapshotCandidates = candidates.map((c) => ({
             title: c.title,
             url: c.url,
@@ -239,7 +260,14 @@ export async function POST(req: Request) {
             };
             await saveRun(run);
             transientOnly = true;
-            const message = `I couldn't put together a valid rundown from today's sourcing.\n\n${reason}\n\nClosest items I found — all outside the acceptable window or off-beat, so use one only if you want to deliberately opt in:\n${fallbacks.join('\n')}\n\nReply when you'd like me to try sourcing again.`;
+            // The "closest items" list only makes sense when discovery found
+            // something; a failed writer-supplied link leaves it empty, so drop
+            // the section entirely rather than trail an empty header.
+            const closest =
+              fallbacks.length > 0
+                ? `\n\nClosest items I found — all outside the acceptable window or off-beat, so use one only if you want to deliberately opt in:\n${fallbacks.join('\n')}`
+                : '';
+            const message = `I couldn't put together a valid rundown.\n\n${reason}${closest}\n\nReply when you'd like me to try again.`;
             writer.write({ type: 'text-start' as const, id: 'sourcing-thin' });
             writer.write({ type: 'text-delta' as const, id: 'sourcing-thin', delta: message });
             writer.write({ type: 'text-end' as const, id: 'sourcing-thin' });
