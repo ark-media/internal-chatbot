@@ -8,7 +8,6 @@ import {
   hardPaywallHostnames,
   isApprovedSource,
   isHardPaywallSource,
-  isInternationalSource,
   newsSources,
 } from '../news-sources';
 import type { Article, Candidate } from './types';
@@ -72,11 +71,49 @@ type ExtractResult =
   | { ok: true; title: string; text: string; date: string | null; source: string }
   | { ok: false; note: string };
 
+// How much of the article head to hand the date-derivation model. The
+// publication date lives in the dateline / byline / "Updated …" line near the
+// top; 2k chars is plenty and keeps the call cheap.
+const DATE_DERIVE_CHARS = 2000;
+
+// Tavily Extract often omits `publish_date` even when the body carries a clear
+// dateline. Rather than hand the breaking scan an undated article (which its
+// cutoff filter now drops fail-closed), read the date out of the body with a
+// fast model. The prompt is pinned to the ARTICLE'S OWN publication date — not
+// any date the story happens to mention — and returns null when the text
+// doesn't establish one. Best-effort: any failure yields null (→ undated →
+// dropped downstream), never a wrong date. `toIsoDate` is hoisted, so the parse
+// guard below rejects a well-formed-but-unparseable hallucination. The match is
+// anchored to the START of the (trimmed) output, so we only accept the date the
+// model gives as its answer — not one it echoes out of the article prose, which
+// is where a mentioned event date or a prompt-injected "Published:" line would
+// otherwise slip in.
+async function deriveDateFromText(text: string, signal?: AbortSignal): Promise<string | null> {
+  const head = text.trim().slice(0, DATE_DERIVE_CHARS);
+  if (!head) return null;
+  try {
+    const { text: out } = await generateText({
+      model: 'google/gemini-2.5-flash',
+      abortSignal: signal,
+      prompt: `Below is the top of a news article. Return ONLY the date the ARTICLE ITSELF was published, formatted as YYYY-MM-DD — the article's own publication/posted date from its dateline, byline timestamp, or "Published"/"Updated" line. Do NOT return a date merely mentioned in the story's events. If the text does not establish the article's publication date, return exactly "unknown".\n\n---\n${head}`,
+    });
+    const m = out.trim().match(/^\d{4}-\d{2}-\d{2}/);
+    return m ? toIsoDate(m[0]) : null;
+  } catch (err) {
+    // A cancelled gather must abort the whole run, not fall back to null.
+    if (signal?.aborted) throw err;
+    return null;
+  }
+}
+
 async function extractArticle(url: string, signal?: AbortSignal): Promise<ExtractResult> {
   const apiKey = process.env.TAVILY_API_KEY;
   if (!apiKey) return { ok: false, note: 'TAVILY_API_KEY missing' };
 
-  const key = cacheKey('orch:article', { url });
+  // v2: bumped when body-date derivation was added, so pre-derivation entries
+  // cached with date:null re-extract (and get a derived date) instead of being
+  // dropped fail-closed downstream.
+  const key = cacheKey('orch:article:v2', { url });
   const cached = await getCached<ExtractResult>(key, 72);
   if (cached) return cached;
 
@@ -103,11 +140,14 @@ async function extractArticle(url: string, signal?: AbortSignal): Promise<Extrac
     if (!r) return { ok: false, note: 'no content' };
 
     const text = await ensureEnglish(r.raw_content ?? '', signal);
+    // Prefer Tavily's own date; fall back to reading it out of the body when
+    // Tavily didn't return one, so undated-but-datable articles aren't dropped.
+    const date = r.publish_date ?? (await deriveDateFromText(text, signal));
     const result: ExtractResult = {
       ok: true,
       title: r.title ?? 'Untitled',
       text,
-      date: r.publish_date ?? null,
+      date,
       source: r.source_name ?? new URL(url).hostname,
     };
     await setCached(key, result);
@@ -770,24 +810,7 @@ export async function extractUrlToArticle(
   };
 }
 
-// Multi-domain keyword search across the approved outlets — the writer-facing
-// escape hatch for triage when automatic discovery comes up short. Returns
-// candidates only — adding one to the triage list is just an append;
-// verification and Tavily extraction wait for /group, same as discovery
-// candidates. Unlike discovery, it isn't date-scoped: the writer may be
-// reaching for an older story on purpose.
-//
-// Limitation: Tavily `include_domains` can't target specific X/Twitter
-// handles, so this covers the news sites and think tanks but not the 15 X
-// accounts — those come in through `discoverXPosts`. The UI surfaces this.
-export async function keywordSearch(
-  query: string,
-  signal?: AbortSignal,
-): Promise<Candidate[]> {
-  return tavilySearch({ query, maxResults: 12, signal });
-}
-
-// Recency-scoped approved-outlet search. Like keywordSearch but bounded to the
+// Recency-scoped approved-outlet search. Like a keyword search but bounded to the
 // last `days`, so results skew to fresh developments rather than the most
 // relevant all-time coverage. Used by the breaking scan's per-story follow-up
 // discovery, where the point is "what's the latest on this story", not a general
@@ -802,91 +825,6 @@ export async function searchRecentApproved(
     days: opts.days,
     signal: opts.signal,
   });
-}
-
-// Discover → approval-filter → dedupe/cap. No URL verification, no Tavily
-// extraction — this is the raw candidate pool the writer triages. Verification
-// and extraction are deferred to `extractCandidates`, run later on only the
-// candidates that survive triage.
-// Of the maxArticles triage slots, how many gatherCandidates reserves for the
-// international tier (isInternationalSource). At the default maxArticles of 20
-// this hands the Western press ~6 guaranteed slots; the reservation never wastes
-// a slot — it backfills with the best leftovers when fewer internationals exist.
-const RESERVED_INTERNATIONAL_SLOTS = 6;
-
-export async function gatherCandidates(opts: {
-  today: string;
-  extraGuidance?: string;
-  maxArticles?: number;
-  maxExtras?: number;
-  signal?: AbortSignal;
-}): Promise<{ top: Candidate[]; extras: Candidate[] }> {
-  const { today, extraGuidance = '', maxArticles = 20, maxExtras = 80, signal } = opts;
-
-  const candidates = await discoverCandidates(today, extraGuidance, signal);
-
-  // `tavilySearch` already re-checks `isApprovedSource` per result, but keep
-  // the filter here too — it's the funnel's belt-and-suspenders backstop and
-  // keeps `rawCount` vs `approvedCount` meaningful in the log below.
-  const approved = candidates.filter((c) => isApprovedSource(c.url));
-
-  // Dedupe by URL, preserving discovery order, and flag freshness from Tavily's
-  // claimed date (extraction can refine it later against the real publish date).
-  const seen = new Set<string>();
-  const pool: Candidate[] = [];
-  for (const c of approved) {
-    if (seen.has(c.url)) continue;
-    seen.add(c.url);
-    pool.push({ ...c, isFlagged: !inAcceptableRange(today, c.publicationDate) });
-  }
-
-  // Build the active triage list (`top`, capped at maxArticles) with a reserved
-  // share for the international press. Discovery's beat queries are Israel-
-  // centric, so the high-volume Israeli outlets out-rank the internationals in
-  // Tavily's order and crowd them out of the cap. Phase 1 fills the first
-  // (maxArticles − RESERVED_INTERNATIONAL_SLOTS) slots in discovery order, any
-  // outlet — internationals that land here count too. Phase 2 fills the
-  // remaining slots from what's left, internationals first, then backfills with
-  // the best leftovers so no slot is wasted when fewer internationals exist.
-  // Everything that doesn't make the cap spills into the "See more" overflow
-  // pile (capped at maxExtras) in discovery order.
-  const baseCap = Math.max(0, maxArticles - RESERVED_INTERNATIONAL_SLOTS);
-  const top: Candidate[] = [];
-  const rest: Candidate[] = [];
-  for (const c of pool) {
-    if (top.length < baseCap) top.push(c);
-    else rest.push(c);
-  }
-  const reserved = new Set<Candidate>();
-  for (const c of rest) {
-    if (top.length >= maxArticles) break;
-    if (isInternationalSource(c.url)) {
-      top.push(c);
-      reserved.add(c);
-    }
-  }
-  const extras: Candidate[] = [];
-  for (const c of rest) {
-    if (reserved.has(c)) continue;
-    if (top.length < maxArticles) top.push(c);
-    else if (extras.length < maxExtras) extras.push(c);
-    else break;
-  }
-
-  // Log the funnel so a zero result is diagnosable from the logs alone —
-  // distinguishes "discovery came up empty" (rawCount 0) from "found articles
-  // but all from non-approved outlets" (rawCount > 0, approvedCount 0).
-  console.log(
-    JSON.stringify({
-      event: 'orchestrator.gather_candidates',
-      rawCount: candidates.length,
-      approvedCount: approved.length,
-      candidateCount: top.length,
-      extraCount: extras.length,
-    }),
-  );
-
-  return { top, extras };
 }
 
 // Verify (and recover hallucinated 404s), then Tavily-extract a candidate list
@@ -945,28 +883,4 @@ export async function extractCandidates(
   );
 
   return extracted.filter((a): a is Article => a !== null);
-}
-
-// Discover + verify + extract in one pass — the original behavior, kept for
-// checkpoint-stage topic gathers (/start `topics` mode, /topics, /refetch),
-// where the result drops straight into a topic and extraction can't be
-// deferred. The `discover` /start path uses `gatherCandidates` instead.
-export async function gatherSources(opts: {
-  today: string;
-  timezone?: string;
-  extraGuidance?: string;
-  maxArticles?: number;
-  signal?: AbortSignal;
-}): Promise<Article[]> {
-  // gatherSources covers the checkpoint topic gathers — extraction runs on
-  // the survivors, no triage in between — so the overflow pool isn't used here.
-  // Pass `maxExtras: 0` to skip building it and only take the top candidates.
-  const { top } = await gatherCandidates({
-    today: opts.today,
-    extraGuidance: opts.extraGuidance,
-    maxArticles: opts.maxArticles,
-    maxExtras: 0,
-    signal: opts.signal,
-  });
-  return extractCandidates(top, opts.today, opts.signal);
 }

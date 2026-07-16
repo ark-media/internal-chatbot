@@ -78,7 +78,7 @@ describe('filterByCutoff', () => {
     expect(kept.every((c) => !c.dateUncertain)).toBe(true);
   });
 
-  it('retains undated candidates and flags them dateUncertain', () => {
+  it('retains undated candidates and flags them dateUncertain by default (lenient pre-extraction pass)', () => {
     const kept = filterByCutoff(
       [
         { url: 'https://reuters.com/undated', publicationDate: null },
@@ -88,6 +88,19 @@ describe('filterByCutoff', () => {
     );
     expect(kept).toHaveLength(2);
     expect(kept.every((c) => c.dateUncertain === true)).toBe(true);
+  });
+
+  it('drops undated candidates fail-closed when dropUndated is set (post-extraction pass)', () => {
+    const kept = filterByCutoff(
+      [
+        { url: 'https://reuters.com/undated', publicationDate: null },
+        { url: 'https://reuters.com/garbage', publicationDate: 'not a date' },
+        { url: 'https://reuters.com/dated', publicationDate: '2026-07-01' },
+      ],
+      cutoff,
+      { dropUndated: true },
+    );
+    expect(kept.map((c) => c.url)).toEqual(['https://reuters.com/dated']);
   });
 
   it('drops a same-day story whose precise timestamp predates the lock', () => {
@@ -290,7 +303,7 @@ describe('T-008: tier routing', () => {
     expect(suggestions).toHaveLength(0);
   });
 
-  it('orders tiers and caps at 5 with suppressedCount reporting the remainder', () => {
+  it('orders tiers and caps at 6 with suppressedCount reporting the remainder', () => {
     const many: BreakingCandidate[] = [
       graded({ title: 'Swap 1', novelty: 'NEW' }),
       graded({ title: 'Swap 2', novelty: 'NEW' }),
@@ -299,15 +312,65 @@ describe('T-008: tier routing', () => {
       graded({ title: 'Update 2', novelty: 'UPDATE', updatesBlock: 'A' }),
       graded({ title: 'Shock', onBeat: false, globalShock: true, confidence: 'confirmed' }),
       graded({ title: 'Swap 4', novelty: 'NEW' }),
+      graded({ title: 'Swap 5', novelty: 'NEW' }),
     ];
     const { suggestions, suppressedCount } = routeTiers(many, CUTOFF);
-    expect(suggestions).toHaveLength(5);
+    expect(suggestions).toHaveLength(6);
     expect(suppressedCount).toBe(2);
     // Can't-ignore first, then Updates, then Swaps.
     expect(suggestions[0].tier).toBe("Can't-ignore");
     expect(suggestions[1].tier).toBe('Update');
     expect(suggestions[2].tier).toBe('Update');
     expect(suggestions[3].tier).toBe('Swap');
+  });
+
+  it('routes a NEW on-beat human-interest story below the Swap bar to the C block', () => {
+    const { suggestions } = routeTiers(
+      [graded({ novelty: 'NEW', significance: 'low', humanInterest: true })],
+      CUTOFF,
+    );
+    expect(suggestions).toHaveLength(1);
+    expect(suggestions[0].tier).toBe('Human-interest');
+    expect(suggestions[0].block).toBe('C');
+  });
+
+  it('keeps a high-significance human-interest story in the Human-interest tier, not Swap', () => {
+    const { suggestions } = routeTiers(
+      [graded({ novelty: 'NEW', significance: 'high', humanInterest: true })],
+      CUTOFF,
+    );
+    expect(suggestions).toHaveLength(1);
+    // A moving profile graded high must still close the show, not displace a
+    // hard-news block as a Swap.
+    expect(suggestions[0].tier).toBe('Human-interest');
+    expect(suggestions[0].block).toBe('C');
+  });
+
+  it('reserves the closing slot for a human-interest story so hard news cannot crowd it out', () => {
+    const many: BreakingCandidate[] = [
+      graded({ title: 'Swap 1', novelty: 'NEW' }),
+      graded({ title: 'Swap 2', novelty: 'NEW' }),
+      graded({ title: 'Swap 3', novelty: 'NEW' }),
+      graded({ title: 'Swap 4', novelty: 'NEW' }),
+      graded({ title: 'Swap 5', novelty: 'NEW' }),
+      graded({ title: 'Swap 6', novelty: 'NEW' }),
+      graded({ title: 'Human', novelty: 'NEW', significance: 'low', humanInterest: true }),
+    ];
+    const { suggestions } = routeTiers(many, CUTOFF);
+    expect(suggestions).toHaveLength(6);
+    // Five hard-news swaps plus the reserved human close, which comes last.
+    expect(suggestions.filter((s) => s.tier === 'Swap')).toHaveLength(5);
+    expect(suggestions[5].tier).toBe('Human-interest');
+    expect(suggestions[5].block).toBe('C');
+  });
+
+  it('does not reserve a human slot when no human-interest candidate exists', () => {
+    const many: BreakingCandidate[] = Array.from({ length: 7 }, (_, i) =>
+      graded({ title: `Swap ${i}`, novelty: 'NEW' }),
+    );
+    const { suggestions } = routeTiers(many, CUTOFF);
+    expect(suggestions).toHaveLength(6);
+    expect(suggestions.every((s) => s.tier === 'Swap')).toBe(true);
   });
 
   it('flags a provisional Swap as unconfirmed and names the weakest block', () => {

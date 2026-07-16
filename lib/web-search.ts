@@ -15,9 +15,14 @@ const SEARCH_TIMEOUT_MS = 15_000;
 
 // Tavily Search — simple REST, free tier covers internal-tool usage.
 // https://docs.tavily.com/docs/rest-api/api-reference
+//
+// `topic` defaults to Tavily's 'general', which ranks timeless reference pages
+// (Wikipedia, dictionaries, Britannica) and — critically — IGNORES the `days`
+// window entirely. News discovery must pass topic: 'news' so results are fresh,
+// dated articles and `daysBack` is actually honored. See discoverOpenWeb.
 export async function webSearch(
   query: string,
-  opts: { maxResults?: number; daysBack?: number } = {},
+  opts: { maxResults?: number; daysBack?: number; topic?: 'general' | 'news' } = {},
 ): Promise<WebSearchResponse> {
   const apiKey = process.env.TAVILY_API_KEY;
   if (!apiKey) {
@@ -38,6 +43,7 @@ export async function webSearch(
         max_results: Math.min(opts.maxResults ?? 6, 10),
         search_depth: 'basic',
         include_answer: false,
+        topic: opts.topic,
         days: opts.daysBack,
       }),
       signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),

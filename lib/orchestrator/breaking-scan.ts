@@ -44,8 +44,10 @@ const GATE_MODEL = 'anthropic/claude-sonnet-4-6';
 export type BreakingCandidate = Candidate & {
   // Full extracted body, when the candidate has been through extractCandidates.
   content?: string;
-  // Set by filterByCutoff when the publication date is missing or unparseable:
-  // the candidate is retained (not dropped) and deferred to Gate-3 judgment.
+  // Set by filterByCutoff's lenient (pre-extraction) pass when the publication
+  // date is missing or unparseable: the candidate is retained so extraction can
+  // recover a date from the body. The post-extraction pass is fail-closed, so a
+  // still-undated candidate never reaches the gates carrying this flag.
   dateUncertain?: boolean;
   // For X/Twitter candidates, the posting handle (e.g. "@BarakRavid"), needed
   // for the single-curated-source provisional rule in Gate 3.
@@ -64,6 +66,9 @@ export type BreakingCandidate = Candidate & {
   // True only for the enumerated global-shock categories — the sole signal that
   // can route an off-beat story to the Can't-ignore tier.
   globalShock?: boolean;
+  // True for a softer human-interest story — routes to the Human-interest tier,
+  // which fills the C-block close without clearing the hard-news Swap bar.
+  humanInterest?: boolean;
 };
 
 export type Novelty = 'NEW' | 'UPDATE' | 'DUPLICATE';
@@ -162,14 +167,22 @@ function hasClockTime(raw: string): boolean {
 // granularity, so a story that published this morning — before a 1:20pm lock —
 // is dropped instead of surviving as "same day". Without a clock time the filter
 // falls back to day granularity: same-day-or-later is kept and deferred to the
-// gates (day resolution can't prove it predates the lock), and a missing or
-// unparseable date is retained but flagged `dateUncertain: true` rather than
-// silently dropped — the design intentionally hands undated stories to Gate-3
-// judgment. Pure and generic so it runs on raw candidates and extracted articles
-// alike; the pre-extraction pass is date-only, so it stays coarse there.
+// gates (day resolution can't prove it predates the lock).
+//
+// Undated stories (missing or unparseable publication date) are handled by
+// `dropUndated`. The PRE-extraction pass runs lenient (`dropUndated: false`): a
+// candidate may have no date yet because extraction hasn't recovered one, so it
+// survives — flagged `dateUncertain: true` — for extraction (and its body-date
+// derivation) to date it. The POST-extraction pass runs fail-closed
+// (`dropUndated: true`): if a story is STILL undated after extraction + body
+// derivation, we can't prove it's within the window, so we drop it rather than
+// risk surfacing stale news the writer sees as fresh. RSS is fail-closed too —
+// its items skip extraction, so an undated feed item is equally unprovable.
+// Pure and generic so it runs on raw candidates and extracted articles alike.
 export function filterByCutoff<T extends { publicationDate: string | null }>(
   candidates: T[],
   cutoff: string,
+  opts: { dropUndated?: boolean } = {},
 ): Array<T & { dateUncertain?: boolean }> {
   const cutoffDay = toDay(cutoff);
   const cutoffMs = Date.parse(cutoff);
@@ -188,6 +201,7 @@ export function filterByCutoff<T extends { publicationDate: string | null }>(
     // Date-only or unparseable → day granularity.
     const day = toDay(raw);
     if (day === null) {
+      if (opts.dropUndated) continue; // fail-closed: no provable date → drop
       out.push({ ...c, dateUncertain: true });
       continue;
     }
@@ -343,9 +357,14 @@ export async function discoverBreakingCandidates(opts: {
   // Verify + extract the survivors into full articles (refined dates + body).
   const articles: Article[] = await extractCandidates(withinCutoff, today, signal);
 
-  // Re-apply the cutoff with the refined extraction dates, re-attach handles,
-  // and drop anything that somehow left the approved set.
-  const refined = filterByCutoff(articles, cutoff).filter((a) => isApprovedSource(a.url));
+  // Re-apply the cutoff with the refined extraction dates (extraction derives a
+  // body date when Tavily returned none), re-attach handles, and drop anything
+  // that somehow left the approved set. Fail-closed now: a story still undated
+  // after extraction can't be proven within the window, so it's dropped rather
+  // than surfaced as possibly-stale.
+  const refined = filterByCutoff(articles, cutoff, { dropUndated: true }).filter((a) =>
+    isApprovedSource(a.url),
+  );
   const beatCandidates = refined.map((a): BreakingCandidate => {
     const handle = handleByUrl.get(a.url) ?? xHandleOf(a.url) ?? undefined;
     return {
@@ -366,7 +385,7 @@ export async function discoverBreakingCandidates(opts: {
   // granularity, since the pubDates carry a clock time — drop anything not
   // approved, and dedupe by URL against the extracted beat/X set.
   const beatUrls = new Set(beatCandidates.map((c) => c.url));
-  const rssCandidates = filterByCutoff(rss, cutoff)
+  const rssCandidates = filterByCutoff(rss, cutoff, { dropUndated: true })
     .filter((c) => isApprovedSource(c.url) && !beatUrls.has(c.url))
     .map((c): BreakingCandidate => ({
       title: c.title,
@@ -590,6 +609,10 @@ export const significanceVerdictSchema = z.object({
     .boolean()
     .optional()
     .describe('True ONLY for an enumerated global-shock category: head-of-state death, mass-casualty terror/disaster, war between major powers, or a US election/constitutional shock'),
+  humanInterest: z
+    .boolean()
+    .optional()
+    .describe('True if the story is a softer HUMAN-INTEREST piece (personal profile, survivor/hostage-family story, cultural/community piece, human resilience or everyday-life angle) rather than a hard-news development — the kind of story that closes the show, not one that leads it'),
 });
 
 export const significanceSchema = z.object({
@@ -607,6 +630,7 @@ For each candidate, grade:
 - significance — high / medium / low editorial weight, judged against Ark's beat and the day's context.
 - onBeat — true if the story is on Ark's beat (Israel, Jews, the Middle East), false if it is off-beat (e.g. a global-shock event elsewhere).
 - globalShock — true ONLY for one of the enumerated global-shock categories: the death of a head of state, a mass-casualty terror attack or disaster, war breaking out between major powers, or a US election / constitutional shock. Everything else is false, on-beat or not.
+- humanInterest — true if the story's primary value is a HUMAN-INTEREST angle: a personal profile, a survivor or hostage-family story, a cultural/community piece, a human-resilience or everyday-life story. These are softer closing-segment stories, not breaking reversals. A hard-news development is NOT human-interest even when it involves people. When in doubt, false.
 
 A single curated X handle (Amit Segal, Barak Ravid, Doron Kadosh, and the other listed correspondents) is high-trust but still a SINGLE source: grade it provisional. Never grade a single-source story confirmed.`;
 
@@ -657,6 +681,7 @@ export function applySignificance(
       significance: v.significance,
       onBeat: v.onBeat,
       globalShock: v.globalShock ?? false,
+      humanInterest: v.humanInterest ?? false,
     };
     // A single curated X handle is provisional no matter what the model said.
     if (restsOnSingleCuratedXSource(tagged)) tagged.confidence = 'provisional';
@@ -691,12 +716,15 @@ export function collapseCorroboration(candidates: BreakingCandidate[]): Breaking
 //   Update      — a material UPDATE to an in-script story.
 //   Can't-ignore — global-shock only (the sole off-beat-eligible tier), and it
 //                  requires confidence:'confirmed'.
+//   Human-interest — a softer on-beat NEW story for the C-block close; below the
+//                  Swap bar, and reserved one slot so it isn't crowded out.
 // Off-beat candidates cannot reach Swap/Update. Provisional (single-source)
 // items may appear as Swap/Update but are flagged unconfirmed. Results are
-// ordered Can't-ignore > Update > Swap, then by significance/confidence, and
-// capped at 5 with suppressedCount reporting the remainder.
+// ordered Can't-ignore > Update > Swap, then by significance/confidence, with a
+// human-interest close reserved last, and capped at 6 with suppressedCount
+// reporting the remainder.
 
-export type Tier = "Can't-ignore" | 'Update' | 'Swap';
+export type Tier = "Can't-ignore" | 'Update' | 'Swap' | 'Human-interest';
 
 export type SuggestionSource = { title: string; url: string; handle?: string };
 
@@ -735,7 +763,7 @@ export type ScanProgress =
 // natural slot a Swap candidate would displace. (v1 heuristic; the writer can
 // override which block they consider most droppable in a later version.)
 const WEAKEST_BLOCK = 'C';
-const MAX_SUGGESTIONS = 5;
+const MAX_SUGGESTIONS = 6;
 
 const SIGNIFICANCE_RANK: Record<Significance, number> = { high: 3, medium: 2, low: 1 };
 
@@ -747,6 +775,12 @@ function tierFor(c: BreakingCandidate): Tier | null {
   // Every other tier requires the story to be on Ark's beat.
   if (!c.onBeat) return null;
   if (c.novelty === 'UPDATE') return 'Update';
+  // A human-interest story is a softer close, not a hard-news reversal — it
+  // routes to its own C-block tier regardless of significance, so even a
+  // high-significance profile fills the close rather than displacing a hard-news
+  // block as a Swap. Checked before the Swap gate so significance can't reroute
+  // it. (See routeTiers: this tier is slotted separately and reserved a slot.)
+  if (c.novelty === 'NEW' && c.humanInterest === true) return 'Human-interest';
   // A Swap displaces a block from a locked script, so the bar is a genuinely
   // HIGH-significance new story — medium/low on-beat filler must not bump a
   // block. (The significance grade otherwise only ranks; here it gates.)
@@ -765,6 +799,9 @@ function whyItQualifies(c: BreakingCandidate, tier: Tier): string {
   if (tier === 'Update') {
     return `Overtakes the ${c.updatesBlock ?? '?'} block's story — ${c.significance ?? 'medium'} significance, ${sourcing}.`;
   }
+  if (tier === 'Human-interest') {
+    return `Human-interest story for the ${WEAKEST_BLOCK}-block close — ${sourcing}.`;
+  }
   return `New on-beat story, ${c.significance ?? 'medium'} significance, ${sourcing}.`;
 }
 
@@ -776,7 +813,11 @@ function toSuggestion(c: BreakingCandidate, tier: Tier): Suggestion {
     ...(c.sourceHandle ? { handle: c.sourceHandle } : {}),
   };
   const block =
-    tier === 'Swap' ? WEAKEST_BLOCK : tier === 'Update' ? c.updatesBlock : undefined;
+    tier === 'Swap' || tier === 'Human-interest'
+      ? WEAKEST_BLOCK
+      : tier === 'Update'
+        ? c.updatesBlock
+        : undefined;
   return {
     tier,
     headline: c.title,
@@ -788,33 +829,59 @@ function toSuggestion(c: BreakingCandidate, tier: Tier): Suggestion {
   };
 }
 
-const TIER_RANK: Record<Tier, number> = { "Can't-ignore": 3, Update: 2, Swap: 1 };
+const TIER_RANK: Record<Tier, number> = {
+  "Can't-ignore": 3,
+  Update: 2,
+  Swap: 1,
+  // Below Swap: a human-interest close never outranks a hard-news item, and it's
+  // slotted separately anyway (see routeTiers) so it can't be crowded out.
+  'Human-interest': 0,
+};
+
+type Routed = { c: BreakingCandidate; tier: Tier };
+
+// Rank by tier, then significance, then confirmed-over-provisional.
+function compareRouted(a: Routed, b: Routed): number {
+  if (TIER_RANK[a.tier] !== TIER_RANK[b.tier]) return TIER_RANK[b.tier] - TIER_RANK[a.tier];
+  const sa = SIGNIFICANCE_RANK[a.c.significance ?? 'low'];
+  const sb = SIGNIFICANCE_RANK[b.c.significance ?? 'low'];
+  if (sa !== sb) return sb - sa;
+  // Confirmed outranks provisional at equal significance.
+  const ca = a.c.confidence === 'confirmed' ? 1 : 0;
+  const cb = b.c.confidence === 'confirmed' ? 1 : 0;
+  return cb - ca;
+}
 
 // Route, rank, and cap. `cutoff` is echoed back so the UI can render
 // "scanning since [cutoff]" and the empty state. An input with no qualifying
 // candidates returns suggestions:[] — the explicit "nothing clears the bar"
 // result the UI renders rather than manufacturing a flag.
+//
+// The lineup reserves one closing slot for a human-interest C-block story when
+// one exists, so a softer close is always offered alongside the hard-news swaps
+// and updates. The remaining slots are the top-ranked hard-news items, and the
+// human close comes last (it reads as the sign-off). Extra human stories only
+// backfill slots the hard-news items didn't claim.
 export function routeTiers(gradedCandidates: BreakingCandidate[], cutoff: string): ScanResult {
   const routed = gradedCandidates
-    .map((c) => {
+    .map((c): Routed | null => {
       const tier = tierFor(c);
       return tier ? { c, tier } : null;
     })
-    .filter((x): x is { c: BreakingCandidate; tier: Tier } => x !== null);
+    .filter((x): x is Routed => x !== null);
 
-  routed.sort((a, b) => {
-    if (TIER_RANK[a.tier] !== TIER_RANK[b.tier]) return TIER_RANK[b.tier] - TIER_RANK[a.tier];
-    const sa = SIGNIFICANCE_RANK[a.c.significance ?? 'low'];
-    const sb = SIGNIFICANCE_RANK[b.c.significance ?? 'low'];
-    if (sa !== sb) return sb - sa;
-    // Confirmed outranks provisional at equal significance.
-    const ca = a.c.confidence === 'confirmed' ? 1 : 0;
-    const cb = b.c.confidence === 'confirmed' ? 1 : 0;
-    return cb - ca;
-  });
+  const human = routed.filter((x) => x.tier === 'Human-interest').sort(compareRouted);
+  const hard = routed.filter((x) => x.tier !== 'Human-interest').sort(compareRouted);
 
-  const suggestions = routed.slice(0, MAX_SUGGESTIONS).map(({ c, tier }) => toSuggestion(c, tier));
-  const suppressedCount = Math.max(0, routed.length - MAX_SUGGESTIONS);
+  // Carve out the closing slot before taking hard-news items, so a human close
+  // is guaranteed a place whenever a candidate exists.
+  const reserve = human.length > 0 ? 1 : 0;
+  const hardPicks = hard.slice(0, MAX_SUGGESTIONS - reserve);
+  const humanPicks = human.slice(0, MAX_SUGGESTIONS - hardPicks.length);
+  const picked = [...hardPicks, ...humanPicks];
+
+  const suggestions = picked.map(({ c, tier }) => toSuggestion(c, tier));
+  const suppressedCount = Math.max(0, routed.length - picked.length);
   return { suggestions, suppressedCount, cutoff };
 }
 

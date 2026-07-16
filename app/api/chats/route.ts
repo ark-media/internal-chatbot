@@ -1,4 +1,4 @@
-import { ensureChatTables, isSurface, listChats } from '@/lib/chats';
+import { ensureChatTables, isSurface, listChats, SURFACE_VALUES } from '@/lib/chats';
 
 export const runtime = 'nodejs';
 
@@ -9,7 +9,7 @@ export async function GET(req: Request) {
   const surfaceParam = url.searchParams.get('surface');
   if (!isSurface(surfaceParam)) {
     return Response.json(
-      { error: 'invalid_surface', expected: ['archive', 'prep', 'news'] },
+      { error: 'invalid_surface', expected: SURFACE_VALUES },
       { status: 400 },
     );
   }
