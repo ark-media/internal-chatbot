@@ -28,10 +28,10 @@ import { CONDUCTOR_SYSTEM, buildRunStateContext } from '@/lib/scriptwriter/promp
 import { parseScopeFromPrompt } from '@/lib/scriptwriter/scope';
 import { sourceStories, type SourcingProgress } from '@/lib/scriptwriter/sourcing';
 import {
+  claimSourcing,
   ensureScriptRunTables,
   loadRun,
   saveRun,
-  saveRunIfUnchanged,
 } from '@/lib/scriptwriter/state';
 import { createConductorTools, topicSummary, type EmitPart } from '@/lib/scriptwriter/tools';
 import type { ScriptRun } from '@/lib/scriptwriter/types';
@@ -153,15 +153,15 @@ export async function POST(req: Request) {
       };
 
       // -- Sourcing turn (first message, or retry after a failed sourcing) --
+      // 'sourcing' is fresh/retry; 'sourcing-active' is either in-flight (claim
+      // will lose) or a crashed run past the stale window (claim will win).
       const needsSourcing =
-        run.stage === 'sourcing' || (run.stage === 'working' && run.topics.length === 0);
+        run.stage === 'sourcing' || run.stage === 'sourcing-active';
       if (needsSourcing) {
-        // Claim via optimistic lock so a double-submitted first message can't
-        // run discovery twice.
-        const claimed = await saveRunIfUnchanged(
-          { ...run, stage: 'working', errorMessage: null },
-          run.version,
-        );
+        // Atomic stage CAS: flips 'sourcing' → 'sourcing-active' for exactly
+        // one caller. A staggered second message sees a live 'sourcing-active'
+        // and loses the claim, so discovery never runs twice.
+        const claimed = await claimSourcing(chatId);
         if (!claimed) {
           transientOnly = true;
           writer.write({

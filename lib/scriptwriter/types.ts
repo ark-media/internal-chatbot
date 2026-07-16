@@ -4,7 +4,17 @@
 
 export type BlockSlot = 'A' | 'B' | 'C';
 
-export type RunStage = 'sourcing' | 'working' | 'assembling' | 'complete' | 'error';
+// 'sourcing-active' is the in-flight marker: a run is claimed for discovery
+// exactly once by flipping 'sourcing' → 'sourcing-active' (see claimSourcing).
+// It is deliberately distinct from 'sourcing' so a concurrent request can tell
+// "needs sourcing" apart from "already sourcing" and refuse to run it twice.
+export type RunStage =
+  | 'sourcing'
+  | 'sourcing-active'
+  | 'working'
+  | 'assembling'
+  | 'complete'
+  | 'error';
 
 // Per-topic lifecycle. Topics are independent — there is no sequential cursor;
 // the writer works any topic whose preconditions are met, in any order.
@@ -97,9 +107,8 @@ export type ScriptRun = {
   lastDistilledVersion?: number;
   errorMessage: string | null;
   updatedAt: string;
-  // Monotonic row version, bumped on every persist. The optimistic lock CASes
-  // on this rather than updatedAt, whose ms-truncated timestamp can collide
-  // for two writes in the same millisecond.
+  // Monotonic row version, bumped on every persist. Kept for optimistic-
+  // concurrency use; the sourcing claim now CASes on stage (see claimSourcing).
   version: number;
 };
 

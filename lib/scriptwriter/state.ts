@@ -59,8 +59,8 @@ function buildPayload(run: ScriptRun): RunStatePayload {
 export async function saveRun(run: ScriptRun): Promise<void> {
   const stateJson = JSON.stringify(buildPayload(run));
   // expires_at is bumped on every save so an active run never drops out of the
-  // sidebar list. version increments on every write and is the optimistic
-  // lock's CAS key (see saveRunIfUnchanged).
+  // sidebar list. version increments on every write, available for optimistic-
+  // concurrency checks (the sourcing claim itself CASes on stage — claimSourcing).
   await sql`
     INSERT INTO script_runs (chat_id, stage, today, timezone, state, version, updated_at)
     VALUES (${run.chatId}, ${run.stage}, ${run.today}, ${run.timezone}, ${stateJson}::jsonb, 0, date_trunc('milliseconds', NOW()))
@@ -75,49 +75,32 @@ export async function saveRun(run: ScriptRun): Promise<void> {
   `;
 }
 
-// Atomic compare-and-set on the run's stage. Used to claim the sourcing turn
-// exactly once when a double-submitted first message races. Returns true iff
-// the update happened.
-export async function saveRunIfStage(
-  run: ScriptRun,
-  requiredStages: RunStage[],
-): Promise<boolean> {
-  const stateJson = JSON.stringify(buildPayload(run));
-  const rows = (await sql`
-    UPDATE script_runs
-       SET stage = ${run.stage},
-           today = ${run.today},
-           timezone = ${run.timezone},
-           state = ${stateJson}::jsonb,
-           version = version + 1,
-           updated_at = date_trunc('milliseconds', NOW()),
-           expires_at = NOW() + INTERVAL '7 days'
-     WHERE chat_id = ${run.chatId}
-       AND stage = ANY(${requiredStages}::text[])
-   RETURNING chat_id
-  `) as unknown as Array<{ chat_id: string }>;
-  return rows.length > 0;
-}
+// How long a 'sourcing-active' claim is trusted before it's presumed dead. Set
+// safely above maxDuration (300s) so we never reclaim a run whose function is
+// still alive — only one that was killed mid-sourcing.
+const SOURCING_STALE_INTERVAL = '10 minutes';
 
-// Optimistic-locking variant: write only when the row's version still matches
-// the snapshot the caller loaded with. A monotonic integer, unlike the
-// ms-truncated updated_at, can't collide for same-millisecond writes.
-export async function saveRunIfUnchanged(
-  run: ScriptRun,
-  expectedVersion: number,
-): Promise<boolean> {
-  const stateJson = JSON.stringify(buildPayload(run));
+// Atomically claim the sourcing turn by flipping the run into the in-flight
+// stage. Succeeds only when the run is claimable — freshly 'sourcing', or a
+// 'sourcing-active' claim old enough to be presumed dead (a crashed run). A
+// live claim (fresh 'sourcing-active') loses the CAS, so a double-submitted or
+// staggered first message can never run discovery twice. Only stage/version
+// move; the state payload is left untouched for the caller to reload.
+export async function claimSourcing(chatId: string): Promise<boolean> {
   const rows = (await sql`
     UPDATE script_runs
-       SET stage = ${run.stage},
-           today = ${run.today},
-           timezone = ${run.timezone},
-           state = ${stateJson}::jsonb,
+       SET stage = 'sourcing-active',
            version = version + 1,
            updated_at = date_trunc('milliseconds', NOW()),
            expires_at = NOW() + INTERVAL '7 days'
-     WHERE chat_id = ${run.chatId}
-       AND version = ${expectedVersion}
+     WHERE chat_id = ${chatId}
+       AND (
+         stage = 'sourcing'
+         OR (
+           stage = 'sourcing-active'
+           AND updated_at < NOW() - (${SOURCING_STALE_INTERVAL})::interval
+         )
+       )
    RETURNING chat_id
   `) as unknown as Array<{ chat_id: string }>;
   return rows.length > 0;
