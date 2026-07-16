@@ -28,12 +28,13 @@ import { CONDUCTOR_SYSTEM, buildRunStateContext } from '@/lib/scriptwriter/promp
 import { parseScopeFromPrompt } from '@/lib/scriptwriter/scope';
 import {
   extractUrls,
+  MAX_URL_STORIES,
   sourceFromUrls,
   sourceNamedTopics,
   sourceStories,
   type SourcingProgress,
 } from '@/lib/scriptwriter/sourcing';
-import { normalizeScope } from '@/lib/scriptwriter/scope';
+import { scopeForSourcedSlots } from '@/lib/scriptwriter/scope';
 import {
   claimSourcing,
   ensureScriptRunTables,
@@ -202,23 +203,23 @@ export async function POST(req: Request) {
           //  3. neither — discover the day's stories.
           const planned = run.plannedTopics ?? [];
           // A planned run's brief embeds each topic's link, so only look for
-          // pasted links when the editor did NOT name topics per block.
-          const urls = planned.length === 0 && run.originalPrompt ? extractUrls(run.originalPrompt) : [];
+          // pasted links when the editor did NOT name topics per block. Every
+          // link is stripped from the scope text below, but only the first three
+          // become blocks — there are just three slots.
+          const allUrls = planned.length === 0 && run.originalPrompt ? extractUrls(run.originalPrompt) : [];
+          const urls = allUrls.slice(0, MAX_URL_STORIES);
 
-          if (planned.length > 0) {
-            // The filled fields ARE the scope — each carries its own slot.
-            run = {
-              ...run,
-              scope: normalizeScope({ type: 'blocks', slots: planned.map((t) => t.slot) }),
-            };
-          } else if (run.originalPrompt) {
+          if (planned.length === 0 && run.originalPrompt) {
             // Scope comes from the original prompt (start page); parse before
-            // discovery since targeted mode changes the queries. Strip any pasted
-            // URLs first so a raw link never leaks into the scope's storyHint —
-            // only the writer's instruction words ("a C block based on…") shape it.
-            const scopeText = urls.reduce((t, u) => t.split(u).join(' '), run.originalPrompt);
+            // discovery since targeted mode changes the queries, and because
+            // sourceFromUrls reads it to slot the links. Strip any pasted URLs
+            // first so a raw link never leaks into the scope's storyHint — only
+            // the writer's instruction words ("a C block based on…") shape it.
+            const scopeText = allUrls.reduce((t, u) => t.split(u).join(' '), run.originalPrompt);
             run = { ...run, scope: await parseScopeFromPrompt(scopeText) };
           }
+          // A planned run needs no pre-parse: its slots come from the form, and
+          // scope is reconciled to what actually sourced (below).
 
           const { topics, backups, candidates, insufficientPool } =
             planned.length > 0
@@ -302,6 +303,14 @@ export async function POST(req: Request) {
             backups,
             candidates: snapshotCandidates,
             errorMessage: null,
+            // The link and named-topic paths assign slots themselves, so scope
+            // must follow what they actually sourced — otherwise a slot with no
+            // topic sits in scope forever, blocking assembly and telling the
+            // conductor blocks exist that don't. Discovery keeps its parsed
+            // scope: a thin pool there is explained by the sourcing note.
+            ...(planned.length > 0 || urls.length > 0
+              ? { scope: scopeForSourcedSlots(topics.map((t) => t.story.blockSlot)) }
+              : {}),
             // A thin-but-usable rundown carries the selector's note so the
             // conductor can explain the unfilled slots instead of implying
             // they exist.

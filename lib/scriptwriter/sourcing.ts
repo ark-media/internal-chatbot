@@ -47,6 +47,22 @@ export function discoveryDays(today: string): number {
   return new Date(Date.UTC(y, m - 1, d)).getUTCDay() === 1 ? 3 : 2;
 }
 
+// Collapse whitespace and cap length before interpolating an untrusted field
+// (an article title/source from the open web, extracted body text) into a
+// prompt. Load-bearing: a newline-laden title can otherwise forge a fake
+// "[N] source — title" pool boundary and desync the index the selector maps its
+// candidateIndex answers back onto — which silently attaches one source's
+// credibility judgment to a different source.
+function oneLine(s: string, max: number): string {
+  return s.replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+// One indexed candidate-pool line, safe to interpolate. Every pool the models
+// pick from by index is built with this.
+function poolLine(i: number, c: Candidate, suffix = ''): string {
+  return `[${i}] ${oneLine(c.source, 120)} — ${oneLine(c.title, 200)} (${c.publicationDate ?? 'no date'})${suffix}`;
+}
+
 function hostnameOf(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, '');
@@ -333,10 +349,7 @@ export async function rankAndSelect(opts: {
   const slots = slotsInScope(scope);
 
   const pool = candidates
-    .map((c, i) => {
-      const flag = c.isFlagged ? ' [outside-window]' : '';
-      return `[${i}] ${c.source} — ${c.title} (${c.publicationDate ?? 'no date'})${flag}`;
-    })
+    .map((c, i) => poolLine(i, c, c.isFlagged ? ' [outside-window]' : ''))
     .join('\n');
 
   const { object } = await generateObject({
@@ -405,15 +418,8 @@ const SUMMARY_SYSTEM = `You distill news articles for a broadcast script writer.
 const EXCERPT_CHARS = 6000;
 
 function indexedArticles(articles: Article[]): string {
-  // Collapse whitespace in the per-article header so a newline-laden title
-  // can't forge a fake "[N] source — title" boundary and desync the index the
-  // summarizer/quote models map their output back onto.
-  const oneLine = (s: string, max: number) => s.replace(/\s+/g, ' ').trim().slice(0, max);
   return articles
-    .map((a, i) => {
-      const excerpt = a.content.slice(0, EXCERPT_CHARS).replace(/\s+/g, ' ').trim();
-      return `[${i}] ${oneLine(a.source, 120)} — ${oneLine(a.title, 200)}\n${excerpt}`;
-    })
+    .map((a, i) => `[${i}] ${oneLine(a.source, 120)} — ${oneLine(a.title, 200)}\n${oneLine(a.content, EXCERPT_CHARS)}`)
     .join('\n\n');
 }
 
@@ -646,17 +652,31 @@ export async function sourceStories(opts: {
 // honestly and extract/distill it exactly like a discovered source, so the rest
 // of the understand → draft pipeline runs unchanged.
 
-const MAX_URL_STORIES = 3; // A/B/C — one block per link, capped at a full episode
+export const MAX_URL_STORIES = 3; // A/B/C — one block per link, capped at a full episode
 
 // Pull http(s) links out of a free-text brief, trimming trailing punctuation a
-// writer might type after a pasted URL, deduped and capped at a full episode.
-// Exported for tests.
+// writer might type after a pasted URL, deduped. Deliberately UNcapped: callers
+// that turn links into blocks cap at MAX_URL_STORIES themselves, while callers
+// that strip or collect links (scope parsing, a per-block topic field) need
+// every link — a capped list there would leak the extras into a search query or
+// the scope parser. Exported for tests.
+//
+// The character class excludes brackets so a link in prose — "(https://x/y)" —
+// doesn't swallow the closing paren; the trade is that a URL with balanced
+// parens (Wikipedia's `/wiki/Foo_(bar)`) truncates. Deliberate: news links with
+// parens are rare, links inside prose are not.
 export function extractUrls(text: string): string[] {
   const matches = text.match(/https?:\/\/[^\s<>()[\]{}"']+/gi) ?? [];
   const cleaned = matches
     .map((u) => u.replace(/[.,;:!?]+$/, '').trim())
     .filter((u) => u.length > 0);
-  return [...new Set(cleaned)].slice(0, MAX_URL_STORIES);
+  return [...new Set(cleaned)];
+}
+
+function unreadableReason(count: number): string {
+  return count === 1
+    ? "I couldn't read the article at that link — it may be paywalled, removed, or blocking extraction. Paste the text directly, or send a different link."
+    : "I couldn't read any of the linked articles — they may be paywalled, removed, or blocking extraction. Paste the text directly, or send different links.";
 }
 
 // Whether the brief names a B or C block outright. The scope parser guesses
@@ -731,12 +751,12 @@ async function proposeStoryFromArticle(opts: {
     },
     prompt: `${guidance ? `The writer's brief for this run: ${guidance}\n\n` : ''}Article the writer supplied:
 
-Source: ${article.source}
-Title: ${article.title}
-URL: ${article.url}
+Source: ${oneLine(article.source, 120)}
+Title: ${oneLine(article.title, 200)}
+URL: ${oneLine(article.url, 500)}
 Published: ${article.publicationDate ?? 'unknown'}
 
-${article.content.slice(0, EXCERPT_CHARS)}
+${oneLine(article.content, EXCERPT_CHARS)}
 
 Frame this as one block story for the show.`,
     temperature: 0.2,
@@ -815,9 +835,7 @@ async function gatherCorroboration(opts: {
   }
   if (candidates.length === 0) return [];
 
-  const pool = candidates
-    .map((c, i) => `[${i}] ${c.source} — ${c.title} (${c.publicationDate ?? 'no date'})`)
-    .join('\n');
+  const pool = candidates.map((c, i) => poolLine(i, c)).join('\n');
   const { object } = await generateObject({
     model: 'anthropic/claude-sonnet-4-6',
     schema: corroborationSchema,
@@ -912,33 +930,46 @@ export async function sourceFromUrls(opts: {
 
   if (articles.length === 0) {
     onProgress?.({ step: 'ready' });
-    return {
-      topics: [],
-      backups: [],
-      candidates,
-      insufficientPool: {
-        reason:
-          urls.length === 1
-            ? "I couldn't read the article at that link — it may be paywalled, removed, or blocking extraction. Paste the text directly, or send a different link."
-            : "I couldn't read any of the linked articles — they may be paywalled, removed, or blocking extraction. Paste the text directly, or send different links.",
-      },
-    };
+    return { topics: [], backups: [], candidates, insufficientPool: { reason: unreadableReason(urls.length) } };
   }
 
-  const proposals = await Promise.all(
-    articles.map((a) => proposeStoryFromArticle({ article: a, guidance, today, signal })),
+  // Frame each link. A transient failure drops that ONE link rather than
+  // rejecting the whole run, matching how sourceNamedTopics treats a topic.
+  const proposed = await Promise.all(
+    articles.map((a) =>
+      proposeStoryFromArticle({ article: a, guidance, today, signal }).catch((err) => {
+        if (signal?.aborted) throw err;
+        console.warn(
+          JSON.stringify({
+            event: 'scriptwriter.url_frame_error',
+            url: a.url,
+            err: String(err).slice(0, 200),
+          }),
+        );
+        return null;
+      }),
+    ),
   );
+  const framed = articles.flatMap((article, i) => {
+    const proposal = proposed[i];
+    return proposal ? [{ article, proposal }] : [];
+  });
+
+  if (framed.length === 0) {
+    onProgress?.({ step: 'ready' });
+    return { topics: [], backups: [], candidates, insufficientPool: { reason: unreadableReason(urls.length) } };
+  }
 
   // Deepen each story with corroborating open-web coverage so a single shared
   // link isn't the block's only source. Best-effort per story: a failure here
   // never sinks the run — the writer's link still ships as a valid block.
-  const linkedUrls = new Set(articles.map((a) => a.url));
+  const linkedUrls = new Set(framed.map((f) => f.article.url));
   const corroboration = await Promise.all(
-    articles.map((_, i) =>
+    framed.map((f) =>
       gatherCorroboration({
-        headline: proposals[i].headline,
-        angle: proposals[i].angle,
-        query: proposals[i].searchQuery,
+        headline: f.proposal.headline,
+        angle: f.proposal.angle,
+        query: f.proposal.searchQuery,
         excludeUrls: linkedUrls,
         today,
         signal,
@@ -953,14 +984,14 @@ export async function sourceFromUrls(opts: {
   );
 
   // The writer's link is the lead source of each story; corroboration follows.
-  const perStory: StorySource[][] = articles.map((a, i) => {
+  const perStory: StorySource[][] = framed.map(({ article: a, proposal }, i) => {
     const primary: StorySource = {
       url: a.url,
       title: a.title,
       source: a.source,
       publicationDate: a.publicationDate,
-      credibility: proposals[i].credibility,
-      credibilityNote: proposals[i].credibilityNote,
+      credibility: proposal.credibility,
+      credibilityNote: proposal.credibilityNote,
       content: a.content,
       // Deliberately NOT carrying the freshness flag: the acceptable-publication
       // window is a discovery guard against surfacing stale items as "today's
@@ -968,7 +999,6 @@ export async function sourceFromUrls(opts: {
       // block must not carry an on-air [FLAG: outside window] marker. The date
       // still shows in the digest for the understanding gate to weigh.
       isFlagged: false,
-      ...(a.fetchError ? { fetchError: a.fetchError } : {}),
     };
     return [primary, ...corroboration[i]];
   });
@@ -994,21 +1024,21 @@ export async function sourceFromUrls(opts: {
   );
   const distilledFlat = attachDistilled(flat, distilled);
 
-  const slots = slotsForUrlStories(scope, articles.length, guidance ?? '');
+  const slots = slotsForUrlStories(scope, framed.length, guidance ?? '');
   const topics: TopicRun[] = [];
   let cursor = 0;
-  articles.forEach((_, i) => {
+  framed.forEach(({ proposal }, i) => {
     const n = perStory[i].length;
     const sources = distilledFlat.slice(cursor, cursor + n);
     cursor += n;
     topics.push({
       stage: 'proposed',
       story: {
-        headline: proposals[i].headline,
-        angle: proposals[i].angle,
-        rationale: proposals[i].rationale,
+        headline: proposal.headline,
+        angle: proposal.angle,
+        rationale: proposal.rationale,
         blockSlot: slots[i],
-        register: proposals[i].register,
+        register: proposal.register,
         sources,
       },
       contract: null,
@@ -1027,7 +1057,24 @@ export async function sourceFromUrls(opts: {
   }));
 
   onProgress?.({ step: 'ready' });
-  return { topics, backups: [], candidates: allCandidates };
+  // Links we couldn't read or frame are a real gap — say so rather than quietly
+  // shipping fewer blocks than the writer pasted (and note that dropping one
+  // also re-slots the rest).
+  const dropped = urls.length - framed.length;
+  return {
+    topics,
+    backups: [],
+    candidates: allCandidates,
+    ...(dropped > 0
+      ? {
+          insufficientPool: {
+            reason: `${dropped} of the ${urls.length} links you sent couldn't be read (paywalled, removed, or blocking extraction), so ${
+              dropped > 1 ? 'those blocks are' : 'that block is'
+            } unfilled. Paste the text directly, or send a different link.`,
+          },
+        }
+      : {}),
+  };
 }
 
 // -- Editor-named topic sourcing -----------------------------------------------------
@@ -1153,13 +1200,13 @@ async function frameNamedTopic(opts: {
   if (pool.length === 0) return null;
 
   const poolText = pool
-    .map((c, i) => {
-      const tag = c.isEditorLink ? ' [editor link]' : '';
-      return `[${i}] ${c.source} — ${c.title} (${c.publicationDate ?? 'no date'})${tag}`;
-    })
+    .map((c, i) => poolLine(i, c, c.isEditorLink ? ' [editor link]' : ''))
     .join('\n');
+  // The excerpt is untrusted body text sitting directly above the indexed pool,
+  // so it is collapsed too: left raw, a crafted article could forge its own
+  // "[N] source — title" lines and desync the selector's index mapping.
   const linkedExcerpt = linked[0]
-    ? `The article the writer linked (${linked[0].source} — ${linked[0].title}):\n\n${linked[0].content.slice(0, EXCERPT_CHARS)}\n\n`
+    ? `The article the writer linked (${oneLine(linked[0].source, 120)} — ${oneLine(linked[0].title, 200)}):\n\n${oneLine(linked[0].content, EXCERPT_CHARS)}\n\n`
     : '';
 
   const { object } = await generateObject({

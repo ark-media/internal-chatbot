@@ -8,6 +8,21 @@ import { z } from 'zod';
 
 import type { BlockSlot, Scope } from './types';
 
+// The scope a run actually has once sourcing decided which slots got stories.
+//
+// Sourcing paths that assign slots themselves (writer-supplied links, editor-
+// named topics) MUST reconcile scope to what they produced, because scope and
+// topics are two sources of truth that silently diverge otherwise:
+//   - a slot in scope with no topic can never satisfy allInScopeApproved, so
+//     the writer approves every block they have and is never offered assembly —
+//     and there's no way out, since narrowing via setScope disables assembly
+//     entirely (only episode scope assembles);
+//   - buildRunStateContext would otherwise tell the conductor "full episode
+//     (A/B/C)" for a one-block run, implying blocks that don't exist.
+export function scopeForSourcedSlots(slots: BlockSlot[]): Scope {
+  return normalizeScope({ type: 'blocks', slots });
+}
+
 export const scopeSchema = z.object({
   type: z.enum(['episode', 'blocks', 'single']),
   slots: z

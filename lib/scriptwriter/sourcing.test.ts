@@ -133,10 +133,20 @@ describe('extractUrls', () => {
     expect(extractUrls('(https://example.com/story)')).toEqual(['https://example.com/story']);
   });
 
-  it('dedupes and caps at a full episode (3)', () => {
+  it('dedupes, preserving order', () => {
+    expect(extractUrls('https://a.com https://b.com https://a.com')).toEqual([
+      'https://a.com',
+      'https://b.com',
+    ]);
+  });
+
+  it('does NOT cap — callers that strip links need every one, or extras leak', () => {
+    // The block cap lives at the URL call site. If it lived here, a 4th link
+    // would survive the route's scope-text strip and reach the scope parser,
+    // and would stay in a per-block topic's search query.
     expect(
-      extractUrls('https://a.com https://b.com https://a.com https://c.com https://d.com'),
-    ).toEqual(['https://a.com', 'https://b.com', 'https://c.com']);
+      extractUrls('https://a.com https://b.com https://c.com https://d.com'),
+    ).toHaveLength(4);
   });
 
   it('returns nothing for a brief with no links', () => {
