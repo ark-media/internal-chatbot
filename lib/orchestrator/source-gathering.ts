@@ -317,6 +317,21 @@ function extractJsonArray(raw: string): string | null {
   return null;
 }
 
+// parseCandidates flattens every failure into [], so it can't tell the model
+// genuinely reporting no posts from a turn that produced nothing to parse.
+// A well-formed JSON array — even an empty one — is an answer; anything else
+// (no array, malformed JSON, a non-array) is not. null means "not an answer".
+function parsedArrayLength(raw: string): number | null {
+  const json = extractJsonArray(raw);
+  if (!json) return null;
+  try {
+    const parsed: unknown = JSON.parse(json);
+    return Array.isArray(parsed) ? parsed.length : null;
+  } catch {
+    return null;
+  }
+}
+
 // Exported for unit testing.
 export function parseCandidates(raw: string): Candidate[] {
   const json = extractJsonArray(raw);
@@ -351,6 +366,11 @@ export function parseCandidates(raw: string): Candidate[] {
 // returns only redirect URLs (dropped in parseCandidates). Each yields zero
 // candidates, which the caller would otherwise surface as "no posts." Retry a
 // few times — a fresh call usually succeeds.
+//
+// This covers *failures* only. A well-formed empty array is a real answer, and
+// retrying it re-rolls the same temperature-0 grounded search at ~a minute an
+// attempt — which is what pushed /api/news/orchestrator/chat past its 300s
+// ceiling. See the empty-array early return below.
 const DISCOVERY_MAX_ATTEMPTS = 3;
 
 // Recent posts from the approved X/Twitter handles. Kept on grounded Gemini
@@ -403,8 +423,21 @@ export async function discoverXPosts(
         }
         return candidates;
       }
-      // Completed, but empty/unparseable text or no usable handle URLs — log
-      // the miss so the failure mode is visible, then retry.
+      // A well-formed empty array is the model's actual answer — nothing on the
+      // handle list today. Accept it and let the caller degrade to "no X posts"
+      // rather than burning two more grounded searches to hear it again.
+      if (parsedArrayLength(text) === 0) {
+        console.warn(
+          JSON.stringify({
+            event: 'orchestrator.discover_x.none',
+            attempt,
+            finishReason,
+          }),
+        );
+        return [];
+      }
+      // Completed, but unparseable text or only redirect/off-handle URLs — one
+      // of the silent failures above. Log the miss so it stays visible, retry.
       console.warn(
         JSON.stringify({
           event: 'orchestrator.discover_x.empty',
