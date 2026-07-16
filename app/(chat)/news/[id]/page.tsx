@@ -342,7 +342,7 @@ function NewsBody({
   const triggerScan = () => {
     submit(
       'Check for breaking news that may have broken since I locked this finalized script, ' +
-        'and show me the Swap / Update / Can\'t-ignore suggestions. ' +
+        'and show me the Swap / Update / Can\'t-ignore / Human-interest suggestions. ' +
         'Do not edit or redraft the script on this turn.',
     );
   };
@@ -1056,12 +1056,13 @@ function BreakingProgress({ data }: { data: ScanProgressSnapshot }) {
 
 /* Breaking-news scan (Phase 1) suggestion cards */
 
-const TIER_ORDER: Tier[] = ["Can't-ignore", 'Update', 'Swap'];
+const TIER_ORDER: Tier[] = ["Can't-ignore", 'Update', 'Swap', 'Human-interest'];
 
 const TIER_STYLES: Record<Tier, string> = {
   "Can't-ignore": 'bg-rose-500/20 text-rose-200',
   Update: 'bg-amber-500/20 text-amber-200',
   Swap: 'bg-sky-500/20 text-sky-200',
+  'Human-interest': 'bg-emerald-500/20 text-emerald-200',
 };
 
 function formatCutoff(cutoff: string): string {

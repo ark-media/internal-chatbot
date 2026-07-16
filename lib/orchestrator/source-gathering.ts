@@ -71,11 +71,49 @@ type ExtractResult =
   | { ok: true; title: string; text: string; date: string | null; source: string }
   | { ok: false; note: string };
 
+// How much of the article head to hand the date-derivation model. The
+// publication date lives in the dateline / byline / "Updated …" line near the
+// top; 2k chars is plenty and keeps the call cheap.
+const DATE_DERIVE_CHARS = 2000;
+
+// Tavily Extract often omits `publish_date` even when the body carries a clear
+// dateline. Rather than hand the breaking scan an undated article (which its
+// cutoff filter now drops fail-closed), read the date out of the body with a
+// fast model. The prompt is pinned to the ARTICLE'S OWN publication date — not
+// any date the story happens to mention — and returns null when the text
+// doesn't establish one. Best-effort: any failure yields null (→ undated →
+// dropped downstream), never a wrong date. `toIsoDate` is hoisted, so the parse
+// guard below rejects a well-formed-but-unparseable hallucination. The match is
+// anchored to the START of the (trimmed) output, so we only accept the date the
+// model gives as its answer — not one it echoes out of the article prose, which
+// is where a mentioned event date or a prompt-injected "Published:" line would
+// otherwise slip in.
+async function deriveDateFromText(text: string, signal?: AbortSignal): Promise<string | null> {
+  const head = text.trim().slice(0, DATE_DERIVE_CHARS);
+  if (!head) return null;
+  try {
+    const { text: out } = await generateText({
+      model: 'google/gemini-2.5-flash',
+      abortSignal: signal,
+      prompt: `Below is the top of a news article. Return ONLY the date the ARTICLE ITSELF was published, formatted as YYYY-MM-DD — the article's own publication/posted date from its dateline, byline timestamp, or "Published"/"Updated" line. Do NOT return a date merely mentioned in the story's events. If the text does not establish the article's publication date, return exactly "unknown".\n\n---\n${head}`,
+    });
+    const m = out.trim().match(/^\d{4}-\d{2}-\d{2}/);
+    return m ? toIsoDate(m[0]) : null;
+  } catch (err) {
+    // A cancelled gather must abort the whole run, not fall back to null.
+    if (signal?.aborted) throw err;
+    return null;
+  }
+}
+
 async function extractArticle(url: string, signal?: AbortSignal): Promise<ExtractResult> {
   const apiKey = process.env.TAVILY_API_KEY;
   if (!apiKey) return { ok: false, note: 'TAVILY_API_KEY missing' };
 
-  const key = cacheKey('orch:article', { url });
+  // v2: bumped when body-date derivation was added, so pre-derivation entries
+  // cached with date:null re-extract (and get a derived date) instead of being
+  // dropped fail-closed downstream.
+  const key = cacheKey('orch:article:v2', { url });
   const cached = await getCached<ExtractResult>(key, 72);
   if (cached) return cached;
 
@@ -102,11 +140,14 @@ async function extractArticle(url: string, signal?: AbortSignal): Promise<Extrac
     if (!r) return { ok: false, note: 'no content' };
 
     const text = await ensureEnglish(r.raw_content ?? '', signal);
+    // Prefer Tavily's own date; fall back to reading it out of the body when
+    // Tavily didn't return one, so undated-but-datable articles aren't dropped.
+    const date = r.publish_date ?? (await deriveDateFromText(text, signal));
     const result: ExtractResult = {
       ok: true,
       title: r.title ?? 'Untitled',
       text,
-      date: r.publish_date ?? null,
+      date,
       source: r.source_name ?? new URL(url).hostname,
     };
     await setCached(key, result);

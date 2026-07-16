@@ -512,7 +512,7 @@ export async function POST(req: Request) {
       // It performs NO script edits — Phase 1 is suggestions-only.
       const scanBreakingNewsTool = tool({
         description:
-          "Scan the approved news outlets for breaking news that broke AFTER a finalized script was locked, and return ranked Swap / Update / Can't-ignore suggestions. Call this (and only this) when a finalized script is present and the writer asks to check for breaking news or more relevant stories. Do NOT edit or draft the script on this turn — present the suggestions and wait.",
+          "Scan the approved news outlets for breaking news that broke AFTER a finalized script was locked, and return ranked Swap / Update / Can't-ignore / Human-interest suggestions. Call this (and only this) when a finalized script is present and the writer asks to check for breaking news or more relevant stories. Do NOT edit or draft the script on this turn — present the suggestions and wait.",
         inputSchema: z.object({
           script: z.string().describe('The full finalized script text to scan against.'),
           lockedAt: z
