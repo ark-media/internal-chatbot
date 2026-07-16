@@ -35,6 +35,7 @@ import type {
 } from '@/components/scriptwriter-types';
 import { chatFetch } from '@/lib/chat-fetch';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
+import { cn } from '@/lib/cn';
 
 // Quick-start presets, sent verbatim as the brief. The empty full-episode
 // default is offered separately as "Find today's stories".
@@ -44,6 +45,15 @@ const START_EXAMPLES = [
 ];
 
 const START_EXAMPLE_LABELS = ['Single C block', 'Single A block'];
+
+const SLOTS = ['A', 'B', 'C'] as const;
+type BlockSlot = (typeof SLOTS)[number];
+
+const PLAN_PLACEHOLDERS: Record<BlockSlot, string> = {
+  A: 'Lead story — topic, or paste a link',
+  B: 'Second story — topic, or paste a link',
+  C: 'The close — a warmer or cultural story',
+};
 
 function todayISO(): string {
   const d = new Date();
@@ -120,10 +130,17 @@ function StartCard({
   onStarted: () => void | Promise<void>;
 }) {
   const [prompt, setPrompt] = useState('');
+  const [mode, setMode] = useState<'describe' | 'plan'>('describe');
+  const [planned, setPlanned] = useState<Record<BlockSlot, string>>({ A: '', B: '', C: '' });
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const start = async (briefOverride?: string) => {
+  const plannedTopics = SLOTS.flatMap((slot) => {
+    const brief = planned[slot].trim();
+    return brief ? [{ slot, brief }] : [];
+  });
+
+  const start = async (opts?: { brief?: string; topics?: Array<{ slot: BlockSlot; brief: string }> }) => {
     if (starting) return;
     setStarting(true);
     setError(null);
@@ -135,7 +152,8 @@ function StartCard({
           chatId,
           today: todayISO(),
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          prompt: briefOverride ?? prompt,
+          prompt: opts?.brief ?? prompt,
+          ...(opts?.topics?.length ? { topics: opts.topics } : {}),
         }),
       });
       if (!res.ok) throw new Error(`start failed (${res.status})`);
@@ -160,10 +178,80 @@ function StartCard({
           </h1>
           <p className="mt-2 text-sm leading-relaxed text-fg/60">
             Say what you need — a full episode, specific blocks, one block on a story you
-            name, or paste an article link to draft from that story. Leave it empty for the
-            default: the day&apos;s three most interesting stories, written as A/B/C blocks with
-            your sign-off at every step.
+            name, or paste an article link to draft from that story. Already know your
+            rundown? Switch to <span className="text-fg/75">Plan the blocks</span> and name
+            each topic yourself. Either way you sign off at every step.
           </p>
+
+          <div className="mt-4 flex w-fit gap-1 rounded-lg border border-overlay/10 bg-overlay/[0.03] p-1">
+            {(
+              [
+                ['describe', 'Describe it'],
+                ['plan', 'Plan the blocks'],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setMode(value)}
+                aria-pressed={mode === value}
+                className={cn(
+                  'rounded-md px-3 py-1 text-[0.78rem] transition',
+                  mode === value
+                    ? 'bg-sky-brand/20 font-medium text-sky-brand-soft'
+                    : 'text-fg/55 hover:text-fg',
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {mode === 'plan' ? (
+            <>
+              <div className="mt-4 flex flex-col gap-2.5">
+                {SLOTS.map((slot) => (
+                  <div key={slot} className="flex items-center gap-3">
+                    <span className="w-[4.75rem] shrink-0 rounded bg-sky-brand/15 py-1 text-center font-mono text-[0.68rem] font-bold text-sky-brand-soft">
+                      {slot} BLOCK
+                    </span>
+                    <input
+                      value={planned[slot]}
+                      onChange={(e) => setPlanned((p) => ({ ...p, [slot]: e.target.value }))}
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter') return;
+                        e.preventDefault();
+                        if (!starting && plannedTopics.length > 0) {
+                          void start({ topics: plannedTopics, brief: '' });
+                        }
+                      }}
+                      placeholder={PLAN_PLACEHOLDERS[slot]}
+                      className="min-w-0 flex-1 rounded-lg border border-overlay/15 bg-overlay/[0.03] px-3 py-2 text-sm text-fg placeholder:text-fg/30 focus:border-sky-brand/40 focus:outline-none"
+                    />
+                  </div>
+                ))}
+              </div>
+              <div className="mt-3 flex items-center gap-3">
+                <button
+                  type="button"
+                  disabled={starting || plannedTopics.length === 0}
+                  onClick={() => start({ topics: plannedTopics, brief: '' })}
+                  className="inline-flex items-center gap-2 rounded-lg bg-sky-brand/20 px-4 py-2 text-sm font-medium text-sky-brand-soft transition hover:bg-sky-brand/30 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  {plannedTopics.length > 0
+                    ? `Source ${plannedTopics.length} block${plannedTopics.length === 1 ? '' : 's'}`
+                    : 'Source these topics'}
+                </button>
+              </div>
+              <div className="mt-2 text-[0.68rem] leading-relaxed text-fg/35">
+                Name one, two, or all three — blank blocks are skipped. Add a link and I&apos;ll
+                use it, then search for more sources to deepen the analysis. You&apos;ll work
+                the blocks one at a time.
+              </div>
+            </>
+          ) : (
+            <>
           <div className="relative mt-4">
             <textarea
               value={prompt}
@@ -199,7 +287,7 @@ function StartCard({
               disabled={starting}
               onClick={() => {
                 setPrompt('');
-                void start('');
+                void start({ brief: '' });
               }}
               className="rounded-full border border-overlay/20 bg-overlay/[0.03] px-3 py-1 text-[0.75rem] text-fg/60 transition hover:border-overlay/40 hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -212,7 +300,7 @@ function StartCard({
                 disabled={starting}
                 onClick={() => {
                   setPrompt(ex);
-                  void start(ex);
+                  void start({ brief: ex });
                 }}
                 className="rounded-full border border-overlay/20 bg-overlay/[0.03] px-3 py-1 text-[0.75rem] text-fg/60 transition hover:border-overlay/40 hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
               >
@@ -223,6 +311,8 @@ function StartCard({
           <div className="mt-2 text-[0.68rem] text-fg/35">
             Enter to send · Shift + Enter for newline
           </div>
+            </>
+          )}
           {error ? (
             <div className="mt-3 rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-200">
               {error}

@@ -2,6 +2,7 @@
 // then navigates to the chat surface and sends the first message — which
 // triggers the sourcing turn in /chat.
 
+import { briefFromPlannedTopics, parsePlannedTopics } from '@/lib/scriptwriter/planned-topics';
 import { ensureScriptRunTables, loadRun, saveRun } from '@/lib/scriptwriter/state';
 import { newRun } from '@/lib/scriptwriter/types';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -30,7 +31,13 @@ export async function POST(req: Request) {
     }
   }
 
-  let body: { chatId?: string; today?: string; timezone?: string; prompt?: string };
+  let body: {
+    chatId?: string;
+    today?: string;
+    timezone?: string;
+    prompt?: string;
+    topics?: unknown;
+  };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -52,12 +59,18 @@ export async function POST(req: Request) {
   const existing = await loadRun(chatId);
   if (existing) return Response.json({ ok: true, existing: true });
 
+  // Per-block topics from the start form take precedence: they define both the
+  // scope and what gets sourced, and their summary becomes the run's brief.
+  const plannedTopics = parsePlannedTopics(body.topics);
   const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
+  const originalPrompt =
+    plannedTopics.length > 0 ? briefFromPlannedTopics(plannedTopics) : prompt.length > 0 ? prompt : null;
   const run = newRun({
     chatId,
     today,
     timezone,
-    originalPrompt: prompt.length > 0 ? prompt : null,
+    originalPrompt,
+    plannedTopics,
   });
   await saveRun(run);
   return Response.json({ ok: true });

@@ -29,9 +29,11 @@ import { parseScopeFromPrompt } from '@/lib/scriptwriter/scope';
 import {
   extractUrls,
   sourceFromUrls,
+  sourceNamedTopics,
   sourceStories,
   type SourcingProgress,
 } from '@/lib/scriptwriter/sourcing';
+import { normalizeScope } from '@/lib/scriptwriter/scope';
 import {
   claimSourcing,
   ensureScriptRunTables,
@@ -194,36 +196,55 @@ export async function POST(req: Request) {
         };
 
         try {
-          // A brief that links specific article(s) pins the run to those sources:
-          // skip open-web discovery and build a block per link instead.
-          const urls = run.originalPrompt ? extractUrls(run.originalPrompt) : [];
+          // Three sourcing paths, most explicit first:
+          //  1. the editor named each block's topic on the start form,
+          //  2. their brief links specific article(s) to draft from,
+          //  3. neither — discover the day's stories.
+          const planned = run.plannedTopics ?? [];
+          // A planned run's brief embeds each topic's link, so only look for
+          // pasted links when the editor did NOT name topics per block.
+          const urls = planned.length === 0 && run.originalPrompt ? extractUrls(run.originalPrompt) : [];
 
-          // Scope comes from the original prompt (start page); parse before
-          // discovery since targeted mode changes the queries. Strip any pasted
-          // URLs first so a raw link never leaks into the scope's storyHint —
-          // only the writer's instruction words ("a C block based on…") shape it.
-          if (run.originalPrompt) {
+          if (planned.length > 0) {
+            // The filled fields ARE the scope — each carries its own slot.
+            run = {
+              ...run,
+              scope: normalizeScope({ type: 'blocks', slots: planned.map((t) => t.slot) }),
+            };
+          } else if (run.originalPrompt) {
+            // Scope comes from the original prompt (start page); parse before
+            // discovery since targeted mode changes the queries. Strip any pasted
+            // URLs first so a raw link never leaks into the scope's storyHint —
+            // only the writer's instruction words ("a C block based on…") shape it.
             const scopeText = urls.reduce((t, u) => t.split(u).join(' '), run.originalPrompt);
             run = { ...run, scope: await parseScopeFromPrompt(scopeText) };
           }
+
           const { topics, backups, candidates, insufficientPool } =
-            urls.length > 0
-              ? await sourceFromUrls({
-                  urls,
+            planned.length > 0
+              ? await sourceNamedTopics({
+                  topics: planned,
                   today: run.today,
-                  scope: run.scope,
-                  guidance: run.originalPrompt ?? undefined,
                   onProgress,
                   signal: req.signal,
                 })
-              : await sourceStories({
-                  today: run.today,
-                  scope: run.scope,
-                  guidance: run.originalPrompt ?? undefined,
-                  examples: (await getNewsExamples()).slice(0, 8000),
-                  onProgress,
-                  signal: req.signal,
-                });
+              : urls.length > 0
+                ? await sourceFromUrls({
+                    urls,
+                    today: run.today,
+                    scope: run.scope,
+                    guidance: run.originalPrompt ?? undefined,
+                    onProgress,
+                    signal: req.signal,
+                  })
+                : await sourceStories({
+                    today: run.today,
+                    scope: run.scope,
+                    guidance: run.originalPrompt ?? undefined,
+                    examples: (await getNewsExamples()).slice(0, 8000),
+                    onProgress,
+                    signal: req.signal,
+                  });
           const snapshotCandidates = candidates.map((c) => ({
             title: c.title,
             url: c.url,

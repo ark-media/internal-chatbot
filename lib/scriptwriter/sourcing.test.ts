@@ -9,6 +9,7 @@ import {
   mapSelection,
   mergeRoundRobin,
   slotsForUrlStories,
+  topicTextWithoutUrls,
 } from './sourcing';
 
 function cand(url: string, date: string | null = '2026-07-14'): Candidate {
@@ -169,6 +170,22 @@ describe('slotsForUrlStories', () => {
     expect(slotsForUrlStories(single('B'), 1, 'draft on the blockchain bill from https://x.com/b/c')).toEqual([
       'A',
     ]);
+  });
+});
+
+describe('topicTextWithoutUrls', () => {
+  it('leaves the editor topic words as the search query, links removed', () => {
+    expect(topicTextWithoutUrls('Trump digital guru https://toi.com/a/b influence op')).toBe(
+      'Trump digital guru influence op',
+    );
+  });
+
+  it('is empty when the editor pasted only a link', () => {
+    expect(topicTextWithoutUrls('  https://toi.com/a/b  ')).toBe('');
+  });
+
+  it('passes a link-free topic through unchanged', () => {
+    expect(topicTextWithoutUrls('Hormuz shipping tolls')).toBe('Hormuz shipping tolls');
   });
 });
 

@@ -34,6 +34,12 @@ export type Scope =
   | { type: 'blocks'; slots: BlockSlot[] }
   | { type: 'single'; slot: BlockSlot; storyHint?: string };
 
+// A block topic the editor named up front on the start form. `brief` is their
+// free text for that block and may embed a link. When a run carries these,
+// sourcing works exactly these topics — searching the open web to deepen each —
+// instead of discovering the day's stories.
+export type PlannedTopic = { slot: BlockSlot; brief: string };
+
 // One source backing a story. With no outlet allowlist, the model's explicit
 // credibility judgment is the writer's trust signal.
 export type StorySource = {
@@ -90,6 +96,10 @@ export type ScriptRun = {
   timezone: string;
   scope: Scope;
   originalPrompt: string | null;
+  // Set when the editor named each block's topic on the start form. Absent on
+  // runs started from a free-text brief (and on runs created before this field
+  // existed), so always guard with `?.length`.
+  plannedTopics?: PlannedTopic[];
   // Raw discovery pool (snippet-level), kept for audit and replaceTopic.
   candidates: Array<{
     title: string;
@@ -123,6 +133,7 @@ export function newRun(opts: {
   today: string;
   timezone: string;
   originalPrompt?: string | null;
+  plannedTopics?: PlannedTopic[];
 }): ScriptRun {
   return {
     chatId: opts.chatId,
@@ -131,6 +142,7 @@ export function newRun(opts: {
     timezone: opts.timezone,
     scope: { type: 'episode' },
     originalPrompt: opts.originalPrompt ?? null,
+    ...(opts.plannedTopics?.length ? { plannedTopics: opts.plannedTopics } : {}),
     candidates: [],
     backups: [],
     topics: [],
