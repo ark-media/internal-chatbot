@@ -739,6 +739,50 @@ describe('discoverXPosts', () => {
     expect(generateText).toHaveBeenCalledTimes(3);
   });
 
+  it('accepts a well-formed empty array as the answer without retrying', async () => {
+    vi.mocked(generateText).mockResolvedValue({
+      text: '[]',
+      finishReason: 'stop',
+    } as never);
+
+    const result = await discoverXPosts('2026-05-14');
+    expect(result).toEqual([]);
+    // The whole point: one grounded search, not three, when the model has
+    // genuinely found nothing on the handle list.
+    expect(generateText).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts an empty array wrapped in prose or a code fence without retrying', async () => {
+    vi.mocked(generateText).mockResolvedValue({
+      text: 'No posts today.\n```json\n[]\n```',
+      finishReason: 'stop',
+    } as never);
+
+    const result = await discoverXPosts('2026-05-14');
+    expect(result).toEqual([]);
+    expect(generateText).toHaveBeenCalledTimes(1);
+  });
+
+  it('still retries when the array is non-empty but every URL is unusable', async () => {
+    // A populated array whose entries are all filtered out is a silent failure
+    // (grounding redirects / off-handle URLs), not a real "no posts" answer.
+    const redirectsOnly = JSON.stringify([
+      {
+        title: 'Grounding redirect',
+        url: 'https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc',
+        publicationDate: '2026-05-14',
+        source: 'redirect',
+      },
+    ]);
+    vi.mocked(generateText)
+      .mockResolvedValueOnce({ text: redirectsOnly, finishReason: 'stop' } as never)
+      .mockResolvedValueOnce({ text: validArray, finishReason: 'stop' } as never);
+
+    const result = await discoverXPosts('2026-05-14');
+    expect(result).toHaveLength(1);
+    expect(generateText).toHaveBeenCalledTimes(2);
+  });
+
   it('throws when every attempt throws, so the route can report the real failure', async () => {
     vi.mocked(generateText).mockRejectedValue(
       new Error('GatewayTimeoutError: timed out'),
