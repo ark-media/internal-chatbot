@@ -73,7 +73,7 @@ Corrections must be specific and directly implementable. Don't say "improve voic
 // tokens. 2000 tokens covers a thorough review at normal verbosity.
 const REVIEWER_MAX_OUTPUT_TOKENS = 2000;
 
-async function reviewScript(opts: {
+export async function reviewScript(opts: {
   script: Script;
   reviewerSystemContent: string;
   sourceList: string;

@@ -93,6 +93,9 @@ const SYSTEM_PROMPTS: Record<Surface, string> = {
   archive: ARCHIVE_PROMPT,
   prep: PREP_PROMPT,
   news: NEWS_PROMPT,
+  // Scriptwriter runs carry their state in script_runs, not the chat, so a
+  // handoff summary of the conversation follows the news shape.
+  scripts: NEWS_PROMPT,
 };
 
 export async function POST(

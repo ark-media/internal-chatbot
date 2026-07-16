@@ -1,9 +1,13 @@
 import type { UIMessage, UIMessagePart, UIDataTypes, UITools } from 'ai';
 import { sql } from './db';
 
-export type Surface = 'archive' | 'prep' | 'news';
+export type Surface = 'archive' | 'prep' | 'news' | 'scripts';
 
-const SURFACES: ReadonlySet<Surface> = new Set(['archive', 'prep', 'news']);
+// Single source of truth for the valid surfaces — reused by the runtime guard
+// and by API error payloads so the list can't drift as surfaces are added.
+export const SURFACE_VALUES: readonly Surface[] = ['archive', 'prep', 'news', 'scripts'];
+
+const SURFACES: ReadonlySet<Surface> = new Set(SURFACE_VALUES);
 
 export function isSurface(value: unknown): value is Surface {
   return typeof value === 'string' && SURFACES.has(value as Surface);
@@ -60,12 +64,31 @@ export function ensureChatTables(): Promise<void> {
       await sql`
         CREATE TABLE IF NOT EXISTS chats (
           id          TEXT PRIMARY KEY,
-          surface     TEXT NOT NULL CHECK (surface IN ('archive', 'prep', 'news')),
+          surface     TEXT NOT NULL CHECK (surface IN ('archive', 'prep', 'news', 'scripts')),
           title       TEXT,
           created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           expires_at  TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '7 days')
         )
+      `;
+      // The inline CHECK above only applies when the table is first created.
+      // Existing deployments carry the pre-'scripts' constraint, so swap it in
+      // place, guarded so concurrent cold starts and re-runs are no-ops.
+      await sql`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint WHERE conname = 'chats_surface_check_v2'
+          ) THEN
+            ALTER TABLE chats DROP CONSTRAINT IF EXISTS chats_surface_check;
+            ALTER TABLE chats ADD CONSTRAINT chats_surface_check_v2
+              CHECK (surface IN ('archive', 'prep', 'news', 'scripts'));
+          END IF;
+        -- Two cold starts can both pass the NOT EXISTS check on their MVCC
+        -- snapshots; the loser's ADD then races an already-added constraint.
+        -- Swallow that so the migration stays a no-op under concurrency.
+        EXCEPTION WHEN duplicate_object THEN NULL;
+        END $$
       `;
       await sql`CREATE INDEX IF NOT EXISTS idx_chats_surface_updated ON chats (surface, updated_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_chats_expires_at ON chats (expires_at)`;

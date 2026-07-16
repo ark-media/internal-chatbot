@@ -1,156 +1,106 @@
-// Distills the (initial draft, final draft, refine instructions) tuple from a
-// completed orchestrator run into the writer-style profile. The profile is
-// then injected into every future script-craft system prompt.
+// Save & Learn: distill the writer's revision behavior on this run into the
+// persistent style profile. Signal = initial block drafts vs the approved
+// text, plus every revision instruction (block + episode) in order.
 //
-// Security note: refine instructions are operator-supplied text that flow
+// Security note: revision instructions are operator-supplied text that flow
 // verbatim into the distill prompt and (post-distillation) into a stored
-// system prompt that the script-craft agent sees on every run. Treat this as
-// a stored prompt-injection vector and review the profile after each save —
-// the team is small and trusted today, but a malicious or careless refine
-// could shift the writer's behavior across all subsequent runs.
-import { z } from 'zod';
+// system prompt every future writer call sees. Treat this as a stored
+// prompt-injection vector and review the profile after each save.
 
-import {
-  ensureOrchestratorTables,
-  loadRun,
-  saveRun,
-} from '@/lib/orchestrator/state';
 import {
   distillStylePreferences,
   loadStyleProfile,
   saveStyleProfile,
   shouldSkipDistillation,
 } from '@/lib/orchestrator/style-memory';
+import { ensureScriptRunTables, loadRun, saveRun } from '@/lib/scriptwriter/state';
 import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
+// The distillation is a Sonnet pass over the full block/episode drafts, which
+// can be large; give it the same headroom as the chat route rather than 60s.
 export const maxDuration = 300;
 
-const bodySchema = z.object({ chatId: z.string().min(1) });
-
 export async function POST(req: Request) {
-  await ensureOrchestratorTables();
+  await ensureScriptRunTables();
 
   const ip =
     req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
     req.headers.get('x-real-ip') ||
     'unknown';
-  const { ok } = await checkRateLimit(`orch-save-learn:${ip}`);
+  const { ok } = await checkRateLimit(`scripts-save-learn:${ip}`);
   if (!ok) return new Response('Rate limit exceeded', { status: 429 });
 
+  // CSRF defense-in-depth: Basic Auth credentials are replayed cross-site.
+  // This route triggers a paid distillation and mutates the global style
+  // profile, so reject cross-origin POSTs.
   const origin = req.headers.get('origin');
   const host = req.headers.get('host');
   if (origin && host) {
     try {
-      if (new URL(origin).host !== host) {
-        return new Response('Forbidden', { status: 403 });
-      }
+      if (new URL(origin).host !== host) return new Response('Forbidden', { status: 403 });
     } catch {
       return new Response('Forbidden', { status: 403 });
     }
   }
 
-  let body: z.infer<typeof bodySchema>;
+  let body: { chatId?: string };
   try {
-    body = bodySchema.parse(await req.json());
-  } catch (err) {
-    return Response.json(
-      { error: 'invalid_body', detail: String(err) },
-      { status: 400 },
-    );
+    body = (await req.json()) as { chatId?: string };
+  } catch {
+    return Response.json({ error: 'invalid_json' }, { status: 400 });
+  }
+  if (typeof body.chatId !== 'string' || !body.chatId) {
+    return Response.json({ error: 'invalid_request' }, { status: 400 });
   }
 
   const run = await loadRun(body.chatId);
-  if (!run) return Response.json({ error: 'run_not_found' }, { status: 404 });
-  if (run.stage !== 'complete' || !run.finalScript) {
-    return Response.json(
-      { error: 'wrong_stage', stage: run.stage },
-      { status: 409 },
-    );
-  }
-  if (run.scriptVersions.length === 0) {
-    return Response.json(
-      {
-        error: 'no_refines',
-        detail:
-          'Nothing to learn from — refine the script at least once before saving.',
-      },
-      { status: 409 },
-    );
+  if (!run) return Response.json({ error: 'not_found' }, { status: 404 });
+
+  const topicsWithBlocks = run.topics.filter((t) => t.block !== null);
+  if (topicsWithBlocks.length === 0) {
+    return Response.json({ error: 'nothing_to_learn' }, { status: 400 });
   }
 
-  const currentVersion = run.refineHistory.length;
-
-  // Idempotency guard. The button can be re-clicked across reloads or in a
-  // second tab — without this check, each click triggers another paid Sonnet
-  // distillation against the same inputs.
   if (
     shouldSkipDistillation({
-      refineHistoryLength: currentVersion,
+      refineHistoryLength: run.revisionCount,
       lastDistilledVersion: run.lastDistilledVersion,
     })
   ) {
-    const existing = await loadStyleProfile();
-    return Response.json({
-      profile: existing.text,
-      runsDistilled: existing.runsDistilled,
-      lastDistilledVersion: currentVersion,
-      cached: true,
-    });
+    return Response.json({ ok: true, skipped: true });
   }
 
-  const started = Date.now();
+  // Initial drafts: the oldest version of each block (blockVersions[0] when
+  // revisions happened, else the current text).
+  const originalDraft = topicsWithBlocks
+    .map((t) => t.blockVersions[0]?.text ?? t.block!.text)
+    .join('\n\n');
+  const finalDraft =
+    run.episode?.fullText ?? topicsWithBlocks.map((t) => t.block!.text).join('\n\n');
+  const refineInstructions = [
+    ...run.topics.flatMap((t) =>
+      t.blockVersions.flatMap((v) => (v.instruction ? [v.instruction] : [])),
+    ),
+    ...run.episodeVersions.map((v) => v.instruction),
+  ];
 
   try {
-    const currentProfile = await loadStyleProfile();
-    // scriptVersions[0] is the initial AI draft. The current finalScript is
-    // the writer-accepted result. Everything between is captured by the
-    // refine instructions, in order.
-    const originalDraft = run.scriptVersions[0].fullText;
-    const finalDraft = run.finalScript.fullText;
-    const refineInstructions = run.refineHistory.map((e) => e.instruction);
-
-    const updatedProfile = await distillStylePreferences({
-      currentProfile: currentProfile.text,
+    const current = await loadStyleProfile();
+    const updated = await distillStylePreferences({
+      currentProfile: current.text,
       originalDraft,
       finalDraft,
       refineInstructions,
     });
+    const { runsDistilled } = await saveStyleProfile(updated);
 
-    const { runsDistilled } = await saveStyleProfile(updatedProfile);
-    await saveRun({
-      ...run,
-      lastDistilledVersion: currentVersion,
-      updatedAt: new Date().toISOString(),
-    });
+    await saveRun({ ...run, lastDistilledVersion: run.revisionCount });
 
-    console.log(
-      JSON.stringify({
-        event: 'orchestrator.save_learn.complete',
-        chatId: body.chatId,
-        ms: Date.now() - started,
-        profileChars: updatedProfile.length,
-        refineCount: refineInstructions.length,
-        runsDistilled,
-      }),
-    );
-
-    return Response.json({
-      profile: updatedProfile,
-      runsDistilled,
-      lastDistilledVersion: currentVersion,
-      cached: false,
-    });
+    return Response.json({ ok: true, runsDistilled });
   } catch (err) {
-    console.error(
-      JSON.stringify({
-        event: 'orchestrator.save_learn.error',
-        err: String(err),
-      }),
-    );
-    return Response.json(
-      { error: 'distill_failed', detail: String(err).slice(0, 500) },
-      { status: 500 },
-    );
+    console.error('save_learn.error', err);
+    const detail = err instanceof Error ? err.message.slice(0, 500) : 'unknown';
+    return Response.json({ error: 'distill_failed', detail }, { status: 500 });
   }
 }

@@ -8,7 +8,6 @@ import {
   hardPaywallHostnames,
   isApprovedSource,
   isHardPaywallSource,
-  isInternationalSource,
   newsSources,
 } from '../news-sources';
 import type { Article, Candidate } from './types';
@@ -770,24 +769,7 @@ export async function extractUrlToArticle(
   };
 }
 
-// Multi-domain keyword search across the approved outlets — the writer-facing
-// escape hatch for triage when automatic discovery comes up short. Returns
-// candidates only — adding one to the triage list is just an append;
-// verification and Tavily extraction wait for /group, same as discovery
-// candidates. Unlike discovery, it isn't date-scoped: the writer may be
-// reaching for an older story on purpose.
-//
-// Limitation: Tavily `include_domains` can't target specific X/Twitter
-// handles, so this covers the news sites and think tanks but not the 15 X
-// accounts — those come in through `discoverXPosts`. The UI surfaces this.
-export async function keywordSearch(
-  query: string,
-  signal?: AbortSignal,
-): Promise<Candidate[]> {
-  return tavilySearch({ query, maxResults: 12, signal });
-}
-
-// Recency-scoped approved-outlet search. Like keywordSearch but bounded to the
+// Recency-scoped approved-outlet search. Like a keyword search but bounded to the
 // last `days`, so results skew to fresh developments rather than the most
 // relevant all-time coverage. Used by the breaking scan's per-story follow-up
 // discovery, where the point is "what's the latest on this story", not a general
@@ -802,91 +784,6 @@ export async function searchRecentApproved(
     days: opts.days,
     signal: opts.signal,
   });
-}
-
-// Discover → approval-filter → dedupe/cap. No URL verification, no Tavily
-// extraction — this is the raw candidate pool the writer triages. Verification
-// and extraction are deferred to `extractCandidates`, run later on only the
-// candidates that survive triage.
-// Of the maxArticles triage slots, how many gatherCandidates reserves for the
-// international tier (isInternationalSource). At the default maxArticles of 20
-// this hands the Western press ~6 guaranteed slots; the reservation never wastes
-// a slot — it backfills with the best leftovers when fewer internationals exist.
-const RESERVED_INTERNATIONAL_SLOTS = 6;
-
-export async function gatherCandidates(opts: {
-  today: string;
-  extraGuidance?: string;
-  maxArticles?: number;
-  maxExtras?: number;
-  signal?: AbortSignal;
-}): Promise<{ top: Candidate[]; extras: Candidate[] }> {
-  const { today, extraGuidance = '', maxArticles = 20, maxExtras = 80, signal } = opts;
-
-  const candidates = await discoverCandidates(today, extraGuidance, signal);
-
-  // `tavilySearch` already re-checks `isApprovedSource` per result, but keep
-  // the filter here too — it's the funnel's belt-and-suspenders backstop and
-  // keeps `rawCount` vs `approvedCount` meaningful in the log below.
-  const approved = candidates.filter((c) => isApprovedSource(c.url));
-
-  // Dedupe by URL, preserving discovery order, and flag freshness from Tavily's
-  // claimed date (extraction can refine it later against the real publish date).
-  const seen = new Set<string>();
-  const pool: Candidate[] = [];
-  for (const c of approved) {
-    if (seen.has(c.url)) continue;
-    seen.add(c.url);
-    pool.push({ ...c, isFlagged: !inAcceptableRange(today, c.publicationDate) });
-  }
-
-  // Build the active triage list (`top`, capped at maxArticles) with a reserved
-  // share for the international press. Discovery's beat queries are Israel-
-  // centric, so the high-volume Israeli outlets out-rank the internationals in
-  // Tavily's order and crowd them out of the cap. Phase 1 fills the first
-  // (maxArticles − RESERVED_INTERNATIONAL_SLOTS) slots in discovery order, any
-  // outlet — internationals that land here count too. Phase 2 fills the
-  // remaining slots from what's left, internationals first, then backfills with
-  // the best leftovers so no slot is wasted when fewer internationals exist.
-  // Everything that doesn't make the cap spills into the "See more" overflow
-  // pile (capped at maxExtras) in discovery order.
-  const baseCap = Math.max(0, maxArticles - RESERVED_INTERNATIONAL_SLOTS);
-  const top: Candidate[] = [];
-  const rest: Candidate[] = [];
-  for (const c of pool) {
-    if (top.length < baseCap) top.push(c);
-    else rest.push(c);
-  }
-  const reserved = new Set<Candidate>();
-  for (const c of rest) {
-    if (top.length >= maxArticles) break;
-    if (isInternationalSource(c.url)) {
-      top.push(c);
-      reserved.add(c);
-    }
-  }
-  const extras: Candidate[] = [];
-  for (const c of rest) {
-    if (reserved.has(c)) continue;
-    if (top.length < maxArticles) top.push(c);
-    else if (extras.length < maxExtras) extras.push(c);
-    else break;
-  }
-
-  // Log the funnel so a zero result is diagnosable from the logs alone —
-  // distinguishes "discovery came up empty" (rawCount 0) from "found articles
-  // but all from non-approved outlets" (rawCount > 0, approvedCount 0).
-  console.log(
-    JSON.stringify({
-      event: 'orchestrator.gather_candidates',
-      rawCount: candidates.length,
-      approvedCount: approved.length,
-      candidateCount: top.length,
-      extraCount: extras.length,
-    }),
-  );
-
-  return { top, extras };
 }
 
 // Verify (and recover hallucinated 404s), then Tavily-extract a candidate list
@@ -945,28 +842,4 @@ export async function extractCandidates(
   );
 
   return extracted.filter((a): a is Article => a !== null);
-}
-
-// Discover + verify + extract in one pass — the original behavior, kept for
-// checkpoint-stage topic gathers (/start `topics` mode, /topics, /refetch),
-// where the result drops straight into a topic and extraction can't be
-// deferred. The `discover` /start path uses `gatherCandidates` instead.
-export async function gatherSources(opts: {
-  today: string;
-  timezone?: string;
-  extraGuidance?: string;
-  maxArticles?: number;
-  signal?: AbortSignal;
-}): Promise<Article[]> {
-  // gatherSources covers the checkpoint topic gathers — extraction runs on
-  // the survivors, no triage in between — so the overflow pool isn't used here.
-  // Pass `maxExtras: 0` to skip building it and only take the top candidates.
-  const { top } = await gatherCandidates({
-    today: opts.today,
-    extraGuidance: opts.extraGuidance,
-    maxArticles: opts.maxArticles,
-    maxExtras: 0,
-    signal: opts.signal,
-  });
-  return extractCandidates(top, opts.today, opts.signal);
 }

@@ -36,6 +36,15 @@ export const MODELS: ChatModel[] = [
     contextWindow: 200_000,
   },
   {
+    id: 'anthropic/claude-opus-4-8',
+    name: 'Claude Opus 4.8',
+    description: 'Most capable Opus. Best for writing and long-form quality.',
+    contextWindow: 200_000,
+    // Opus 4.8 removed sampling parameters entirely — the API returns a 400
+    // if temperature is sent, unlike Sonnet 5 which merely warns and drops it.
+    supportsTemperature: false,
+  },
+  {
     id: 'anthropic/claude-opus-4-7',
     name: 'Claude Opus',
     description: 'Most capable. Best for complex reasoning.',
