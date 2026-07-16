@@ -29,7 +29,7 @@ import { parseScopeFromPrompt } from '@/lib/scriptwriter/scope';
 import {
   extractUrls,
   MAX_URL_STORIES,
-  sourceFromUrls,
+  slotsForUrlStories,
   sourceNamedTopics,
   sourceStories,
   type SourcingProgress,
@@ -42,7 +42,7 @@ import {
   saveRun,
 } from '@/lib/scriptwriter/state';
 import { createConductorTools, topicSummary, type EmitPart } from '@/lib/scriptwriter/tools';
-import type { ScriptRun } from '@/lib/scriptwriter/types';
+import type { PlannedTopic, ScriptRun } from '@/lib/scriptwriter/types';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -197,13 +197,14 @@ export async function POST(req: Request) {
         };
 
         try {
-          // Three sourcing paths, most explicit first:
-          //  1. the editor named each block's topic on the start form,
-          //  2. their brief links specific article(s) to draft from,
-          //  3. neither — discover the day's stories.
+          // Two sourcing paths: work the topics the writer gave us, or — when
+          // they gave none — discover the day's stories. Topics arrive either
+          // named per block on the start form, or as links pasted in a brief;
+          // both are "here is the story, go source it", so both take the same
+          // path with one block per topic.
           const planned = run.plannedTopics ?? [];
           // A planned run's brief embeds each topic's link, so only look for
-          // pasted links when the editor did NOT name topics per block. Every
+          // pasted links when the writer did NOT name topics per block. Every
           // link is stripped from the scope text below, but only the first three
           // become blocks — there are just three slots.
           const allUrls = planned.length === 0 && run.originalPrompt ? extractUrls(run.originalPrompt) : [];
@@ -211,41 +212,43 @@ export async function POST(req: Request) {
 
           if (planned.length === 0 && run.originalPrompt) {
             // Scope comes from the original prompt (start page); parse before
-            // discovery since targeted mode changes the queries, and because
-            // sourceFromUrls reads it to slot the links. Strip any pasted URLs
-            // first so a raw link never leaks into the scope's storyHint — only
-            // the writer's instruction words ("a C block based on…") shape it.
+            // sourcing since it decides both the discovery queries and which
+            // slots pasted links take. Strip any pasted URLs first so a raw link
+            // never leaks into the scope's storyHint — only the writer's
+            // instruction words ("a C block based on…") shape it.
             const scopeText = allUrls.reduce((t, u) => t.split(u).join(' '), run.originalPrompt);
             run = { ...run, scope: await parseScopeFromPrompt(scopeText) };
           }
-          // A planned run needs no pre-parse: its slots come from the form, and
-          // scope is reconciled to what actually sourced (below).
+
+          // Slots are fixed before sourcing, so a link that turns out to be
+          // unreadable can't silently re-slot the survivors: ask for "the B and
+          // C blocks" with two links and the one that works stays where it was
+          // asked for.
+          const urlSlots = urls.length > 0
+            ? slotsForUrlStories(run.scope, urls.length, run.originalPrompt ?? '')
+            : [];
+          const topicsToSource: PlannedTopic[] =
+            planned.length > 0 ? planned : urls.map((url, i) => ({ slot: urlSlots[i], brief: url }));
 
           const { topics, backups, candidates, insufficientPool } =
-            planned.length > 0
+            topicsToSource.length > 0
               ? await sourceNamedTopics({
-                  topics: planned,
+                  topics: topicsToSource,
                   today: run.today,
+                  // A planned run's brief is just a rendering of the same topics,
+                  // so it would only echo; a free-text brief is real steer.
+                  guidance: planned.length > 0 ? undefined : (run.originalPrompt ?? undefined),
                   onProgress,
                   signal: req.signal,
                 })
-              : urls.length > 0
-                ? await sourceFromUrls({
-                    urls,
-                    today: run.today,
-                    scope: run.scope,
-                    guidance: run.originalPrompt ?? undefined,
-                    onProgress,
-                    signal: req.signal,
-                  })
-                : await sourceStories({
-                    today: run.today,
-                    scope: run.scope,
-                    guidance: run.originalPrompt ?? undefined,
-                    examples: (await getNewsExamples()).slice(0, 8000),
-                    onProgress,
-                    signal: req.signal,
-                  });
+              : await sourceStories({
+                  today: run.today,
+                  scope: run.scope,
+                  guidance: run.originalPrompt ?? undefined,
+                  examples: (await getNewsExamples()).slice(0, 8000),
+                  onProgress,
+                  signal: req.signal,
+                });
           const snapshotCandidates = candidates.map((c) => ({
             title: c.title,
             url: c.url,
@@ -303,12 +306,12 @@ export async function POST(req: Request) {
             backups,
             candidates: snapshotCandidates,
             errorMessage: null,
-            // The link and named-topic paths assign slots themselves, so scope
-            // must follow what they actually sourced — otherwise a slot with no
-            // topic sits in scope forever, blocking assembly and telling the
-            // conductor blocks exist that don't. Discovery keeps its parsed
-            // scope: a thin pool there is explained by the sourcing note.
-            ...(planned.length > 0 || urls.length > 0
+            // The named-topic path assigns slots itself, so scope must follow
+            // what it actually sourced — otherwise a slot with no topic sits in
+            // scope forever, blocking assembly and telling the conductor blocks
+            // exist that don't. Discovery keeps its parsed scope: a thin pool
+            // there is explained by the sourcing note.
+            ...(topicsToSource.length > 0
               ? { scope: scopeForSourcedSlots(topics.map((t) => t.story.blockSlot)) }
               : {}),
             // A thin-but-usable rundown carries the selector's note so the

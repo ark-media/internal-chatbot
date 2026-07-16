@@ -10,6 +10,7 @@ import {
   mergeRoundRobin,
   slotsForUrlStories,
   topicTextWithoutUrls,
+  unsourcedNote,
 } from './sourcing';
 
 function cand(url: string, date: string | null = '2026-07-14'): Candidate {
@@ -196,6 +197,42 @@ describe('topicTextWithoutUrls', () => {
 
   it('passes a link-free topic through unchanged', () => {
     expect(topicTextWithoutUrls('Hormuz shipping tolls')).toBe('Hormuz shipping tolls');
+  });
+});
+
+describe('unsourcedNote', () => {
+  it('blames the link, not the topic, when a link could not be read', () => {
+    const note = unsourcedNote([{ slot: 'A', reason: 'unreadable-link' }], true);
+    expect(note).toContain("A — I couldn't read the link you gave");
+    expect(note).not.toContain('find usable coverage');
+  });
+
+  it('blames the topic when the open web had no coverage', () => {
+    const note = unsourcedNote([{ slot: 'C', reason: 'no-coverage' }], false);
+    expect(note).toContain("C — I couldn't find usable coverage");
+    expect(note).not.toContain("couldn't read the link");
+  });
+
+  it('reports each failed block on its own line, with its own reason', () => {
+    const note = unsourcedNote(
+      [
+        { slot: 'B', reason: 'unreadable-link' },
+        { slot: 'C', reason: 'no-coverage' },
+      ],
+      false,
+    );
+    expect(note).toContain("B — I couldn't read the link");
+    expect(note).toContain("C — I couldn't find usable coverage");
+    expect(note).toContain('Some blocks are unfilled');
+  });
+
+  it('distinguishes a partial rundown from a total failure', () => {
+    expect(unsourcedNote([{ slot: 'A', reason: 'no-coverage' }], false)).toContain(
+      'One block is unfilled',
+    );
+    expect(unsourcedNote([{ slot: 'A', reason: 'no-coverage' }], true)).toContain(
+      "I couldn't source anything you asked for",
+    );
   });
 });
 
