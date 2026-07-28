@@ -25,7 +25,6 @@ Examples:
 from __future__ import annotations
 
 import argparse
-import os
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -33,19 +32,10 @@ from pathlib import Path
 import psycopg
 from dotenv import load_dotenv
 
+from db import connect as _connect
+
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env.local")
-
-
-def _conn_str() -> str:
-    url = os.environ.get("DATABASE_URL")
-    if not url:
-        raise RuntimeError("DATABASE_URL is not set")
-    return url
-
-
-def _connect() -> psycopg.Connection:
-    return psycopg.connect(_conn_str(), autocommit=False)
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +52,34 @@ class SpeakerRow:
     turn_count: int
     episode_count: int
     aliases: list[str]
+
+    @classmethod
+    def from_row(cls, r, aliases=None) -> "SpeakerRow":
+        """Build from a row whose first six columns are the ones every speaker
+        query selects, in order. Both `_SPEAKER_SELECT` and the aggregate query
+        in `_fetch_speakers` honour that order; only the latter carries aliases.
+        """
+        return cls(
+            speaker_id=r[0],
+            canonical_name=r[1],
+            review_status=r[2],
+            include_in_content=r[3],
+            turn_count=r[4],
+            episode_count=r[5],
+            aliases=list(aliases or []),
+        )
+
+
+# The six columns SpeakerRow.from_row expects, for the two single-speaker
+# lookups. `_fetch_speakers` needs GROUP BY aggregates and alias collection, so
+# it spells its own select out — but it must keep these six first, in order.
+_SPEAKER_SELECT = """
+        SELECT sp.speaker_id, sp.canonical_name, sp.review_status,
+               sp.include_in_content,
+               (SELECT COUNT(*)::int FROM turns WHERE speaker_id = sp.speaker_id),
+               (SELECT COUNT(DISTINCT episode_id)::int FROM turns WHERE speaker_id = sp.speaker_id)
+          FROM speakers sp
+"""
 
 
 def _fetch_speakers(
@@ -103,18 +121,7 @@ def _fetch_speakers(
     """
     params.append(min_turns)
     rows = conn.execute(sql, params).fetchall()
-    return [
-        SpeakerRow(
-            speaker_id=r[0],
-            canonical_name=r[1],
-            review_status=r[2],
-            include_in_content=r[3],
-            turn_count=r[4],
-            episode_count=r[5],
-            aliases=list(r[6] or []),
-        )
-        for r in rows
-    ]
+    return [SpeakerRow.from_row(r, r[6]) for r in rows]
 
 
 def _resolve_ref(conn: psycopg.Connection, ref: str) -> SpeakerRow:
@@ -126,28 +133,12 @@ def _resolve_ref(conn: psycopg.Connection, ref: str) -> SpeakerRow:
             raise SystemExit(f"no speaker with id={ref}")
         return rows[0]
     rows = conn.execute(
-        """
-        SELECT sp.speaker_id, sp.canonical_name, sp.review_status,
-               sp.include_in_content,
-               (SELECT COUNT(*)::int FROM turns WHERE speaker_id = sp.speaker_id),
-               (SELECT COUNT(DISTINCT episode_id)::int FROM turns WHERE speaker_id = sp.speaker_id)
-          FROM speakers sp
-         WHERE LOWER(sp.canonical_name) = LOWER(%s)
-        """,
+        _SPEAKER_SELECT + "         WHERE LOWER(sp.canonical_name) = LOWER(%s)",
         (ref,),
     ).fetchall()
     if not rows:
         raise SystemExit(f'no speaker with canonical_name="{ref}"')
-    r = rows[0]
-    return SpeakerRow(
-        speaker_id=r[0],
-        canonical_name=r[1],
-        review_status=r[2],
-        include_in_content=r[3],
-        turn_count=r[4],
-        episode_count=r[5],
-        aliases=[],
-    )
+    return SpeakerRow.from_row(rows[0])
 
 
 def _fetch_speakers_by_ids(
@@ -156,28 +147,10 @@ def _fetch_speakers_by_ids(
     if not ids:
         return []
     rows = conn.execute(
-        """
-        SELECT sp.speaker_id, sp.canonical_name, sp.review_status,
-               sp.include_in_content,
-               (SELECT COUNT(*)::int FROM turns WHERE speaker_id = sp.speaker_id),
-               (SELECT COUNT(DISTINCT episode_id)::int FROM turns WHERE speaker_id = sp.speaker_id)
-          FROM speakers sp
-         WHERE sp.speaker_id = ANY(%s)
-        """,
+        _SPEAKER_SELECT + "         WHERE sp.speaker_id = ANY(%s)",
         (ids,),
     ).fetchall()
-    return [
-        SpeakerRow(
-            speaker_id=r[0],
-            canonical_name=r[1],
-            review_status=r[2],
-            include_in_content=r[3],
-            turn_count=r[4],
-            episode_count=r[5],
-            aliases=[],
-        )
-        for r in rows
-    ]
+    return [SpeakerRow.from_row(r) for r in rows]
 
 
 # ---------------------------------------------------------------------------

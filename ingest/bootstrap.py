@@ -26,6 +26,8 @@ from pathlib import Path
 import psycopg
 from dotenv import load_dotenv
 
+from db import connect
+
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env.local")
 
@@ -69,13 +71,6 @@ EXTRA_SHOW_HOSTS: dict[str, list[str]] = {
         "Dr Tal Becker",
     ],
 }
-
-
-def _conn_str() -> str:
-    url = os.environ.get("DATABASE_URL")
-    if not url:
-        raise RuntimeError("DATABASE_URL is not set")
-    return url
 
 
 def _load_kb() -> dict:
@@ -145,19 +140,20 @@ def seed_speakers(conn: psycopg.Connection, kb: dict) -> dict[str, int]:
                 if a:
                     add_alias(conn, a, sid)
 
+    def ensure(name: str | None) -> None:
+        """Insert a canonical speaker unless `people` already seeded them."""
+        if name and name not in name_to_sid:
+            name_to_sid[name] = insert_speaker(conn, name, "canonical")
+
     # Hosts from shows that aren't already in `people`
     for _show_name, info in kb.get("shows", {}).items():
-        host = info.get("host")
-        if host and host not in name_to_sid:
-            name_to_sid[host] = insert_speaker(conn, host, "canonical")
+        ensure(info.get("host"))
         for co in info.get("co_hosts") or []:
-            if co and co not in name_to_sid:
-                name_to_sid[co] = insert_speaker(conn, co, "canonical")
+            ensure(co)
 
     # Extras not in knowledge_base.json (e.g. rotating hosts)
     for name in EXTRA_SPEAKERS:
-        if name not in name_to_sid:
-            name_to_sid[name] = insert_speaker(conn, name, "canonical")
+        ensure(name)
 
     # Flag non-content speakers so ingest skips their turns
     if NON_CONTENT_SPEAKERS:
@@ -276,7 +272,7 @@ def main() -> int:
 
     kb = _load_kb()
 
-    with psycopg.connect(_conn_str(), autocommit=False) as conn:
+    with connect() as conn:
         if args.reset:
             apply_migration(conn)
 
