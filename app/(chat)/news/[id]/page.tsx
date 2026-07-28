@@ -45,6 +45,7 @@ import { FileAttachments } from '@/components/ui/FileAttachments';
 import { cn } from '@/lib/cn';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
 import { useFlash } from '@/lib/use-flash';
+import { useDriveSave } from '@/lib/use-drive-save';
 import { useInitialMessages } from '@/lib/use-initial-messages';
 import { useMessageEditing } from '@/lib/use-message-editing';
 import { useFileAttachments } from '@/lib/use-file-attachments';
@@ -129,10 +130,8 @@ function NewsBody({
     clearFiles,
     asFileList,
   } = useFileAttachments();
-  const [driveLoading, setDriveLoading] = useState(false);
-  const [driveLink, setDriveLink] = useState<string | null>(null);
-  const [driveError, setDriveError] = useState<string | null>(null);
-  const [driveSaveInProgress, setDriveSaveInProgress] = useState(false);
+  const { driveLoading, driveLink, driveError, save, resetDrive } =
+    useDriveSave('/api/news/upload');
   const [openSource, setOpenSource] = useState<NewsSource | null>(null);
   const [copySuccess, flashCopySuccess, resetCopySuccess] = useFlash(false);
   const [showUndoToast, flashShowUndoToast] = useFlash(false);
@@ -194,8 +193,7 @@ function NewsBody({
       flashShowUndoToast(true, 3000);
     }
     // Reset post-generation actions when starting a new turn.
-    setDriveLink(null);
-    setDriveError(null);
+    resetDrive();
     resetCopySuccess();
   };
 
@@ -285,47 +283,14 @@ function NewsBody({
   }, [extractScriptText, flashCopySuccess]);
 
   const saveScriptToDrive = useCallback(async () => {
-    // Debounce: prevent multiple simultaneous uploads
-    if (driveSaveInProgress) return;
-
     const scriptText = extractScriptText();
     if (!scriptText?.trim()) return;
-
-    setDriveSaveInProgress(true);
-    setDriveLoading(true);
-    setDriveError(null);
-    setDriveLink(null);
-
-    try {
-      // Extract headline from script or use generic title
-      const headline = extractHeadline(scriptText) || 'News Script';
-      const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-
-      const res = await fetch('/api/news/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          scriptText,
-          title: headline,
-          date: today,
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        setDriveError(data.error || 'Upload failed');
-        return;
-      }
-
-      setDriveLink(data.driveUrl);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setDriveError(`Failed to upload: ${msg}`);
-    } finally {
-      setDriveLoading(false);
-      setDriveSaveInProgress(false);
-    }
-  }, [driveSaveInProgress, extractScriptText]);
+    await save({
+      scriptText,
+      title: extractHeadline(scriptText) || 'News Script',
+      date: new Date().toISOString().split('T')[0],
+    });
+  }, [save, extractScriptText]);
 
   return (
     <div className="flex min-w-0 flex-1">
@@ -396,7 +361,7 @@ function NewsBody({
                   ) : (
                     <button
                       onClick={saveScriptToDrive}
-                      disabled={driveLoading || driveSaveInProgress || !messages.length}
+                      disabled={driveLoading || !messages.length}
                       className={cn(
                         'inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
                         'bg-blue-500/20 text-blue-200 transition hover:bg-blue-500/30',

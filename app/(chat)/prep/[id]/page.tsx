@@ -44,6 +44,7 @@ import { FileAttachments } from '@/components/ui/FileAttachments';
 import { cn } from '@/lib/cn';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
 import { useFlash } from '@/lib/use-flash';
+import { useDriveSave } from '@/lib/use-drive-save';
 import { useInitialMessages } from '@/lib/use-initial-messages';
 import { useMessageEditing } from '@/lib/use-message-editing';
 import { useFileAttachments } from '@/lib/use-file-attachments';
@@ -86,10 +87,8 @@ function PrepBody({
   const [input, setInput] = useState('');
   const { files, uploadError, onPickFiles, removeFile, clearFiles, asFileList } =
     useFileAttachments();
-  const [driveLoading, setDriveLoading] = useState(false);
-  const [driveLink, setDriveLink] = useState<string | null>(null);
-  const [driveError, setDriveError] = useState<string | null>(null);
-  const [driveSaveInProgress, setDriveSaveInProgress] = useState(false);
+  const { driveLoading, driveLink, driveError, save, resetDrive } =
+    useDriveSave('/api/prep/upload');
   const [driveMatchedShow, setDriveMatchedShow] = useState<string | null>(null);
   const [driveFallback, setDriveFallback] = useState(false);
   const [copySuccess, flashCopySuccess, resetCopySuccess] = useFlash(false);
@@ -166,8 +165,7 @@ function PrepBody({
       flashShowUndoToast(true, 3000);
     }
     // Reset post-generation actions when starting a new turn.
-    setDriveLink(null);
-    setDriveError(null);
+    resetDrive();
     setDriveMatchedShow(null);
     setDriveFallback(false);
     resetCopySuccess();
@@ -209,8 +207,6 @@ function PrepBody({
   }, [extractQuestionsText, flashCopySuccess]);
 
   const saveQuestionsToDrive = useCallback(async () => {
-    if (driveSaveInProgress) return;
-
     const questionsText = extractQuestionsText();
     if (!questionsText?.trim()) return;
 
@@ -219,43 +215,19 @@ function PrepBody({
     // An explicit show selection wins; fall back to parsing the prompt prefix
     // for the generic surface (which has no canonical name).
     const show = currentShow.canonical ?? parsed.show;
-    const title = parsed.title;
 
-    setDriveSaveInProgress(true);
-    setDriveLoading(true);
-    setDriveError(null);
-    setDriveLink(null);
     setDriveMatchedShow(null);
     setDriveFallback(false);
-
-    try {
-      const today = new Date().toISOString().split('T')[0];
-      const res = await fetch('/api/prep/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          questionsText,
-          show,
-          title: title || prompt || 'Episode prep',
-          date: today,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setDriveError(data.error || 'Upload failed');
-        return;
-      }
-      setDriveLink(data.driveUrl);
-      setDriveMatchedShow(data.matchedShow ?? null);
-      setDriveFallback(Boolean(data.fallback));
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setDriveError(`Failed to upload: ${msg}`);
-    } finally {
-      setDriveLoading(false);
-      setDriveSaveInProgress(false);
-    }
-  }, [driveSaveInProgress, extractQuestionsText, extractFirstUserPrompt, currentShow]);
+    const data = await save({
+      questionsText,
+      show,
+      title: parsed.title || prompt || 'Episode prep',
+      date: new Date().toISOString().split('T')[0],
+    });
+    if (!data) return;
+    setDriveMatchedShow((data.matchedShow as string) ?? null);
+    setDriveFallback(Boolean(data.fallback));
+  }, [save, extractQuestionsText, extractFirstUserPrompt, currentShow]);
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
@@ -371,7 +343,7 @@ function PrepBody({
                 ) : (
                   <button
                     onClick={saveQuestionsToDrive}
-                    disabled={driveLoading || driveSaveInProgress}
+                    disabled={driveLoading}
                     className={cn(
                       'inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
                       'bg-blue-500/20 text-blue-200 transition hover:bg-blue-500/30',
