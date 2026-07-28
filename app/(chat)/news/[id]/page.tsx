@@ -152,7 +152,6 @@ function NewsBody({
   const [driveError, setDriveError] = useState<string | null>(null);
   const [driveSaveInProgress, setDriveSaveInProgress] = useState(false);
   const [openSource, setOpenSource] = useState<NewsSource | null>(null);
-  const [allSources, setAllSources] = useState<NewsSource[]>([]);
   const [copySuccess, flashCopySuccess, resetCopySuccess] = useFlash(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [showUndoToast, flashShowUndoToast] = useFlash(false);
@@ -266,7 +265,7 @@ function NewsBody({
       }
       setUploadError(rejected.length > 0 ? rejected.join('; ') : null);
     },
-    [files],
+    [files, flashFileAttachSuccess],
   );
 
   const removeFile = useCallback((id: string) => {
@@ -359,12 +358,21 @@ function NewsBody({
     return textParts.map((p) => (p.type === 'text' ? p.text : '')).join('\n');
   }, [messages]);
 
-  useEffect(() => {
-    const scriptText = extractScriptText();
-    if (scriptText) {
-      setAllSources(extractSources(scriptText));
-    }
-  }, [messages, extractScriptText]);
+  // Derived from the most recent assistant message that actually carries text.
+  // Scanning for the last *text-bearing* message rather than the last message
+  // outright keeps the source panel populated through turns that open with tool
+  // calls, where the newest assistant message has no text parts yet. The state +
+  // effect this replaces got the same effect by never clearing on a null script.
+  const allSources = useMemo<NewsSource[]>(() => {
+    const lastWithText = [...messages]
+      .reverse()
+      .find((m) => m.role === 'assistant' && m.parts?.some((p) => p.type === 'text'));
+    if (!lastWithText) return [];
+    const scriptText = (lastWithText.parts ?? [])
+      .map((p) => (p.type === 'text' ? p.text : ''))
+      .join('\n');
+    return scriptText ? extractSources(scriptText) : [];
+  }, [messages]);
 
   const { openSummary, modal: summaryModal } = useHandoffSummary({
     chatId,

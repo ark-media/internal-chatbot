@@ -43,7 +43,13 @@ export function ChatSidebar() {
   }
 
   const [chats, setChats] = useState<ChatSummary[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Which surface the chats currently in state were loaded for. `loading`
+  // derives from it rather than being set in an effect: the list is stale
+  // exactly when it belongs to a different surface than the one on screen.
+  // Deriving also keeps the background refresh from useChatUpdates() silent —
+  // it re-resolves to the same surface, so the flag never flips.
+  const [loadedSurface, setLoadedSurface] = useState<Surface | null>(null);
+  const loading = loadedSurface !== viewSurface;
 
   const refresh = useCallback(async (surface: Surface) => {
     try {
@@ -54,12 +60,20 @@ export function ChatSidebar() {
     } catch {
       // ignore — sidebar is best-effort
     } finally {
-      setLoading(false);
+      setLoadedSurface(surface);
     }
   }, []);
 
+  /*
+    The chat list is fetched client-side because it keys off the active surface,
+    which is read from the URL. react-hooks/set-state-in-effect wants this behind
+    a data-fetching library or a Server Component; neither fits a client
+    component that re-reads the surface on every navigation, and the stack
+    carries no fetch library. The setState calls in refresh() all land after an
+    await, so they do not cascade renders — the case the rule guards against.
+  */
   useEffect(() => {
-    setLoading(true);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     refresh(viewSurface);
   }, [viewSurface, refresh]);
 
