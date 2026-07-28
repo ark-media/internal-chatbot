@@ -79,6 +79,12 @@ Wave 3's -1,000 should be read as an upper bound on *deleted* lines, not on net 
 
 ## Wave 3 — Structural (~1,000 lines, MEDIUM risk)
 
+**Status:** items 10, 11 and part of 13 shipped. Items 8, 9, 12 and the rest of
+13 remain. As with Wave 2, the shipped items came in LOC-positive or near-neutral
+while removing real duplication — 10 was `-15` estimated and landed `+34/+7 test`;
+11 was `-48` estimated and landed `+126/-109`. Both were correctness items, and
+both are now covered by tests that did not exist before.
+
 8. **`prepareChatRoute()`** (−155) — the single largest structural win. The same 12-step preamble runs in `chat`/`prep`/`news`/`orchestrator-chat`. Never touches `streamText` or the stream writer.
 
    Normalizes a real divergence: the first three call `req.json()` unwrapped, so a malformed body throws an unhandled 500; `orchestrator/chat:99` wraps it and returns 400. Adopt the 400.
@@ -93,7 +99,7 @@ Wave 3's -1,000 should be read as an upper bound on *deleted* lines, not on net 
 
    Write a test for `useMessageEditing` **before** touching it — it owns a global `keydown` listener and nothing guards it today.
 
-10. **Shared corpus scope filter in `retrieval.ts`** (−15) — small LOC, real correctness win: five copies of a five-predicate filter that must stay in lockstep across vector search, keyword search, and three dossier queries.
+10. ✅ **Shared corpus scope filter in `retrieval.ts`** (est. −15; actual +34 src / +7 test cases) — small LOC, real correctness win: five copies of a five-predicate filter that must stay in lockstep across vector search, keyword search, and three dossier queries.
 
     ⚠️ Still the highest-risk item, but less so than when this was written. Gate on `BUCKET=lookup`, `BUCKET=dossier`, `BUCKET=aggregate` before *and* after — a regression is silent recall loss, not an exception. The vector query needs a `WHERE TRUE` anchor (its filter currently opens the `WHERE`; the shared fragment is additive).
 
@@ -101,17 +107,28 @@ Wave 3's -1,000 should be read as an upper bound on *deleted* lines, not on net 
 
     Wave 2 item 6 also established the technique for proving a SQL edit is neutral: expand the fragment references back out and diff every template against `HEAD` with whitespace collapsed. That caught nothing, but it is what makes "no behaviour change" a checked claim instead of an assertion.
 
-11. **`lib/show-lookup.ts`** (−48) — four implementations of one query shape (2 in the chat route, 2 in `eval/grade.ts`). ⚠️ The `note` strings are fed to the model as tool-error text; reproduce byte-for-byte or disambiguation behavior shifts.
+11. ✅ **`lib/show-lookup.ts`** (est. −48; actual +126 / −109, plus a new 144-line test) — four implementations of one query shape (2 in the chat route, 2 in `eval/grade.ts`). ⚠️ The `note` strings are fed to the model as tool-error text; reproduce byte-for-byte or disambiguation behavior shifts.
 12. **Remaining route helpers** (−85) — `csrfGuard`/`clientIp`/`rateGuard`, telemetry `onFinish`, assistant-persist `onFinish`, `cachedSystem()`, chunk/turn serializers, `makeWebSearchTool` factory, `jsonBody()`, prep's stream shell → `toUIMessageStreamResponse`.
-13. **Python `ingest/`** (−160) — `SpeakerRow.from_row` + `_SPEAKER_SELECT` (−35); two `bootstrap.py` helpers (−30); `normalize.py` three parallel structures → one (−15); `test_parse.py` fixture helper (−13); verbosity cleanups (−31); shared `_conn_str` (−15).
+13. 🟡 **Python `ingest/`** (est. −160; actual −18 so far) — `SpeakerRow.from_row` + `_SPEAKER_SELECT` (−35); two `bootstrap.py` helpers (−30); `normalize.py` three parallel structures → one (−15); `test_parse.py` fixture helper (−13); verbosity cleanups (−31); shared `_conn_str` (−15).
 
     ⚠️ Tests are stdlib `unittest`, not pytest, and CI has no `pip install` step — use `unittest.subTest`, **not** `pytest.mark.parametrize`.
 
 ---
 
-## Free fixes still outstanding
+## Free fixes ✅ shipped
 
-Found during review; none are LOC wins.
+All cleared. None were LOC wins; all were found during the review sweep.
+
+⚠️ One correction: the plan proposed `environmentMatchGlobs` for the vitest
+environment split. **That option was removed in Vitest 4** (this repo is on
+4.1.10) — setting it does nothing, silently. The supported replacement is a
+per-file `// @vitest-environment jsdom` docblock, which the two page tests now
+carry. Suite wall-clock went 4.8s → 1.9s.
+
+Also worth recording: none of the ~14 `&&` JSX sites actually misrendered. The
+two the plan flagged as risky are boolean comparisons (`cachedInputTokens > 0`),
+and prep's `{num && …}` is a regex capture group — `string | undefined`, never
+`''`. They were converted for the rule, not for a live bug.
 
 - **`lib/tool-cache.ts:13` `ensureTable()` is not memoized**, while `lib/chats.ts:57` `ensureChatTables` is — with a comment stating exactly why ("Without this each chat POST would round-trip 4 IF-NOT-EXISTS statements to Neon over HTTP"). Same reasoning applies; one file was missed. Costs 2 extra Neon HTTP round-trips per chat/prep/news request.
 - **~14 JSX sites use `&&` instead of ternaries**, against the project rule. Two have real falsy-render potential: `EmptyState.tsx:43`, `TokenUsageIndicator.tsx:48`.
