@@ -17,8 +17,6 @@ import {
   HardDriveUpload,
   ExternalLink,
   CheckCircle2,
-  Copy,
-  ScrollText,
   Radar,
 } from 'lucide-react';
 
@@ -41,10 +39,13 @@ import type {
 import { BusyRow } from '@/components/ui/BusyRow';
 import { UserBubble } from '@/components/ui/UserBubble';
 import { EditingBanner } from '@/components/ui/EditingBanner';
+import { CopyButton } from '@/components/ui/CopyButton';
+import { HandoffButton } from '@/components/ui/HandoffButton';
 import { FileAttachments } from '@/components/ui/FileAttachments';
 import { cn } from '@/lib/cn';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
 import { useFlash } from '@/lib/use-flash';
+import { useInitialMessages } from '@/lib/use-initial-messages';
 import { useMessageEditing } from '@/lib/use-message-editing';
 import { useFileAttachments } from '@/lib/use-file-attachments';
 import { useHandoffSummary } from '@/lib/use-handoff-summary';
@@ -71,23 +72,7 @@ const REFINEMENT_HINTS = [
 export default function NewsPage() {
   const params = useParams<{ id: string }>();
   const chatId = params?.id;
-  const [initialMessages, setInitialMessages] = useState<NewsUIMessage[] | null>(null);
-
-  useEffect(() => {
-    if (!chatId) return;
-    let cancelled = false;
-    fetch(`/api/chats/${chatId}`)
-      .then((r) => (r.ok ? r.json() : { messages: [] }))
-      .then((d: { messages?: NewsUIMessage[] }) => {
-        if (!cancelled) setInitialMessages((d.messages ?? []) as NewsUIMessage[]);
-      })
-      .catch(() => {
-        if (!cancelled) setInitialMessages([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [chatId]);
+  const initialMessages = useInitialMessages<NewsUIMessage>(chatId);
 
   if (!chatId || initialMessages === null) {
     return null;
@@ -432,39 +417,17 @@ function NewsBody({
                     </button>
                   )}
 
-                  <button
+                  <CopyButton
                     onClick={copyScriptToClipboard}
+                    copied={copySuccess}
+                    label="Copy to Clipboard"
                     disabled={!messages.length}
-                    className={cn(
-                      'inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
-                      'bg-emerald-500/20 text-emerald-200 transition hover:bg-emerald-500/30',
-                      'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-emerald-500/20',
-                    )}
-                  >
-                    {copySuccess ? (
-                      <>
-                        <CheckCircle2 className="h-4 w-4" />
-                        Copied!
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="h-4 w-4" />
-                        Copy to Clipboard
-                      </>
-                    )}
-                  </button>
+                  />
 
-                  <button
+                  <HandoffButton
                     onClick={openSummary}
-                    className={cn(
-                      'inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
-                      'border border-overlay/10 bg-overlay/5 text-fg/75 transition hover:bg-overlay/10 hover:text-fg',
-                    )}
                     title="Compose a handoff message you can paste into a fresh chat to continue this script"
-                  >
-                    <ScrollText className="h-4 w-4" />
-                    Hand off to new chat
-                  </button>
+                  />
                 </div>
 
                 <div className="mt-2">

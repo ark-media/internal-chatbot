@@ -10,7 +10,7 @@ import {
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import { useParams } from 'next/navigation';
-import { Sparkles, FileText, ChevronRight, Copy, CheckCircle2, ScrollText } from 'lucide-react';
+import { Sparkles, FileText, ChevronRight, Copy, CheckCircle2 } from 'lucide-react';
 
 import { MessageText } from '@/components/MessageText';
 import { SourcePanel } from '@/components/SourcePanel';
@@ -35,9 +35,12 @@ import { ToolChip } from '@/components/ui/ToolChip';
 import { BusyRow } from '@/components/ui/BusyRow';
 import { UserBubble } from '@/components/ui/UserBubble';
 import { EditingBanner } from '@/components/ui/EditingBanner';
+import { CopyButton } from '@/components/ui/CopyButton';
+import { HandoffButton } from '@/components/ui/HandoffButton';
 import { cn } from '@/lib/cn';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
 import { useFlash } from '@/lib/use-flash';
+import { useInitialMessages } from '@/lib/use-initial-messages';
 import { useMessageEditing } from '@/lib/use-message-editing';
 import { useHandoffSummary } from '@/lib/use-handoff-summary';
 
@@ -51,23 +54,7 @@ const EXAMPLE_PROMPTS = [
 export default function ChatPage() {
   const params = useParams<{ id: string }>();
   const chatId = params?.id;
-  const [initialMessages, setInitialMessages] = useState<ChatUIMessage[] | null>(null);
-
-  useEffect(() => {
-    if (!chatId) return;
-    let cancelled = false;
-    fetch(`/api/chats/${chatId}`)
-      .then((r) => (r.ok ? r.json() : { messages: [] }))
-      .then((d: { messages?: ChatUIMessage[] }) => {
-        if (!cancelled) setInitialMessages((d.messages ?? []) as ChatUIMessage[]);
-      })
-      .catch(() => {
-        if (!cancelled) setInitialMessages([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [chatId]);
+  const initialMessages = useInitialMessages<ChatUIMessage>(chatId);
 
   if (!chatId || initialMessages === null) {
     return null;
@@ -390,38 +377,16 @@ function ChatBody({
             {messages.some((m) => m.role === 'assistant') && !busy ? (
               <div className="flex flex-col gap-3 pl-12">
                 <div className="flex flex-wrap gap-2">
-                  <button
+                  <CopyButton
                     onClick={copyToClipboard}
+                    copied={copySuccess}
+                    label="Copy Answer"
                     disabled={!messages.some((m) => m.role === 'assistant')}
-                    className={cn(
-                      'flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
-                      'bg-emerald-500/20 text-emerald-200 transition hover:bg-emerald-500/30',
-                      'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-emerald-500/20',
-                    )}
-                  >
-                    {copySuccess ? (
-                      <>
-                        <CheckCircle2 className="h-4 w-4" />
-                        Copied!
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="h-4 w-4" />
-                        Copy Answer
-                      </>
-                    )}
-                  </button>
-                  <button
+                  />
+                  <HandoffButton
                     onClick={openSummary}
-                    className={cn(
-                      'flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
-                      'border border-overlay/10 bg-overlay/5 text-fg/75 transition hover:bg-overlay/10 hover:text-fg',
-                    )}
                     title="Compose a handoff message you can paste into a fresh chat to continue this conversation"
-                  >
-                    <ScrollText className="h-4 w-4" />
-                    Hand off to new chat
-                  </button>
+                  />
                 </div>
                 {cumulativeUsage ? (
                   <TokenUsageIndicator usage={cumulativeUsage} />
