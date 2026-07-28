@@ -22,7 +22,6 @@ import {
   Loader2,
   ScrollText,
   Search,
-  Square,
   X,
 } from 'lucide-react';
 
@@ -41,7 +40,7 @@ import type {
   WebSearchToolOutput,
 } from '@/components/prep-types';
 import { ToolChip } from '@/components/ui/ToolChip';
-import { TypingDots } from '@/components/ui/TypingDots';
+import { BusyRow } from '@/components/ui/BusyRow';
 import { cn } from '@/lib/cn';
 import { chatFetch } from '@/lib/chat-fetch';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
@@ -438,20 +437,10 @@ function PrepBody({
             ))}
 
             {busy ? (
-              <div className="flex items-center gap-3 pl-12 text-xs text-fg/50">
-                <TypingDots />
-                <span className="tracking-wide">
-                  {status === 'submitted' ? 'Researching…' : 'Writing questions…'}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => stop()}
-                  className="ml-2 inline-flex items-center gap-1 rounded-md border border-overlay/10 bg-overlay/5 px-2 py-0.5 text-[0.7rem] text-fg/70 transition hover:bg-overlay/10 hover:text-fg"
-                >
-                  <Square className="h-2.5 w-2.5 fill-current" />
-                  Stop
-                </button>
-              </div>
+              <BusyRow
+                label={status === 'submitted' ? 'Researching…' : 'Writing questions…'}
+                onStop={stop}
+              />
             ) : null}
 
             <ChatErrorBanner

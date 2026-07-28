@@ -15,7 +15,6 @@ import { useParams } from 'next/navigation';
 import {
   FileText,
   Loader2,
-  Square,
   X,
   HardDriveUpload,
   ExternalLink,
@@ -42,6 +41,7 @@ import type {
   Suggestion,
   Tier,
 } from '@/components/news-types';
+import { BusyRow } from '@/components/ui/BusyRow';
 import { cn } from '@/lib/cn';
 import { chatFetch } from '@/lib/chat-fetch';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
@@ -469,22 +469,7 @@ function NewsBody({
               />
             ))}
 
-            {busy ? (
-              <div className="flex items-center gap-3 pl-12 text-xs text-fg/50">
-                <TypingDots />
-                <span className="tracking-wide">
-                  {busyLabel(messages, status)}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => stop()}
-                  className="ml-2 inline-flex items-center gap-1 rounded-md border border-overlay/10 bg-overlay/5 px-2 py-0.5 text-[0.7rem] text-fg/70 transition hover:bg-overlay/10 hover:text-fg"
-                >
-                  <Square className="h-2.5 w-2.5 fill-current" />
-                  Stop
-                </button>
-              </div>
-            ) : null}
+            {busy ? <BusyRow label={busyLabel(messages, status)} onStop={stop} /> : null}
 
             <ChatErrorBanner
               error={error}
@@ -1415,19 +1400,3 @@ function renderFootnotes(
   return children;
 }
 
-function TypingDots() {
-  return (
-    <span className="flex gap-1">
-      {[0, 1, 2].map((i) => (
-        <span
-          key={i}
-          className="h-1.5 w-1.5 rounded-full bg-overlay/40"
-          style={{
-            animation: `ark-pulse-dot 1.4s infinite`,
-            animationDelay: `${i * 0.2}s`,
-          }}
-        />
-      ))}
-    </span>
-  );
-}
