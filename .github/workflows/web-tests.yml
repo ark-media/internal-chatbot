@@ -11,7 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned because package.json has no "packageManager" field; without one
+      # the action errors with "No pnpm version is specified".
       - uses: pnpm/action-setup@v4
+        with:
+          version: 10
 
       - uses: actions/setup-node@v4
         with:
