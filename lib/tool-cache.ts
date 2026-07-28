@@ -10,22 +10,30 @@ function hashInput(input: unknown): CacheKey {
     .slice(0, 32);
 }
 
-export async function ensureTable() {
-  try {
-    await sql`
-      CREATE TABLE IF NOT EXISTS tool_cache (
-        key TEXT PRIMARY KEY,
-        result JSONB NOT NULL,
-        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
-      )
-    `;
-    await sql`
-      CREATE INDEX IF NOT EXISTS idx_tool_cache_created_at
-        ON tool_cache(created_at DESC)
-    `;
-  } catch (err) {
-    console.error('Failed to create cache table:', err);
-  }
+// One-shot DDL bootstrap, memoized per Lambda lifetime — the same reasoning as
+// `ensureChatTables` in lib/chats.ts. Without this, every chat/prep/news
+// request round-trips 2 IF-NOT-EXISTS statements to Neon over HTTP before it
+// can touch the cache.
+let initPromise: Promise<void> | null = null;
+
+export function ensureTable(): Promise<void> {
+  return (initPromise ??= (async () => {
+    try {
+      await sql`
+        CREATE TABLE IF NOT EXISTS tool_cache (
+          key TEXT PRIMARY KEY,
+          result JSONB NOT NULL,
+          created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+        )
+      `;
+      await sql`
+        CREATE INDEX IF NOT EXISTS idx_tool_cache_created_at
+          ON tool_cache(created_at DESC)
+      `;
+    } catch (err) {
+      console.error('Failed to create cache table:', err);
+    }
+  })());
 }
 
 export async function getCached<T>(key: CacheKey, ttlHours: number = 24): Promise<T | null> {

@@ -45,14 +45,14 @@ export function TokenUsageIndicator({
 
       <span className="text-fg/40">{percentUsed.toFixed(1)}%</span>
 
-      {cachedInputTokens > 0 && (
+      {cachedInputTokens > 0 ? (
         <>
           <span className="text-fg/20">·</span>
           <span className="text-emerald-300/70" title="Cached input tokens">
             ~{formatNumber(cachedInputTokens)} cached
           </span>
         </>
-      )}
+      ) : null}
     </div>
   );
 }

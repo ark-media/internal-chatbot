@@ -40,7 +40,7 @@ export function EmptyState({
         <span className="bg-gradient-to-r from-sky-brand via-sky-brand-soft to-fg bg-clip-text text-transparent">
           {highlight}
         </span>
-        {!title.endsWith('.') && !highlight.endsWith('.') && '.'}
+        {!title.endsWith('.') && !highlight.endsWith('.') ? '.' : null}
       </h1>
 
       <p className="mt-3 max-w-md text-[0.95rem] leading-relaxed text-fg/55">
@@ -55,11 +55,11 @@ export function EmptyState({
         label={promptLabel}
       />
 
-      {footerNote && (
+      {footerNote ? (
         <p className="mt-6 max-w-md text-[0.78rem] leading-relaxed text-fg/40">
           {footerNote}
         </p>
-      )}
+      ) : null}
     </div>
   );
 }

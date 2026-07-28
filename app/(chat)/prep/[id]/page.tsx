@@ -808,9 +808,9 @@ function QuestionHeading({
         : 'bg-overlay/[0.06] text-fg/70 border-overlay/15';
   return (
     <span className="inline-flex items-baseline gap-2">
-      {num && (
+      {num ? (
         <span className="font-mono text-[0.78rem] text-fg/40">Q{num}</span>
-      )}
+      ) : null}
       <span
         className={cn(
           'inline-flex items-center rounded-md border px-1.5 py-0.5 text-[0.65rem] font-semibold uppercase tracking-[0.14em]',

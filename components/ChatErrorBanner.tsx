@@ -38,9 +38,9 @@ export function ChatErrorBanner({
         <div className="mt-0.5 break-words text-[0.82rem] text-red-200/90">
           {message}
         </div>
-        {(onRetry || onDismiss) && (
+        {(onRetry || onDismiss) ? (
           <div className="mt-2 flex gap-2">
-            {onRetry && (
+            {onRetry ? (
               <button
                 type="button"
                 onClick={onRetry}
@@ -53,8 +53,8 @@ export function ChatErrorBanner({
                 <RefreshCw className="h-3 w-3" />
                 Retry
               </button>
-            )}
-            {onDismiss && (
+            ) : null}
+            {onDismiss ? (
               <button
                 type="button"
                 onClick={onDismiss}
@@ -67,9 +67,9 @@ export function ChatErrorBanner({
                 <X className="h-3 w-3" />
                 Dismiss
               </button>
-            )}
+            ) : null}
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   );

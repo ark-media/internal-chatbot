@@ -1,3 +1,6 @@
+// @vitest-environment jsdom
+// This suite renders the page; everything else in the repo runs in node.
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import PrepPage from './page';

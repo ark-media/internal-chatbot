@@ -38,7 +38,7 @@ export function ModelSelector({ selectedModel, onModelChange }: ModelSelectorPro
         <ChevronDown className="h-3.5 w-3.5" />
       </button>
 
-      {isOpen && (
+      {isOpen ? (
         <div className="absolute bottom-full left-0 mb-2 w-56 rounded-lg border border-overlay/10 bg-canvas-deep/95 py-1.5 shadow-lg backdrop-blur-md z-50">
           {MODELS.map((model) => (
             <button
@@ -62,7 +62,7 @@ export function ModelSelector({ selectedModel, onModelChange }: ModelSelectorPro
             </button>
           ))}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

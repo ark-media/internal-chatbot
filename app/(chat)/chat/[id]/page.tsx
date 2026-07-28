@@ -106,11 +106,13 @@ function ChatBody({
     [editingMessageId],
   );
 
-  const { messages, sendMessage, status, stop, error, regenerate, clearError } =
-    useChat<ChatUIMessage>({
-      id: chatId,
-      messages: initialMessages,
-      transport: new DefaultChatTransport({
+  // Rebuilt only when something it carries changes — not on every render —
+  // so a keystroke elsewhere doesn't churn a fresh transport. The header
+  // value (model) is captured here, so a change to it flows through on the
+  // next send. Matches prep/news/orchestrator.
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport({
         api: '/api/chat',
         fetch: customFetch,
         headers: {
@@ -118,6 +120,14 @@ function ChatBody({
         },
         body: { chatId },
       }),
+    [customFetch, selectedModel, chatId],
+  );
+
+  const { messages, sendMessage, status, stop, error, regenerate, clearError } =
+    useChat<ChatUIMessage>({
+      id: chatId,
+      messages: initialMessages,
+      transport,
       onFinish: () => {
         notifyChatUpdated();
         setEditingMessageId(null);
@@ -454,9 +464,9 @@ function ChatBody({
                     Hand off to new chat
                   </button>
                 </div>
-                {cumulativeUsage && (
+                {cumulativeUsage ? (
                   <TokenUsageIndicator usage={cumulativeUsage} />
-                )}
+                ) : null}
               </div>
             ) : null}
 
