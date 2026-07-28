@@ -25,8 +25,19 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Lint
+        run: pnpm lint
+
       - name: Typecheck
         run: pnpm typecheck
 
       - name: Unit tests
         run: pnpm vitest run
+
+      # lib/db.ts throws at module evaluation when DATABASE_URL is absent, which
+      # fails page-data collection for every route. The build never opens a
+      # connection, so a well-formed placeholder is all this needs.
+      - name: Build
+        run: pnpm build
+        env:
+          DATABASE_URL: postgresql://user:pass@localhost/db
