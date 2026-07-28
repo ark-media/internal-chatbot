@@ -56,5 +56,5 @@ eval/.venv/
 # route types
 /.next-types/
 
-# humanlayer (machine-specific workspace overrides)
-.humanlayer/workspace.local.json
+# humanlayer (machine-specific workspace state)
+.humanlayer/
