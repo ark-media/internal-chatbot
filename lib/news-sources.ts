@@ -129,6 +129,33 @@ export const hardPaywallHostnames = [
   'ft.com',
 ];
 
+// The show's beat — Israel, Jews, and the Middle East — as durable thematic
+// queries. Deliberately broad and evergreen: the freshness window and the
+// downstream scoring do the narrowing. No event-specific terms ("hostages",
+// "Gaza war") — those go stale and would need constant re-tuning. Query *count*
+// per theme doubles as the weighting knob, since both pipelines merge these
+// round-robin: the three Israel queries hand the show's core beat ~1/3 of the
+// triaged pool. Tune the set here if coverage gaps show up. X/Twitter is
+// intentionally absent — it comes in through `discoverXPosts`.
+//
+// Shared by both discovery pipelines, which differ on outlet policy but not on
+// the beat: `orchestrator/source-gathering.discoverCandidates` scopes these to
+// `include_domains: approvedHostnames`, while `scriptwriter/sourcing`
+// `discoverOpenWeb` runs them against the open web and judges credibility
+// per source. The queries themselves are editorial, not policy — keep them in
+// one place so the beat can't drift between the two.
+export const DISCOVERY_QUERIES = [
+  'Israel',
+  'Israeli politics',
+  'Israeli security',
+  'Iran',
+  'Middle East geopolitics',
+  'Israel international relations',
+  'antisemitism',
+  'Jewish diaspora life',
+  'Jewish identity',
+];
+
 const approvedXHandles = new Set(
   newsSources.xAccounts.map((a) => a.handle.replace(/^@/, '').toLowerCase()),
 );

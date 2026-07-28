@@ -214,20 +214,12 @@ ${overviews}
 
 // -- Resolve hints → IDs ------------------------------------------------------
 
-function resolveShowIds(hints: string[], ctx: RouterContext): number[] {
-  const byLower = new Map(ctx.shows.map((s) => [s.name.toLowerCase(), s.showId]));
-  const out = new Set<number>();
-  for (const h of hints) {
-    const id = byLower.get(h.toLowerCase());
-    if (id != null) out.add(id);
-  }
-  return Array.from(out);
-}
-
-function resolveShowGroupIds(hints: string[], ctx: RouterContext): number[] {
-  const byLower = new Map(
-    ctx.showGroups.map((g) => [g.name.toLowerCase(), g.groupId]),
-  );
+// Case-insensitive exact name → id, deduped, in hint order. Unmatched hints are
+// dropped silently: the model is asked for hints, not guarantees, and an
+// unresolvable one just means no filter on that axis. Shows and show groups
+// resolve identically — only the name/id list differs.
+function resolveIds(hints: string[], entries: Array<[string, number]>): number[] {
+  const byLower = new Map(entries.map(([name, id]) => [name.toLowerCase(), id]));
   const out = new Set<number>();
   for (const h of hints) {
     const id = byLower.get(h.toLowerCase());
@@ -292,8 +284,14 @@ export async function routeQuery(
     temperature: 0,
   });
 
-  const showIds = resolveShowIds(object.showHints, ctx);
-  const showGroupIds = resolveShowGroupIds(object.showGroupHints, ctx);
+  const showIds = resolveIds(
+    object.showHints,
+    ctx.shows.map((s) => [s.name, s.showId]),
+  );
+  const showGroupIds = resolveIds(
+    object.showGroupHints,
+    ctx.showGroups.map((g) => [g.name, g.groupId]),
+  );
   const speakerRes = await resolveSpeakerHints(object.speakerHints);
 
   // Defensive: enforce the 1–3 subquery constraint in code (schema can't encode it for Anthropic).

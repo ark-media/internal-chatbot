@@ -18,24 +18,10 @@ import {
 } from '../orchestrator/source-gathering';
 import type { Article, Candidate } from '../orchestrator/types';
 import { NEWS_CORE_B } from '../news-prompt';
+import { DISCOVERY_QUERIES } from '../news-sources';
 import type { BlockSlot, PlannedTopic, Scope, StoryProposal, StorySource, TopicRun } from './types';
 import { storyCountForScope, slotsInScope } from './types';
 import { errText, warnEvent } from '../log-event';
-
-// The show's beat as durable, evergreen queries (carried over from the
-// retired allowlist discovery — they are beat-shaped, not outlet-shaped).
-// Query count per theme is the weighting knob: results merge round-robin.
-export const DISCOVERY_QUERIES = [
-  'Israel',
-  'Israeli politics',
-  'Israeli security',
-  'Iran',
-  'Middle East geopolitics',
-  'Israel international relations',
-  'antisemitism',
-  'Jewish diaspora life',
-  'Jewish identity',
-];
 
 const RESULTS_PER_QUERY = 10;
 const MAX_CANDIDATES = 100;

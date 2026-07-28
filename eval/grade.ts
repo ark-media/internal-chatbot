@@ -1055,48 +1055,36 @@ async function gradeNewsChat(path: string): Promise<boolean> {
   return pass;
 }
 
+// One row per bucket: its default question file and its grader. `BUCKET` keys
+// straight into this, so a new bucket is one line — and the usage string is
+// generated from the keys rather than hand-maintained alongside them (it used
+// to be a third place listing every bucket name, kept in sync by hand).
+// Insertion order is the order shown in that usage string.
+const BUCKETS: Record<
+  string,
+  { path: string; grade: (path: string) => Promise<boolean> }
+> = {
+  lookup: { path: 'eval/questions.jsonl', grade: gradeLookup },
+  dossier: { path: 'eval/dossier.jsonl', grade: gradeDossier },
+  refusal: { path: 'eval/refusal.jsonl', grade: gradeRefusal },
+  aggregate: { path: 'eval/aggregate.jsonl', grade: gradeAggregate },
+  clipdist: { path: 'eval/clip-distribution.jsonl', grade: gradeClipDistribution },
+  translate: { path: 'eval/translate-adapt.jsonl', grade: gradeTranslateAdapt },
+  newschat: { path: 'eval/news-chat.jsonl', grade: gradeNewsChat },
+};
+
 async function main() {
   const bucket = process.env.BUCKET ?? 'lookup';
-  const defaultPaths: Record<string, string> = {
-    lookup: 'eval/questions.jsonl',
-    dossier: 'eval/dossier.jsonl',
-    refusal: 'eval/refusal.jsonl',
-    aggregate: 'eval/aggregate.jsonl',
-    clipdist: 'eval/clip-distribution.jsonl',
-    translate: 'eval/translate-adapt.jsonl',
-    newschat: 'eval/news-chat.jsonl',
-  };
-  const path = resolve(process.argv[2] ?? defaultPaths[bucket] ?? 'eval/questions.jsonl');
-
-  let pass = false;
-  switch (bucket) {
-    case 'lookup':
-      pass = await gradeLookup(path);
-      break;
-    case 'dossier':
-      pass = await gradeDossier(path);
-      break;
-    case 'refusal':
-      pass = await gradeRefusal(path);
-      break;
-    case 'aggregate':
-      pass = await gradeAggregate(path);
-      break;
-    case 'clipdist':
-      pass = await gradeClipDistribution(path);
-      break;
-    case 'translate':
-      pass = await gradeTranslateAdapt(path);
-      break;
-    case 'newschat':
-      pass = await gradeNewsChat(path);
-      break;
-    default:
-      console.error(
-        `unknown BUCKET=${bucket} (use lookup|dossier|refusal|aggregate|clipdist|translate|newschat)`,
-      );
-      process.exit(2);
+  const entry = BUCKETS[bucket];
+  if (!entry) {
+    console.error(
+      `unknown BUCKET=${bucket} (use ${Object.keys(BUCKETS).join('|')})`,
+    );
+    process.exit(2);
   }
+
+  // An explicit argv path overrides the bucket's default question file.
+  const pass = await entry.grade(resolve(process.argv[2] ?? entry.path));
   process.exit(pass ? 0 : 1);
 }
 

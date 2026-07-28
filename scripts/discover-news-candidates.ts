@@ -19,16 +19,11 @@ import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { config as loadEnv } from 'dotenv';
 
-loadEnv({ path: resolve(__dirname, '..', '.env.local') });
+// Dependency-free, so a static import here can't pull in lib/db before
+// `.env.local` is loaded below.
+import { todayISO } from '../lib/today-iso';
 
-// Mirrors `todayISO()` in the orchestrator page: local-calendar YYYY-MM-DD.
-const todayISO = () => {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${dd}`;
-};
+loadEnv({ path: resolve(__dirname, '..', '.env.local') });
 
 async function main() {
   const extraGuidance = process.argv.slice(2).join(' ').trim();

@@ -5,6 +5,7 @@ import { ensureEnglish } from '../translate';
 import { cacheKey, getCached, setCached } from '../tool-cache';
 import {
   approvedHostnames,
+  DISCOVERY_QUERIES,
   hardPaywallHostnames,
   isApprovedSource,
   isHardPaywallSource,
@@ -634,27 +635,6 @@ export async function substitutePaywallMirrors(
   }
   return out;
 }
-
-// The show's beat — Israel, Jews, and the Middle East — as durable thematic
-// queries. Deliberately broad and evergreen: outlet-scoping (include_domains)
-// and the freshness window do the narrowing, and distillTopics scores the
-// survivors downstream. No event-specific terms ("hostages", "Gaza war") —
-// those go stale and would need constant re-tuning. Query *count* per theme
-// doubles as the weighting knob: discoverCandidates merges these round-robin,
-// so the three Israel queries hand the show's core beat ~1/3 of the triaged
-// pool. Tune the set here if coverage gaps show up. X/Twitter is intentionally
-// absent — it comes in through `discoverXPosts`.
-const DISCOVERY_QUERIES = [
-  'Israel',
-  'Israeli politics',
-  'Israeli security',
-  'Iran',
-  'Middle East geopolitics',
-  'Israel international relations',
-  'antisemitism',
-  'Jewish diaspora life',
-  'Jewish identity',
-];
 
 // Per-query result cap — the depth of each query's list feeding the round-robin
 // merge in discoverCandidates. Nine queries × 12 ≈ 108 raw hits; the merge
