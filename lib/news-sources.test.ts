@@ -2,83 +2,48 @@ import { describe, expect, it } from 'vitest';
 
 import { isApprovedSource, isHardPaywallSource } from './news-sources';
 
+// The URL is the case name — it describes itself, and it is what you want to
+// see in a failure message.
 describe('isApprovedSource', () => {
-  describe('approved English outlets', () => {
-    it('accepts root-domain Reuters', () => {
-      expect(isApprovedSource('https://www.reuters.com/world/article-123')).toBe(true);
-    });
+  it.each([
+    // Approved outlets, root domain and subdomain (suffix match).
+    ['https://www.reuters.com/world/article-123', true],
+    ['https://www.haaretz.com/middle-east-news/2026-05-04/something', true],
+    ['https://www.bbc.com/news/world-middle-east-12345', true],
+    ['https://www.bbc.co.uk/news/world-12345', true],
+    ['https://www.theguardian.com/world/2026/may/04/israel', true],
+    ['https://www.washingtonpost.com/world/2026/05/04/israel', true],
+    ['https://www.ft.com/content/abc-123', true],
+    ['https://www.cnn.com/2026/05/04/middleeast/israel', false],
 
-    it('accepts subdomain Haaretz English', () => {
-      expect(isApprovedSource('https://www.haaretz.com/middle-east-news/2026-05-04/something')).toBe(true);
-    });
+    // X/Twitter: only a /status/ post from a listed handle counts.
+    ['https://x.com/AmitSegal/status/1234567890', true],
+    ['https://twitter.com/AmitSegal/status/1234567890', true],
+    ['https://x.com/amitsegal/status/1234567890', true],
+    ['https://x.com/AmitSegal', false],
+    // x.com/i/... and /intent/... are routes, not handles.
+    ['https://x.com/i/status/1234567890', false],
+    ['https://x.com/intent/post?text=hi', false],
+    ['https://x.com/elonmusk/status/1234567890', false],
 
-    it('accepts the newly added internationals (BBC, Guardian, WaPo, FT)', () => {
-      expect(isApprovedSource('https://www.bbc.com/news/world-middle-east-12345')).toBe(true);
-      expect(isApprovedSource('https://www.bbc.co.uk/news/world-12345')).toBe(true);
-      expect(isApprovedSource('https://www.theguardian.com/world/2026/may/04/israel')).toBe(true);
-      expect(isApprovedSource('https://www.washingtonpost.com/world/2026/05/04/israel')).toBe(true);
-      expect(isApprovedSource('https://www.ft.com/content/abc-123')).toBe(true);
-    });
-
-    it('rejects an unapproved outlet', () => {
-      expect(isApprovedSource('https://www.cnn.com/2026/05/04/middleeast/israel')).toBe(false);
-    });
+    // Malformed input must not throw.
+    ['not a url', false],
+    ['', false],
+  ])('%s -> %s', (url, expected) => {
+    expect(isApprovedSource(url)).toBe(expected);
   });
+});
 
-  describe('source tiers', () => {
-    it('flags hard-paywall outlets', () => {
-      expect(isHardPaywallSource('https://www.wsj.com/world/x')).toBe(true);
-      expect(isHardPaywallSource('https://www.nytimes.com/2026/05/04/x')).toBe(true);
-      expect(isHardPaywallSource('https://www.washingtonpost.com/world/x')).toBe(true);
-      expect(isHardPaywallSource('https://www.ft.com/content/x')).toBe(true);
-    });
-
-    it('does not flag free outlets as hard-paywall', () => {
-      expect(isHardPaywallSource('https://www.reuters.com/world/x')).toBe(false);
-      expect(isHardPaywallSource('https://www.bbc.com/news/x')).toBe(false);
-      expect(isHardPaywallSource('https://www.timesofisrael.com/x')).toBe(false);
-    });
-
-  });
-
-  describe('X/Twitter', () => {
-    it('accepts a tweet status URL from a listed handle', () => {
-      expect(
-        isApprovedSource('https://x.com/AmitSegal/status/1234567890'),
-      ).toBe(true);
-    });
-
-    it('accepts twitter.com mirror of the same URL', () => {
-      expect(
-        isApprovedSource('https://twitter.com/AmitSegal/status/1234567890'),
-      ).toBe(true);
-    });
-
-    it('is case-insensitive on the handle', () => {
-      expect(
-        isApprovedSource('https://x.com/amitsegal/status/1234567890'),
-      ).toBe(true);
-    });
-
-    it('rejects a profile URL with no /status/ segment', () => {
-      expect(isApprovedSource('https://x.com/AmitSegal')).toBe(false);
-    });
-
-    it('rejects an x.com route URL where the first segment is not a handle', () => {
-      // x.com/i/status/... is the "intent/individual" route, not a real handle.
-      expect(isApprovedSource('https://x.com/i/status/1234567890')).toBe(false);
-      expect(isApprovedSource('https://x.com/intent/post?text=hi')).toBe(false);
-    });
-
-    it('rejects a tweet from an unlisted handle', () => {
-      expect(
-        isApprovedSource('https://x.com/elonmusk/status/1234567890'),
-      ).toBe(false);
-    });
-  });
-
-  it('rejects malformed URLs', () => {
-    expect(isApprovedSource('not a url')).toBe(false);
-    expect(isApprovedSource('')).toBe(false);
+describe('isHardPaywallSource', () => {
+  it.each([
+    ['https://www.wsj.com/world/x', true],
+    ['https://www.nytimes.com/2026/05/04/x', true],
+    ['https://www.washingtonpost.com/world/x', true],
+    ['https://www.ft.com/content/x', true],
+    ['https://www.reuters.com/world/x', false],
+    ['https://www.bbc.com/news/x', false],
+    ['https://www.timesofisrael.com/x', false],
+  ])('%s -> %s', (url, expected) => {
+    expect(isHardPaywallSource(url)).toBe(expected);
   });
 });

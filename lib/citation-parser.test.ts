@@ -1,112 +1,83 @@
 import { describe, it, expect } from 'vitest';
 import { parseCitations } from './citation-parser';
 
+// Shorthands so the expectation tables below stay readable at a glance.
+const text = (t: string) => ({ type: 'text', text: t });
+const cite = (kind: 'id' | 'turn', id: number, quote?: string) => ({
+  type: 'cite',
+  kind,
+  id,
+  quote,
+});
+
 describe('parseCitations', () => {
-  // ── plain brackets (existing format) ──────────────────────────────────────
-
-  it('parses [id:N] into a single cite token', () => {
-    const tokens = parseCitations('Hello [id:42] world');
-    expect(tokens).toEqual([
-      { type: 'text', text: 'Hello ' },
-      { type: 'cite', kind: 'id', id: 42, quote: undefined },
-      { type: 'text', text: ' world' },
-    ]);
+  it.each([
+    ['[id:N] becomes one cite token', 'Hello [id:42] world', [
+      text('Hello '),
+      cite('id', 42),
+      text(' world'),
+    ]],
+    ['[turn:N] becomes one cite token', '[turn:7]', [cite('turn', 7)]],
+    ['comma-separated ids fan out', '[id:1,2,3]', [
+      cite('id', 1),
+      cite('id', 2),
+      cite('id', 3),
+    ]],
+    ['a bracket may mix kinds', '[turn:8368, id:2985]', [
+      cite('turn', 8368),
+      cite('id', 2985),
+    ]],
+    ['leading and trailing text become their own tokens', 'Before [id:1] after', [
+      text('Before '),
+      cite('id', 1),
+      text(' after'),
+    ]],
+    ['text with no citations is one token', 'No citations here.', [
+      text('No citations here.'),
+    ]],
+  ])('%s', (_case, input, expected) => {
+    expect(parseCitations(input)).toEqual(expected);
   });
 
-  it('parses [turn:N] into a single cite token', () => {
-    const tokens = parseCitations('[turn:7]');
-    expect(tokens).toEqual([{ type: 'cite', kind: 'turn', id: 7, quote: undefined }]);
-  });
-
-  it('parses comma-separated ids into multiple cite tokens', () => {
-    const tokens = parseCitations('[id:1,2,3]');
-    expect(tokens).toEqual([
-      { type: 'cite', kind: 'id', id: 1, quote: undefined },
-      { type: 'cite', kind: 'id', id: 2, quote: undefined },
-      { type: 'cite', kind: 'id', id: 3, quote: undefined },
-    ]);
-  });
-
-  it('parses mixed-kind bracket', () => {
-    const tokens = parseCitations('[turn:8368, id:2985]');
-    expect(tokens).toEqual([
-      { type: 'cite', kind: 'turn', id: 8368, quote: undefined },
-      { type: 'cite', kind: 'id', id: 2985, quote: undefined },
-    ]);
-  });
-
-  it('emits leading and trailing text tokens', () => {
-    const tokens = parseCitations('Before [id:1] after');
-    expect(tokens[0]).toEqual({ type: 'text', text: 'Before ' });
-    expect(tokens[2]).toEqual({ type: 'text', text: ' after' });
-  });
-
-  it('handles text with no citations', () => {
-    const tokens = parseCitations('No citations here.');
-    expect(tokens).toEqual([{ type: 'text', text: 'No citations here.' }]);
-  });
-
-  // ── new quote form ─────────────────────────────────────────────────────────
-
-  it('attaches quote to single-id citation', () => {
-    const tokens = parseCitations('[id:42 "Israel constantly attacking targets"]');
-    expect(tokens).toEqual([
-      {
-        type: 'cite',
-        kind: 'id',
-        id: 42,
-        quote: 'Israel constantly attacking targets',
-      },
-    ]);
-  });
-
-  it('attaches quote to single turn citation', () => {
-    const tokens = parseCitations('[turn:99 "rising power and all the rest"]');
-    expect(tokens).toEqual([
-      {
-        type: 'cite',
-        kind: 'turn',
-        id: 99,
-        quote: 'rising power and all the rest',
-      },
-    ]);
-  });
-
-  it('suppresses quote on multi-id citation', () => {
-    const tokens = parseCitations('[id:1,2 "some quote"]');
-    expect(tokens).toEqual([
-      { type: 'cite', kind: 'id', id: 1, quote: undefined },
-      { type: 'cite', kind: 'id', id: 2, quote: undefined },
-    ]);
-  });
-
-  it('suppresses quote on mixed-kind citation', () => {
-    const tokens = parseCitations('[id:1, turn:2 "some quote"]');
-    for (const t of tokens) {
-      if (t.type === 'cite') expect(t.quote).toBeUndefined();
-    }
-  });
-
-  it('preserves surrounding text with quoted citation', () => {
-    const tokens = parseCitations(
+  // The quote form: [id:N "verbatim"] carries a span for the UI to highlight
+  // inside the turn-level highlight. It is only meaningful for a single id, so
+  // any multi-id bracket drops it rather than guessing which id it belongs to.
+  it.each([
+    [
+      'a quote attaches to a single id',
+      '[id:42 "Israel constantly attacking targets"]',
+      [cite('id', 42, 'Israel constantly attacking targets')],
+    ],
+    [
+      'a quote attaches to a single turn',
+      '[turn:99 "rising power and all the rest"]',
+      [cite('turn', 99, 'rising power and all the rest')],
+    ],
+    [
+      'a quote is dropped on a multi-id bracket',
+      '[id:1,2 "some quote"]',
+      [cite('id', 1), cite('id', 2)],
+    ],
+    [
+      'a quote is dropped on a mixed-kind bracket',
+      '[id:1, turn:2 "some quote"]',
+      [cite('id', 1), cite('turn', 2)],
+    ],
+    [
+      'surrounding text survives a quoted citation',
       'He noted [id:5 "Houthis rising power"] in his analysis.',
-    );
-    expect(tokens).toHaveLength(3);
-    expect(tokens[0]).toEqual({ type: 'text', text: 'He noted ' });
-    expect(tokens[1]).toEqual({
-      type: 'cite',
-      kind: 'id',
-      id: 5,
-      quote: 'Houthis rising power',
-    });
-    expect(tokens[2]).toEqual({ type: 'text', text: ' in his analysis.' });
-  });
-
-  it('handles multiple citations in one string', () => {
-    const tokens = parseCitations('[id:1 "first quote"] and [id:2]');
-    const cites = tokens.filter((t) => t.type === 'cite');
-    expect(cites).toHaveLength(2);
-    expect(cites[0]).toMatchObject({ id: 1, quote: 'first quote' });
-    expect(cites[1]).toMatchObject({ id: 2, quote: undefined });
+      [
+        text('He noted '),
+        cite('id', 5, 'Houthis rising power'),
+        text(' in his analysis.'),
+      ],
+    ],
+    [
+      'quoted and unquoted citations coexist in one string',
+      '[id:1 "first quote"] and [id:2]',
+      [cite('id', 1, 'first quote'), text(' and '), cite('id', 2)],
+    ],
+  ])('%s', (_case, input, expected) => {
+    expect(parseCitations(input)).toEqual(expected);
   });
 });
