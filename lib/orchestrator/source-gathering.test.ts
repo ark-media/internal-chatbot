@@ -39,11 +39,26 @@ function installFetchMock(handler: (url: string, init?: RequestInit) => Response
   return mock;
 }
 
-describe('verifyOrRecover', () => {
+// One result row as Tavily returns it. published_date is nullable — Tavily
+// omits it for undated articles, and the freshness filter has to cope.
+function hit(
+  url: string,
+  title: string,
+  published_date: string | null,
+  source_name: string,
+) {
+  return { url, title, published_date, source_name };
+}
+
+// Tavily key plus silenced diagnostic output, torn down after each test.
+// Called inside a describe so the hooks register against that block.
+// `silenceLog` additionally mutes console.log, which the mirror-substitution
+// path writes to.
+function useTavilyEnv({ silenceLog = false }: { silenceLog?: boolean } = {}) {
   beforeEach(() => {
     vi.stubEnv('TAVILY_API_KEY', 'test-key');
-    // Silence the warn lines emitted by the recovery path.
     vi.spyOn(console, 'warn').mockImplementation(() => {});
+    if (silenceLog) vi.spyOn(console, 'log').mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -51,6 +66,10 @@ describe('verifyOrRecover', () => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
+}
+
+describe('verifyOrRecover', () => {
+  useTavilyEnv();
 
   it('passes a 200 OK candidate through unchanged without calling Tavily', async () => {
     const fetchMock = installFetchMock((url, init) => {
@@ -142,16 +161,7 @@ describe('verifyOrRecover', () => {
 });
 
 describe('verifyOrRecover — cancellation', () => {
-  beforeEach(() => {
-    vi.stubEnv('TAVILY_API_KEY', 'test-key');
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    vi.unstubAllEnvs();
-    vi.restoreAllMocks();
-  });
+  useTavilyEnv();
 
   it('rejects instead of swallowing when the caller signal is aborted', async () => {
     installFetchMock((_url, init) => {
@@ -246,17 +256,7 @@ describe('parseCandidates', () => {
 });
 
 describe('discoverCandidates', () => {
-  beforeEach(() => {
-    vi.stubEnv('TAVILY_API_KEY', 'test-key');
-    // Silence the per-query diagnostic logging.
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    vi.unstubAllEnvs();
-    vi.restoreAllMocks();
-  });
+  useTavilyEnv();
 
   it('fans out the beat queries scoped to the freshness window and merges deduped hits', async () => {
     const seenQueries: string[] = [];
@@ -275,18 +275,8 @@ describe('discoverCandidates', () => {
       // exercise the cross-query dedupe in the merge.
       return jsonResponse({
         results: [
-          {
-            url: `https://www.timesofisrael.com/story-${calls}`,
-            title: `Story ${calls}`,
-            published_date: '2026-05-14',
-            source_name: 'Times of Israel',
-          },
-          {
-            url: 'https://www.reuters.com/shared',
-            title: 'Shared story',
-            published_date: '2026-05-14',
-            source_name: 'Reuters',
-          },
+          hit(`https://www.timesofisrael.com/story-${calls}`, `Story ${calls}`, '2026-05-14', 'Times of Israel'),
+          hit('https://www.reuters.com/shared', 'Shared story', '2026-05-14', 'Reuters'),
         ],
       });
     });
@@ -314,29 +304,14 @@ describe('discoverCandidates', () => {
       if (call === 1) {
         return jsonResponse({
           results: [
-            {
-              url: 'https://www.jpost.com/a-yesterday',
-              title: 'Query A yesterday top',
-              published_date: '2026-05-13',
-              source_name: 'Jerusalem Post',
-            },
-            {
-              url: 'https://www.jpost.com/a-today',
-              title: 'Query A today',
-              published_date: '2026-05-14',
-              source_name: 'Jerusalem Post',
-            },
+            hit('https://www.jpost.com/a-yesterday', 'Query A yesterday top', '2026-05-13', 'Jerusalem Post'),
+            hit('https://www.jpost.com/a-today', 'Query A today', '2026-05-14', 'Jerusalem Post'),
           ],
         });
       }
       return jsonResponse({
         results: [
-          {
-            url: 'https://www.reuters.com/b-today',
-            title: 'Query B today top',
-            published_date: '2026-05-14',
-            source_name: 'Reuters',
-          },
+          hit('https://www.reuters.com/b-today', 'Query B today top', '2026-05-14', 'Reuters'),
         ],
       });
     });
@@ -372,24 +347,9 @@ describe('discoverCandidates', () => {
     installFetchMock(() =>
       jsonResponse({
         results: [
-          {
-            url: 'https://www.timesofisrael.com/yesterday',
-            title: 'Yesterday top hit',
-            published_date: '2026-05-13',
-            source_name: 'Times of Israel',
-          },
-          {
-            url: 'https://www.reuters.com/today',
-            title: 'Today story',
-            published_date: '2026-05-14',
-            source_name: 'Reuters',
-          },
-          {
-            url: 'https://www.jpost.com/undated',
-            title: 'No date',
-            published_date: null,
-            source_name: 'Jerusalem Post',
-          },
+          hit('https://www.timesofisrael.com/yesterday', 'Yesterday top hit', '2026-05-13', 'Times of Israel'),
+          hit('https://www.reuters.com/today', 'Today story', '2026-05-14', 'Reuters'),
+          hit('https://www.jpost.com/undated', 'No date', null, 'Jerusalem Post'),
         ],
       }),
     );
@@ -422,12 +382,7 @@ describe('discoverCandidates', () => {
       if (calls === 1) return new Response('nope', { status: 500 });
       return jsonResponse({
         results: [
-          {
-            url: `https://www.jpost.com/story-${calls}`,
-            title: `Story ${calls}`,
-            published_date: '2026-05-14',
-            source_name: 'Jerusalem Post',
-          },
+          hit(`https://www.jpost.com/story-${calls}`, `Story ${calls}`, '2026-05-14', 'Jerusalem Post'),
         ],
       });
     });
@@ -464,12 +419,7 @@ describe('discoverCandidates', () => {
         if (body.query === 'Israel') {
           return jsonResponse({
             results: [
-              {
-                url: 'https://www.wsj.com/world/middle-east/israel-scoop',
-                title: 'Big Israel scoop',
-                published_date: '2026-05-14',
-                source_name: 'Wall Street Journal',
-              },
+              hit('https://www.wsj.com/world/middle-east/israel-scoop', 'Big Israel scoop', '2026-05-14', 'Wall Street Journal'),
             ],
           });
         }
@@ -480,12 +430,7 @@ describe('discoverCandidates', () => {
       expect(body.query).toBe('Big Israel scoop');
       return jsonResponse({
         results: [
-          {
-            url: 'https://www.reuters.com/world/middle-east/israel-mirror',
-            title: 'Reuters rewrite of Israel scoop',
-            published_date: '2026-05-14',
-            source_name: 'Reuters',
-          },
+          hit('https://www.reuters.com/world/middle-east/israel-mirror', 'Reuters rewrite of Israel scoop', '2026-05-14', 'Reuters'),
         ],
       });
     });
@@ -498,17 +443,7 @@ describe('discoverCandidates', () => {
 });
 
 describe('substitutePaywallMirrors', () => {
-  beforeEach(() => {
-    vi.stubEnv('TAVILY_API_KEY', 'test-key');
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    vi.unstubAllEnvs();
-    vi.restoreAllMocks();
-  });
+  useTavilyEnv({ silenceLog: true });
 
   const wsjCandidate = {
     title: 'Netanyahu Cabinet Approves Iran Sanctions Package',
@@ -526,12 +461,7 @@ describe('substitutePaywallMirrors', () => {
       expect(body.include_domains).toContain('reuters.com');
       return jsonResponse({
         results: [
-          {
-            url: 'https://www.reuters.com/world/middle-east/iran-sanctions',
-            title: 'Israel backs Iran sanctions in cabinet vote',
-            published_date: '2026-05-14',
-            source_name: 'Reuters',
-          },
+          hit('https://www.reuters.com/world/middle-east/iran-sanctions', 'Israel backs Iran sanctions in cabinet vote', '2026-05-14', 'Reuters'),
         ],
       });
     });
@@ -558,12 +488,7 @@ describe('substitutePaywallMirrors', () => {
       expect(body.include_domains).toContain('theguardian.com');
       return jsonResponse({
         results: [
-          {
-            url: 'https://www.theguardian.com/world/2026/may/14/israel-hezbollah-ceasefire',
-            title: 'Israel and Hezbollah move toward ceasefire',
-            published_date: '2026-05-14',
-            source_name: 'The Guardian',
-          },
+          hit('https://www.theguardian.com/world/2026/may/14/israel-hezbollah-ceasefire', 'Israel and Hezbollah move toward ceasefire', '2026-05-14', 'The Guardian'),
         ],
       });
     });
@@ -587,12 +512,7 @@ describe('substitutePaywallMirrors', () => {
     installFetchMock(() =>
       jsonResponse({
         results: [
-          {
-            url: 'https://www.reuters.com/old',
-            title: 'Old Iran sanctions story',
-            published_date: '2026-05-11',
-            source_name: 'Reuters',
-          },
+          hit('https://www.reuters.com/old', 'Old Iran sanctions story', '2026-05-11', 'Reuters'),
         ],
       }),
     );
@@ -622,12 +542,7 @@ describe('substitutePaywallMirrors', () => {
     installFetchMock(() =>
       jsonResponse({
         results: [
-          {
-            url: reutersUrl,
-            title: 'Reuters take',
-            published_date: '2026-05-14',
-            source_name: 'Reuters',
-          },
+          hit(reutersUrl, 'Reuters take', '2026-05-14', 'Reuters'),
         ],
       }),
     );
