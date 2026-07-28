@@ -77,7 +77,7 @@ import {
   type CorpusFilters,
 } from '../lib/retrieval';
 import { routeQuery } from '../lib/router';
-import { sql } from '../lib/db';
+import { lookupShowGroupId, lookupShowId } from '../lib/show-lookup';
 import {
   buildCachedSystemContent,
   craftScript,
@@ -279,27 +279,6 @@ async function gradeRefusal(path: string): Promise<boolean> {
   return refusalRate >= 0.9;
 }
 
-async function resolveShowId(name: string): Promise<number | null> {
-  const rows = (await sql`
-    SELECT show_id FROM shows
-     WHERE LOWER(name) = LOWER(${name})
-        OR LOWER(name) LIKE '%' || LOWER(${name}) || '%'
-  ORDER BY (LOWER(name) = LOWER(${name})) DESC, name
-     LIMIT 1
-  `) as unknown as Array<{ show_id: number }>;
-  return rows[0]?.show_id ?? null;
-}
-
-async function resolveShowGroupId(name: string): Promise<number | null> {
-  const rows = (await sql`
-    SELECT group_id FROM show_groups
-     WHERE LOWER(name) = LOWER(${name})
-        OR LOWER(name) LIKE '%' || LOWER(${name}) || '%'
-  ORDER BY (LOWER(name) = LOWER(${name})) DESC, name
-     LIMIT 1
-  `) as unknown as Array<{ group_id: number }>;
-  return rows[0]?.group_id ?? null;
-}
 
 async function gradeAggregate(path: string): Promise<boolean> {
   const questions = loadJsonl<AggregateQ>(path);
@@ -322,7 +301,7 @@ async function gradeAggregate(path: string): Promise<boolean> {
         console.log(`[MISS] ${q.id} — speaker not found: ${q.speaker}`);
         continue;
       }
-      const showId = await resolveShowId(q.show);
+      const showId = await lookupShowId(q.show);
       if (!showId) {
         console.log(`[MISS] ${q.id} — show not found: ${q.show}`);
         continue;
@@ -349,7 +328,7 @@ async function gradeAggregate(path: string): Promise<boolean> {
     let showIds: number[] | undefined;
     let showGroupIds: number[] | undefined;
     if (q.show) {
-      const sid = await resolveShowId(q.show);
+      const sid = await lookupShowId(q.show);
       if (!sid) {
         console.log(`[MISS] ${q.id} — show not found: ${q.show}`);
         continue;
@@ -357,7 +336,7 @@ async function gradeAggregate(path: string): Promise<boolean> {
       showIds = [sid];
     }
     if (q.showGroup) {
-      const gid = await resolveShowGroupId(q.showGroup);
+      const gid = await lookupShowGroupId(q.showGroup);
       if (!gid) {
         console.log(`[MISS] ${q.id} — showGroup not found: ${q.showGroup}`);
         continue;
@@ -859,7 +838,7 @@ async function gradeTranslateAdapt(path: string): Promise<boolean> {
   // The web-search tool caches through lib/tool-cache (Postgres); make sure the
   // table exists before the first tool call.
   await ensureTable();
-  const arkNewsDailyShowId = await resolveShowId('Ark News Daily');
+  const arkNewsDailyShowId = await lookupShowId('Ark News Daily');
   const tools = buildFactCheckTools(arkNewsDailyShowId);
 
   let scored = 0;
@@ -992,7 +971,7 @@ async function gradeNewsChat(path: string): Promise<boolean> {
   );
 
   await ensureTable();
-  const arkNewsDailyShowId = await resolveShowId('Ark News Daily');
+  const arkNewsDailyShowId = await lookupShowId('Ark News Daily');
   const tools = buildFactCheckTools(arkNewsDailyShowId);
 
   let scored = 0;
