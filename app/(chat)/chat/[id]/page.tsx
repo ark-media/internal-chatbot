@@ -34,10 +34,11 @@ import type {
 import { ToolChip } from '@/components/ui/ToolChip';
 import { BusyRow } from '@/components/ui/BusyRow';
 import { UserBubble } from '@/components/ui/UserBubble';
+import { EditingBanner } from '@/components/ui/EditingBanner';
 import { cn } from '@/lib/cn';
-import { chatFetch } from '@/lib/chat-fetch';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
 import { useFlash } from '@/lib/use-flash';
+import { useMessageEditing } from '@/lib/use-message-editing';
 import { useHandoffSummary } from '@/lib/use-handoff-summary';
 
 const EXAMPLE_PROMPTS = [
@@ -86,25 +87,15 @@ function ChatBody({
   const [openPanel, setOpenPanel] = useState<PanelView | null>(null);
   const [episodeCount, setEpisodeCount] = useState<number | null>(null);
   const [copySuccess, flashCopySuccess] = useFlash(false);
-  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [showUndoToast, flashShowUndoToast] = useFlash(false);
-
-  // Custom fetch that adds editingMessageId to the body if present
-  const customFetch = useCallback<typeof fetch>(
-    async (input, init) => {
-      try {
-        const body = init?.body ? JSON.parse(init.body as string) : {};
-        if (editingMessageId) {
-          body.editingMessageId = editingMessageId;
-        }
-        return chatFetch(input, { ...init, body: JSON.stringify(body) });
-      } catch (e) {
-        console.error('Failed to parse request body for edit:', e);
-        return chatFetch(input, init);
-      }
-    },
-    [editingMessageId],
-  );
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const {
+    editingMessageId,
+    startEditing,
+    cancelEditing,
+    finishEditing,
+    editingFetch,
+  } = useMessageEditing({ setInput, scrollRef });
 
   // Rebuilt only when something it carries changes — not on every render —
   // so a keystroke elsewhere doesn't churn a fresh transport. The header
@@ -114,13 +105,13 @@ function ChatBody({
     () =>
       new DefaultChatTransport({
         api: '/api/chat',
-        fetch: customFetch,
+        fetch: editingFetch,
         headers: {
           'x-model': selectedModel,
         },
         body: { chatId },
       }),
-    [customFetch, selectedModel, chatId],
+    [editingFetch, selectedModel, chatId],
   );
 
   const { messages, sendMessage, status, stop, error, regenerate, clearError } =
@@ -130,28 +121,13 @@ function ChatBody({
       transport,
       onFinish: () => {
         notifyChatUpdated();
-        setEditingMessageId(null);
+        finishEditing();
       },
     });
 
   const openSource = useCallback((source: Source, quote?: string) => {
     setOpenPanel({ view: 'source', source, quote });
   }, []);
-
-  const handleEdit = useCallback(
-    (message: ChatUIMessage) => {
-      const textContent = message.parts
-        ?.filter((p) => p.type === 'text')
-        .map((p) => (p.type === 'text' ? p.text : ''))
-        .join('\n\n');
-      if (textContent) {
-        setInput(textContent);
-        setEditingMessageId(message.id);
-        scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-      }
-    },
-    [],
-  );
 
   const extractAnswerText = useCallback(() => {
     const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
@@ -177,8 +153,6 @@ function ChatBody({
       alert('Failed to copy to clipboard');
     }
   }, [extractAnswerText, flashCopySuccess]);
-
-  const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -363,21 +337,6 @@ function ChatBody({
     };
   }, [messages, selectedModel]);
 
-  // Handle Escape key to cancel edit
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && editingMessageId) {
-        e.preventDefault();
-        setEditingMessageId(null);
-        setInput('');
-      }
-    };
-    if (editingMessageId) {
-      window.addEventListener('keydown', handleKeyDown);
-      return () => window.removeEventListener('keydown', handleKeyDown);
-    }
-  }, [editingMessageId]);
-
   const submit = (text: string) => {
     const q = text.trim();
     if (!q || busy) return;
@@ -423,7 +382,7 @@ function ChatBody({
                 sources={sources}
                 onOpen={openSource}
                 onOpenPanel={setOpenPanel}
-                onEdit={handleEdit}
+                onEdit={startEditing}
                 isEditing={editingMessageId === m.id}
               />
             ))}
@@ -490,23 +449,7 @@ function ChatBody({
         </main>
 
         {/* ---------- Edit Mode Indicator ---------- */}
-        {editingMessageId ? (
-          <div className="border-t border-blue-500/20 bg-blue-500/5 px-6 py-2.5 flex items-center justify-between animate-in fade-in duration-200">
-            <div className="flex items-center gap-2">
-              <div className="h-2 w-2 rounded-full bg-blue-400 animate-pulse" />
-              <span className="text-xs font-medium text-blue-300/80">Editing • Press ESC to cancel</span>
-            </div>
-            <button
-              onClick={() => {
-                setEditingMessageId(null);
-                setInput('');
-              }}
-              className="text-xs px-2.5 py-1 rounded text-blue-300/60 hover:text-blue-300 hover:bg-blue-500/10 transition"
-            >
-              Cancel
-            </button>
-          </div>
-        ) : null}
+        <EditingBanner editing={editingMessageId !== null} onCancel={cancelEditing} />
 
         {/* ---------- Undo Toast ---------- */}
         {showUndoToast ? (

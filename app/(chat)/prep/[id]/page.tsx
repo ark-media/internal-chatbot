@@ -39,11 +39,12 @@ import type {
 import { ToolChip } from '@/components/ui/ToolChip';
 import { BusyRow } from '@/components/ui/BusyRow';
 import { UserBubble } from '@/components/ui/UserBubble';
+import { EditingBanner } from '@/components/ui/EditingBanner';
 import { FileAttachments } from '@/components/ui/FileAttachments';
 import { cn } from '@/lib/cn';
-import { chatFetch } from '@/lib/chat-fetch';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
 import { useFlash } from '@/lib/use-flash';
+import { useMessageEditing } from '@/lib/use-message-editing';
 import { useFileAttachments } from '@/lib/use-file-attachments';
 import { useHandoffSummary } from '@/lib/use-handoff-summary';
 import {
@@ -107,40 +108,15 @@ function PrepBody({
   const [driveMatchedShow, setDriveMatchedShow] = useState<string | null>(null);
   const [driveFallback, setDriveFallback] = useState(false);
   const [copySuccess, flashCopySuccess, resetCopySuccess] = useFlash(false);
-  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [showUndoToast, flashShowUndoToast] = useFlash(false);
-
-  // Handle Escape key to cancel edit
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && editingMessageId) {
-        e.preventDefault();
-        setEditingMessageId(null);
-        setInput('');
-      }
-    };
-    if (editingMessageId) {
-      window.addEventListener('keydown', handleKeyDown);
-      return () => window.removeEventListener('keydown', handleKeyDown);
-    }
-  }, [editingMessageId]);
-
-  // Custom fetch that adds editingMessageId to the body if present
-  const customFetch = useCallback<typeof fetch>(
-    async (input, init) => {
-      try {
-        const body = init?.body ? JSON.parse(init.body as string) : {};
-        if (editingMessageId) {
-          body.editingMessageId = editingMessageId;
-        }
-        return chatFetch(input, { ...init, body: JSON.stringify(body) });
-      } catch (e) {
-        console.error('Failed to parse request body for edit:', e);
-        return chatFetch(input, init);
-      }
-    },
-    [editingMessageId],
-  );
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const {
+    editingMessageId,
+    startEditing,
+    cancelEditing,
+    finishEditing,
+    editingFetch,
+  } = useMessageEditing({ setInput, scrollRef });
 
   // Rebuilt only when something it carries changes — not on every render —
   // so a keystroke elsewhere doesn't churn a fresh transport. The header
@@ -150,7 +126,7 @@ function PrepBody({
     () =>
       new DefaultChatTransport({
         api: '/api/prep',
-        fetch: customFetch,
+        fetch: editingFetch,
         headers: {
           'x-model': selectedModel,
           'x-temperature': selectedTemperature,
@@ -158,7 +134,7 @@ function PrepBody({
         },
         body: { chatId },
       }),
-    [customFetch, selectedModel, selectedTemperature, selectedShow, chatId],
+    [editingFetch, selectedModel, selectedTemperature, selectedShow, chatId],
   );
 
   const { messages, sendMessage, status, stop, error, regenerate, clearError } =
@@ -168,11 +144,9 @@ function PrepBody({
       transport,
       onFinish: () => {
         notifyChatUpdated();
-        setEditingMessageId(null);
+        finishEditing();
       },
     });
-
-  const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const busy = status === 'submitted' || status === 'streaming';
 
@@ -182,21 +156,6 @@ function PrepBody({
       behavior: 'smooth',
     });
   }, [messages, busy]);
-
-  const handleEdit = useCallback(
-    (message: PrepUIMessage) => {
-      const textContent = message.parts
-        ?.filter((p) => p.type === 'text')
-        .map((p) => (p.type === 'text' ? p.text : ''))
-        .join('\n\n');
-      if (textContent) {
-        setInput(textContent);
-        setEditingMessageId(message.id);
-        scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-      }
-    },
-    [],
-  );
 
   const submit = (text: string) => {
     const q = text.trim();
@@ -375,7 +334,7 @@ function PrepBody({
               <MessageRow
                 key={m.id}
                 message={m}
-                onEdit={handleEdit}
+                onEdit={startEditing}
                 isEditing={editingMessageId === m.id}
               />
             ))}
@@ -486,23 +445,7 @@ function PrepBody({
         </main>
 
         {/* ---------- Edit Mode Indicator ---------- */}
-        {editingMessageId ? (
-          <div className="border-t border-blue-500/20 bg-blue-500/5 px-6 py-2.5 flex items-center justify-between animate-in fade-in duration-200">
-            <div className="flex items-center gap-2">
-              <div className="h-2 w-2 rounded-full bg-blue-400 animate-pulse" />
-              <span className="text-xs font-medium text-blue-300/80">Editing • Press ESC to cancel</span>
-            </div>
-            <button
-              onClick={() => {
-                setEditingMessageId(null);
-                setInput('');
-              }}
-              className="text-xs px-2.5 py-1 rounded text-blue-300/60 hover:text-blue-300 hover:bg-blue-500/10 transition"
-            >
-              Cancel
-            </button>
-          </div>
-        ) : null}
+        <EditingBanner editing={editingMessageId !== null} onCancel={cancelEditing} />
 
         {/* ---------- Undo Toast ---------- */}
         {showUndoToast ? (
