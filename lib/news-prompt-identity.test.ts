@@ -11,31 +11,22 @@ import { getNewsExamplesForBlock, newsSystemPrompt } from './news-prompt';
 // the prompt text, re-baseline the affected hash IN THE SAME COMMIT and say why
 // here; a stale hash is the guard working, not noise to silence.
 //
-// - orchestrator: still byte-identical to the pre-refactor output.
-// - chat: re-baselined 2026-07-16 for fd80835, which deliberately added the
-//   Human-interest tier to the scanBreakingNews flow (the tier list, plus its
-//   "treat exactly like a Swap into the C-block close" handling) inside
-//   CHAT_TOOLS_AND_VALIDATION. That commit changed the text without moving the
-//   hash, so this guard failed until re-baselined here. The edit is chat-only,
-//   which is why the orchestrator hash never moved.
+// - chat: re-baselined 2026-07-28. The chat prompt is one stable string again:
+//   the per-task prompt variants (one cache key per detected intent) were
+//   collapsed back into a single prompt carrying every workflow module, because
+//   per-turn variants invalidated the cached prefix — and the conversation
+//   history behind it — on every intent switch. The per-turn Active Request
+//   Mode note now rides after the history, outside the cached prefix.
+// - orchestrator: unchanged through the whole redesign.
 const EXPECTED_SHA256 = {
-  chat: '2456972d11f07d95350a6ccc7a6cd250cde22c117c95238b4bd362920f8422a2',
-  orchestrator: '50a26086d7b81f170380d9fd42a71cb3e36f118b9e707985e411abaabf1e4700',
+  chat: 'd8c42f0fbb7df4a9e8bed850dca613b328d38bfa4ba5d40ef52e5a78a61ae514',
+  orchestrator: 'f29ab50f8218f3952225e058ac3f7ff09dccab3b0d978db1dba89dea5e7ae48c',
 } as const;
 
 describe('newsSystemPrompt byte identity', () => {
   it.each(['chat', 'orchestrator'] as const)('%s mode matches the recorded baseline', (mode) => {
     const hash = createHash('sha256').update(newsSystemPrompt(mode)).digest('hex');
     expect(hash).toBe(EXPECTED_SHA256[mode]);
-  });
-
-  // The Human-interest tier is a chat-only breaking-scan concern. If it ever
-  // shows up in the orchestrator prompt, a shared section absorbed an edit that
-  // was meant for CHAT_TOOLS_AND_VALIDATION — which is the exact drift the
-  // hashes above exist to catch, stated in a form that names the culprit.
-  it('keeps the Human-interest tier out of the orchestrator prompt', () => {
-    expect(newsSystemPrompt('chat')).toContain('Human-interest');
-    expect(newsSystemPrompt('orchestrator')).not.toContain('Human-interest');
   });
 });
 

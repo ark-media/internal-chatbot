@@ -14,6 +14,7 @@ import { DEFAULT_MODEL_ID, supportsTemperature } from '@/lib/models';
 import { lookupCorpus } from '@/lib/retrieval';
 import { webSearch } from '@/lib/web-search';
 import { newsSystemPrompt, newsContextForDate, getNewsExamples } from '@/lib/news-prompt';
+import { classifyNewsRequest, newsRequestInstruction } from '@/lib/news-request';
 import { extractSources, parseScriptCoverage } from '@/lib/news-script';
 import { runBreakingScan } from '@/lib/orchestrator/breaking-scan';
 import { buildReviewerSystemContent, reflectLoop } from '@/lib/orchestrator/reflect';
@@ -286,9 +287,18 @@ export async function POST(req: Request) {
   const normalized = normalizeMessages(messages);
   const today = new Date().toISOString().slice(0, 10);
   const started = Date.now();
+  // Classify the latest writer instruction with a small model (Haiku), falling
+  // back to a regex heuristic inside classifyNewsRequest on error/timeout. The
+  // resulting mode note is appended AFTER the history (see below) so it never
+  // sits inside the cached prefix.
+  const requestRoute = await classifyNewsRequest(normalized);
 
-  // Load prompts: only base rules in cached system, date context & examples in messages
-  const baseSystemPrompt = newsSystemPrompt();
+  // The system prompt and examples are deliberately identical on every request
+  // from every editor: they sit at the front of the cached prefix, and varying
+  // them per detected intent would re-tokenize the entire conversation on
+  // every intent switch. Per-block example trimming lives only in the batch
+  // scriptwriter, which makes one-shot calls with no cache to protect.
+  const baseSystemPrompt = newsSystemPrompt('chat');
   const dateContext = newsContextForDate(today);
   const examples = await getNewsExamples();
 
@@ -303,7 +313,10 @@ export async function POST(req: Request) {
     // Fall through, tools will proceed without filtering
   }
 
-  // Build messages with date context and examples before user's actual messages
+  // Build internal context before the writer's actual messages. This block is
+  // byte-identical on every request (same date within a day, same examples),
+  // which is what keeps the cached prefix — and therefore the conversation
+  // history behind breakpoint 3 — valid across turns.
   const contextMessages: UIMessage[] = [
     {
       id: 'news-context',
@@ -327,6 +340,20 @@ export async function POST(req: Request) {
     },
   ];
 
+  // The per-turn Active Request Mode note. It changes whenever the detected
+  // intent changes, so it must ride AFTER the last cache breakpoint — appended
+  // at the very end of the message list, never in the prefix.
+  const requestModeMessage: UIMessage = {
+    id: 'news-request-route',
+    role: 'user',
+    parts: [
+      {
+        type: 'text',
+        text: newsRequestInstruction(requestRoute),
+      },
+    ],
+  };
+
   // Prepare history for the model: drop UI-only data-sources parts, then
   // replace stale tool outputs in older assistant messages with stubs. The
   // most-recent assistant is left intact so the next turn can still
@@ -347,7 +374,7 @@ export async function POST(req: Request) {
     })),
   );
 
-  const allMessages = [...contextMessages, ...messagesForModel];
+  const allMessages = [...contextMessages, ...messagesForModel, requestModeMessage];
   const modelMessages = await convertToModelMessages(allMessages);
 
   // Cache breakpoints. Anthropic caches the prompt prefix up to and INCLUDING
@@ -355,23 +382,29 @@ export async function POST(req: Request) {
   //
   //   1. the system prompt (marked at the streamText call below) — stable
   //      across every request;
-  //   2. the context acknowledgement — everything before it is the date context
-  //      plus the full reference example scripts, a large static block that is
-  //      identical on every request from every editor;
-  //   3. the last history message — freezes the conversation so far so the
+  //   2. the context acknowledgement — everything before it is the date
+  //      context plus the full reference example scripts, a large static block
+  //      that is identical on every request from every editor;
+  //   3. the last HISTORY message — freezes the conversation so far so the
   //      multi-step tool loop (up to 8 steps) reads it from cache instead of
   //      re-sending fetched article bodies and corpus excerpts on every step.
+  //      The Active Request Mode note comes after this mark on purpose: it
+  //      varies per turn, and marking it would key the cached history to the
+  //      current intent, re-tokenizing the whole conversation on every intent
+  //      switch.
   //
   // Only (1) existed before, which is why production logged ~13.5k cached
   // tokens against a 140-200k prompt: the examples block and the whole
   // conversation were re-tokenized on every call.
   const cachePoint = { anthropic: { cacheControl: { type: 'ephemeral' as const } } };
-  // The ack is the last of the two context messages. Guard on the role rather
+  // The context ack is the last context message. Guard on the role rather
   // than trusting the index: if convertToModelMessages ever stops mapping these
   // 1:1, we skip the breakpoint instead of marking an arbitrary message.
   const contextAck = modelMessages[contextMessages.length - 1];
   if (contextAck?.role === 'assistant') contextAck.providerOptions = cachePoint;
-  const lastHistoryMessage = modelMessages.at(-1);
+  // Last history message = the one before the trailing mode note. When the
+  // history is empty this resolves to the context ack and the guard skips it.
+  const lastHistoryMessage = modelMessages.at(-2);
   if (lastHistoryMessage && lastHistoryMessage !== contextAck) {
     lastHistoryMessage.providerOptions = cachePoint;
   }
