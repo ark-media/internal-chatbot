@@ -73,25 +73,27 @@ Three biases showed up, all pushing the same way:
 - **Duplication was over-counted from grep.** Item 4's −400 came from a per-file line count, not from counting the blocks that would actually collapse. Measure the collapsible unit, not the file.
 - **One item didn't exist.** Grep for the identifier before pricing the work — the Wave 1 lesson applies to additions, not just deletions.
 
-Wave 3's -1,000 should be read as an upper bound on *deleted* lines, not on net change. Items 8 and 9 (−496 combined) both explicitly require new tests first.
+Wave 3's -1,000 should be read as an upper bound on *deleted* lines, not on net change. Items 8 and 9 (−496 combined) both explicitly require new tests first — item 8 has since landed and confirmed the shape: it beat its deletion estimate (−166 vs −155) and still came out roughly LOC-neutral on source once the helper was written, plus 150 lines of test.
 
 ---
 
 ## Wave 3 — Structural (~1,000 lines, MEDIUM risk)
 
-**Status:** items 10, 11 and part of 13 shipped. Items 8, 9, 12 and the rest of
+**Status:** items 8, 10, 11 and part of 13 shipped. Items 9, 12 and the rest of
 13 remain. As with Wave 2, the shipped items came in LOC-positive or near-neutral
 while removing real duplication — 10 was `-15` estimated and landed `+34/+7 test`;
 11 was `-48` estimated and landed `+126/-109`. Both were correctness items, and
 both are now covered by tests that did not exist before.
 
-8. **`prepareChatRoute()`** (−155) — the single largest structural win. The same 12-step preamble runs in `chat`/`prep`/`news`/`orchestrator-chat`. Never touches `streamText` or the stream writer.
+8. ✅ **`prepareChatRoute()` + `persistTurn()`** (est. −155; routes actual **−166**, helper +158, so ≈−8 source and +150 test) — the first item to beat its deletion estimate. Split into two functions rather than one: the routes do genuinely different work between validating and persisting (prep/news check uploads → 413, scripts loads its run → 404), so a single linear helper would have needed a callback to slot that work into the middle.
 
-   Normalizes a real divergence: the first three call `req.json()` unwrapped, so a malformed body throws an unhandled 500; `orchestrator/chat:99` wraps it and returns 400. Adopt the 400.
+   **Fixed the divergence it was flagged for.** chat/prep/news called `req.json()` unwrapped, so a malformed body escaped as an unhandled rejection and the platform served a 500 with an HTML body — which `ChatErrorBanner` can only render as a bare statusText. All four now return `400 invalid_json`. Three failing tests proved it before the fix.
 
-   ⚠️ Error *shapes* must be preserved byte-for-byte — `ChatErrorBanner` parses `[<status> <statusText>] <body>` out of the thrown fetch error via `lib/chat-fetch.ts`.
+   Error shapes verified rather than assumed: chat/prep/news built their 400 with `new Response(JSON.stringify(…), {headers})` and scripts with `Response.json(…)`. Confirmed identical in status, statusText, content-type, body, **and the string `chat-fetch.ts` throws** — so unifying on `Response.json` is invisible to the banner.
 
-   ⚠️ **These four routes have zero tests.** Write a preamble test first (~120 lines) against the `app/api/chats/[id]/summary/route.test.ts` mocking pattern — that converts this item from MEDIUM to LOW.
+   ⚠️ One deliberate edge-case change: the scripts route checked `chatId` *before* message validation, so a request missing both used to get `missing_chat_id` and now gets `invalid_messages`. Both 400s carrying an `error` field, and unreachable from the client. Preserving the old order would have meant pushing one caller's policy into the shared helper.
+
+   The "write a preamble test first" advice was right, and cheap: `app/api/chat-preamble.test.ts` is 38 cases across all four routes (`describe.each`), and it caught nothing during the refactor precisely because it was written first — the extraction was done against a known-green contract instead of hope.
 
 9. **Focused UI hooks** (−341) — six small hooks, deliberately **not** one mega-hook: `useInitialMessages` (−36), `useMessageEditing` (−68), `useEditingFetch` (−25), `useFileAttachments` (−59), `useDriveSave` (−72), plus `CopyButton`/`HandoffButton` (−52) and a `useMemo` replacing a state+effect mirror (−10).
 
