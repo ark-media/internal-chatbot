@@ -4,10 +4,12 @@ A staged plan to cut ~3,100 lines (~10% of source) without changing behavior. Th
 
 Produced by a five-agent review sweep over `app/`, `components/`, `lib/`, `eval/`, `scripts/`, and `ingest/`. Every "dead code" claim was verified by repo-wide grep with a positive control, not by import graph alone.
 
-**Status:** Wave 1 shipped (PR #6). Wave 2 shipped. Wave 3 remains — but see
-[Wave 2 outcome](#wave-2--mechanical-dedup-shipped) before trusting its numbers:
-the tail of Wave 2 came in at about a tenth of its estimate, for reasons that
-apply to Wave 3 too.
+**Status:** Wave 1 shipped (PR #6). Wave 2 shipped. Wave 3 shipped except item
+12 (blocked on concurrent work in `app/api/news/route.ts`) and the untargeted
+tail of item 13. See [Wave 2 outcome](#wave-2--mechanical-dedup-shipped) before
+trusting any remaining estimate: the tail of Wave 2 came in at about a tenth of
+its estimate, for reasons that applied to most of Wave 3 too — item 9 was the
+one exception, beating its estimate on net source.
 
 ---
 
@@ -79,11 +81,12 @@ Wave 3's -1,000 should be read as an upper bound on *deleted* lines, not on net 
 
 ## Wave 3 — Structural (~1,000 lines, MEDIUM risk)
 
-**Status:** items 8, 10, 11 and part of 13 shipped. Items 9, 12 and the rest of
-13 remain. As with Wave 2, the shipped items came in LOC-positive or near-neutral
-while removing real duplication — 10 was `-15` estimated and landed `+34/+7 test`;
-11 was `-48` estimated and landed `+126/-109`. Both were correctness items, and
-both are now covered by tests that did not exist before.
+**Status:** items 8, 9, 10, 11 and most of 13 shipped. **Item 12 is blocked**
+(see below) and the tail of 13 is declined. As with Wave 2, the shipped items
+came in LOC-positive or near-neutral while removing real duplication — 10 was
+`-15` estimated and landed `+34/+7 test`; 11 was `-48` estimated and landed
+`+126/-109`. Both were correctness items, and both are now covered by tests that
+did not exist before.
 
 8. ✅ **`prepareChatRoute()` + `persistTurn()`** (est. −155; routes actual **−166**, helper +158, so ≈−8 source and +150 test) — the first item to beat its deletion estimate. Split into two functions rather than one: the routes do genuinely different work between validating and persisting (prep/news check uploads → 413, scripts loads its run → 404), so a single linear helper would have needed a callback to slot that work into the middle.
 
@@ -95,11 +98,25 @@ both are now covered by tests that did not exist before.
 
    The "write a preamble test first" advice was right, and cheap: `app/api/chat-preamble.test.ts` is 38 cases across all four routes (`describe.each`), and it caught nothing during the refactor precisely because it was written first — the extraction was done against a known-green contract instead of hope.
 
-9. **Focused UI hooks** (−341) — six small hooks, deliberately **not** one mega-hook: `useInitialMessages` (−36), `useMessageEditing` (−68), `useEditingFetch` (−25), `useFileAttachments` (−59), `useDriveSave` (−72), plus `CopyButton`/`HandoffButton` (−52) and a `useMemo` replacing a state+effect mirror (−10).
+9. ✅ **Focused UI hooks** (est. −341; actual **−567 pages / +348 helpers = −219 source**, plus 315 test lines) — the only Wave 3 item to beat its estimate on net source. Shipped as four hooks and four components across four commits:
 
-   Start with `useFileAttachments` — the only one with real test coverage on both pages. It also fixes a genuine stale-closure bug: `news/[id]/page.tsx` `onPickFiles` has dep array `[files]` but calls `flashFileAttachSuccess` (currently an eslint warning).
+   | piece | pages | helper | net |
+   |---|---|---|---|
+   | `useFileAttachments` + `FileAttachments` | −166 | +158 | −8 |
+   | `useMessageEditing` + `EditingBanner` | −171 | +119 | −52 |
+   | `useInitialMessages` + `CopyButton`/`HandoffButton` | −141 | +104 | +5 |
+   | `useDriveSave` | −89 | +67 | −22 |
 
-   Write a test for `useMessageEditing` **before** touching it — it owns a global `keydown` listener and nothing guards it today.
+   `useEditingFetch` was **not** built as a separate hook. It is keyed on the same `editingMessageId` and exists only to carry it to the server, so splitting it would have meant threading that state through two hooks; it is `editingFetch` on `useMessageEditing`.
+
+   The "write a test for `useMessageEditing` first" advice was right and cheap — 12 cases (`lib/use-message-editing.test.tsx`) pinning behavior nothing guarded: Escape only cancels while an edit is active, the listener is removed on unmount, and `finishEditing` clears the id **without** wiping the composer (`cancelEditing` does both). Those two were one function before; naming them apart is what made the difference visible.
+
+   ⚠️ Three corrections to this item as written:
+   - **The stale-closure bug does not exist.** `news/[id]/page.tsx` `onPickFiles` already had `[files, flashFileAttachSuccess]`, and `pnpm lint` runs at `--max-warnings=0` and was green before the change. Grep the *current* dep array before pricing a hook as a bug fix.
+   - **The state+effect mirror is already gone.** `ChatSidebar` derives `loading` from `loadedSurface !== viewSurface`, with a comment explaining why; that landed in `ec6b7b2`, before this plan was written. No such mirror remains in `app/` or `components/`.
+   - `useDriveSave` also retired a genuine redundancy: `driveSaveInProgress` was set and cleared in lockstep with `driveLoading` in both pages, so `driveLoading || driveSaveInProgress` was always just `driveLoading`. The re-entrancy guard is now a ref, which is what it wanted — state cannot block a second call that lands before React re-renders the disabled button.
+
+   One visual reconciliation, checked rather than assumed: chat used `flex` where prep/news used `inline-flex` on the copy/handoff buttons. All three parents are `flex flex-wrap` containers, and a flex item's display is blockified, so `inline-flex` computes to `flex` at every call site. Verified each parent before unifying.
 
 10. ✅ **Shared corpus scope filter in `retrieval.ts`** (est. −15; actual +34 src / +7 test cases) — small LOC, real correctness win: five copies of a five-predicate filter that must stay in lockstep across vector search, keyword search, and three dossier queries.
 
@@ -110,10 +127,16 @@ both are now covered by tests that did not exist before.
     Wave 2 item 6 also established the technique for proving a SQL edit is neutral: expand the fragment references back out and diff every template against `HEAD` with whitespace collapsed. That caught nothing, but it is what makes "no behaviour change" a checked claim instead of an assertion.
 
 11. ✅ **`lib/show-lookup.ts`** (est. −48; actual +126 / −109, plus a new 144-line test) — four implementations of one query shape (2 in the chat route, 2 in `eval/grade.ts`). ⚠️ The `note` strings are fed to the model as tool-error text; reproduce byte-for-byte or disambiguation behavior shifts.
-12. **Remaining route helpers** (−85) — `csrfGuard`/`clientIp`/`rateGuard`, telemetry `onFinish`, assistant-persist `onFinish`, `cachedSystem()`, chunk/turn serializers, `makeWebSearchTool` factory, `jsonBody()`, prep's stream shell → `toUIMessageStreamResponse`.
-13. 🟡 **Python `ingest/`** (est. −160; actual −18 so far) — `SpeakerRow.from_row` + `_SPEAKER_SELECT` (−35); two `bootstrap.py` helpers (−30); `normalize.py` three parallel structures → one (−15); `test_parse.py` fixture helper (−13); verbosity cleanups (−31); shared `_conn_str` (−15).
+12. ⛔ **Remaining route helpers** (−85) — **blocked, not attempted.** Two reasons, both worth checking before picking this up:
 
-    ⚠️ Tests are stdlib `unittest`, not pytest, and CI has no `pip install` step — use `unittest.subTest`, **not** `pytest.mark.parametrize`.
+    - **Three of its bullets are already done.** `csrfGuard`/`clientIp`/`rateGuard` and `jsonBody()` were absorbed into `prepareChatRoute` by item 8 — `clientIp` and `isCrossOrigin` are private functions in `lib/chat-route.ts` today. Re-price the item against the current routes before starting; what's actually left is the telemetry and assistant-persist `onFinish` pair, `cachedSystem()`, the chunk/turn serializers, `makeWebSearchTool`, and prep's stream shell.
+    - **`app/api/news/route.ts` has concurrent uncommitted work** (a news-request router: new `lib/news-request.ts`, changes to `lib/news-prompt.ts`, and a re-baselined `newsSystemPrompt` hash). The remaining bullets span all four routes; doing three of four would leave a half-finished dedup and a messy merge. Wait for that branch to land, then re-scope.
+
+13. 🟡 **Python `ingest/`** (est. −160; actual **−40**) — `SpeakerRow.from_row` + `_SPEAKER_SELECT` ✅; shared `_conn_str` → `db.py` ✅; `normalize.py` three parallel structures → one ✅; two `bootstrap.py` helpers ✅ (−15, not −30 — `add_alias` reuse and `add_show_host` collapsing three identical INSERTs); `test_parse.py` fixture helper ✅ (−7, not −13 — the helper earns a docstring explaining that the filename shape drives `episode_id`).
+
+    ⛔ **Verbosity cleanups (−31) declined.** The item names no target. `review.py` is the only verbose module (20 `print` sites) and this document already rejects restructuring its subparsers; nothing outside `parse.py` has test coverage, so a speculative sweep there is exactly the edit that breaks an ingest run silently. Needs a named target and a test before it's worth doing.
+
+    ⚠️ Tests are stdlib `unittest`, not pytest, and CI has no `pip install` step — use `unittest.subTest`, **not** `pytest.mark.parametrize`. Import-check anything you touch against `ingest/.venv/bin/python` directly.
 
 ---
 
