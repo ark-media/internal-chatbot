@@ -121,6 +121,43 @@ export type TopGuestRow = {
   episodes: TopGuestEpisode[];
 };
 
+// -- Shared SQL fragments -----------------------------------------------------
+//
+// Neon tagged templates compose: interpolating a `sql` fragment recurses into
+// it and appends its text, renumbering `$n` against the outer param array.
+// These fragments bind no parameters, so composing one appends its text and
+// nothing else — the query reaching Postgres is unchanged apart from
+// whitespace. `retrieval-sql.test.ts` pins that.
+//
+// Fragments exist so a projection stays in lockstep across the queries that
+// feed the same row type. Do not add parameters to them: a fragment that binds
+// values is far harder to reason about at the call sites.
+
+// Column list + FROM/JOIN for anything returning a `ChunkRow`. Callers supply
+// the two score columns, which differ per query, between the two.
+const CHUNK_COLS = sql`c.chunk_id, c.episode_id, c.chunk_index,
+             sh.show_id, sh.name AS show_name,
+             e.title, e.date::text AS date, e.drive_url,
+             c.section, c.text, c.start_turn_id, c.end_turn_id`;
+
+const CHUNK_FROM = sql`FROM chunks c
+        JOIN episodes e ON e.episode_id = c.episode_id
+        JOIN shows sh ON sh.show_id = e.show_id`;
+
+// Column list + FROM/JOIN for anything returning a `DossierRow`. The bookend
+// query appends window functions after the columns, so the two are separate.
+const TURN_COLS = sql`t.turn_id, t.turn_index, t.episode_id, t.section, t.text, t.speaker_id,
+           e.title AS episode_title, e.date::text AS date, e.drive_url,
+           sh.show_id, sh.name AS show_name,
+           sp.canonical_name AS speaker_name`;
+
+const TURN_FROM = sql`FROM turns t
+      JOIN episodes e ON e.episode_id = t.episode_id
+      JOIN shows sh ON sh.show_id = e.show_id
+      JOIN speakers sp ON sp.speaker_id = t.speaker_id`;
+
+export const __sqlFragments = { CHUNK_COLS, CHUNK_FROM, TURN_COLS, TURN_FROM };
+
 // -- Helpers ------------------------------------------------------------------
 
 type ChunkRow = {
@@ -209,15 +246,10 @@ export async function lookupCorpus(
 
   const [vecRows, ftsRows] = (await Promise.all([
     sql`
-      SELECT c.chunk_id, c.episode_id, c.chunk_index,
-             sh.show_id, sh.name AS show_name,
-             e.title, e.date::text AS date, e.drive_url,
-             c.section, c.text, c.start_turn_id, c.end_turn_id,
+      SELECT ${CHUNK_COLS},
              1 - (c.embedding <=> ${vec}::vector) AS vec_score,
              NULL::real AS fts_score
-        FROM chunks c
-        JOIN episodes e ON e.episode_id = c.episode_id
-        JOIN shows sh ON sh.show_id = e.show_id
+        ${CHUNK_FROM}
        WHERE (${showIds}::int[] IS NULL OR sh.show_id = ANY(${showIds}::int[]))
          AND (${showGroupIds}::int[] IS NULL OR sh.group_id = ANY(${showGroupIds}::int[]))
          AND (${episodeIds}::text[] IS NULL OR c.episode_id = ANY(${episodeIds}::text[]))
@@ -233,15 +265,10 @@ export async function lookupCorpus(
        LIMIT ${candidates}
     `,
     sql`
-      SELECT c.chunk_id, c.episode_id, c.chunk_index,
-             sh.show_id, sh.name AS show_name,
-             e.title, e.date::text AS date, e.drive_url,
-             c.section, c.text, c.start_turn_id, c.end_turn_id,
+      SELECT ${CHUNK_COLS},
              NULL::real AS vec_score,
              ts_rank_cd(c.tsv, websearch_to_tsquery('english', ${ftsQuery})) AS fts_score
-        FROM chunks c
-        JOIN episodes e ON e.episode_id = c.episode_id
-        JOIN shows sh ON sh.show_id = e.show_id
+        ${CHUNK_FROM}
        WHERE c.tsv @@ websearch_to_tsquery('english', ${ftsQuery})
          AND (${showIds}::int[] IS NULL OR sh.show_id = ANY(${showIds}::int[]))
          AND (${showGroupIds}::int[] IS NULL OR sh.group_id = ANY(${showGroupIds}::int[]))
@@ -321,14 +348,9 @@ async function fetchNeighbors(top: RetrievedChunk[]): Promise<RetrievedChunk[]> 
   if (episodeIds.length === 0) return [];
 
   const rows = (await sql`
-    SELECT c.chunk_id, c.episode_id, c.chunk_index,
-           sh.show_id, sh.name AS show_name,
-           e.title, e.date::text AS date, e.drive_url,
-           c.section, c.text, c.start_turn_id, c.end_turn_id,
+    SELECT ${CHUNK_COLS},
            NULL::real AS vec_score, NULL::real AS fts_score
-      FROM chunks c
-      JOIN episodes e ON e.episode_id = c.episode_id
-      JOIN shows sh ON sh.show_id = e.show_id
+      ${CHUNK_FROM}
       JOIN unnest(${episodeIds}::text[], ${chunkIndexes}::int[]) AS q(episode_id, chunk_index)
         ON q.episode_id = c.episode_id AND q.chunk_index = c.chunk_index
   `) as unknown as ChunkRow[];
@@ -401,16 +423,10 @@ export async function getDossier(opts: DossierOptions): Promise<DossierPage> {
   if (bookendHalf !== null) {
     const rows = (await sql`
       WITH ordered AS (
-        SELECT t.turn_id, t.turn_index, t.episode_id, t.section, t.text, t.speaker_id,
-               e.title AS episode_title, e.date::text AS date, e.drive_url,
-               sh.show_id, sh.name AS show_name,
-               sp.canonical_name AS speaker_name,
+        SELECT ${TURN_COLS},
                ROW_NUMBER() OVER (ORDER BY e.date ASC NULLS LAST, t.episode_id, t.turn_index) AS rn,
                (COUNT(*) OVER ())::int AS total_cnt
-          FROM turns t
-          JOIN episodes e ON e.episode_id = t.episode_id
-          JOIN shows sh ON sh.show_id = e.show_id
-          JOIN speakers sp ON sp.speaker_id = t.speaker_id
+          ${TURN_FROM}
          WHERE t.speaker_id = ${opts.speakerId}
            AND (${showIds}::int[] IS NULL OR sh.show_id = ANY(${showIds}::int[]))
            AND (${showGroupIds}::int[] IS NULL OR sh.group_id = ANY(${showGroupIds}::int[]))
@@ -459,14 +475,8 @@ export async function getDossier(opts: DossierOptions): Promise<DossierPage> {
   }
 
   const rows = (await sql`
-    SELECT t.turn_id, t.turn_index, t.episode_id, t.section, t.text, t.speaker_id,
-           e.title AS episode_title, e.date::text AS date, e.drive_url,
-           sh.show_id, sh.name AS show_name,
-           sp.canonical_name AS speaker_name
-      FROM turns t
-      JOIN episodes e ON e.episode_id = t.episode_id
-      JOIN shows sh ON sh.show_id = e.show_id
-      JOIN speakers sp ON sp.speaker_id = t.speaker_id
+    SELECT ${TURN_COLS}
+      ${TURN_FROM}
      WHERE t.speaker_id = ${opts.speakerId}
        AND (${showIds}::int[] IS NULL OR sh.show_id = ANY(${showIds}::int[]))
        AND (${showGroupIds}::int[] IS NULL OR sh.group_id = ANY(${showGroupIds}::int[]))
