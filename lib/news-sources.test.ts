@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  isApprovedSource,
-  isHardPaywallSource,
-  isInternationalSource,
-} from './news-sources';
+import { isApprovedSource, isHardPaywallSource } from './news-sources';
 
 describe('isApprovedSource', () => {
   describe('approved English outlets', () => {
@@ -43,17 +39,6 @@ describe('isApprovedSource', () => {
       expect(isHardPaywallSource('https://www.timesofisrael.com/x')).toBe(false);
     });
 
-    it('flags the international tier (free and paywalled members)', () => {
-      expect(isInternationalSource('https://www.reuters.com/world/x')).toBe(true);
-      expect(isInternationalSource('https://www.theguardian.com/world/x')).toBe(true);
-      expect(isInternationalSource('https://www.nytimes.com/2026/05/04/x')).toBe(true);
-    });
-
-    it('does not flag Israeli outlets as international tier', () => {
-      expect(isInternationalSource('https://www.timesofisrael.com/x')).toBe(false);
-      expect(isInternationalSource('https://www.ynetnews.com/x')).toBe(false);
-      expect(isInternationalSource('https://www.jpost.com/x')).toBe(false);
-    });
   });
 
   describe('X/Twitter', () => {

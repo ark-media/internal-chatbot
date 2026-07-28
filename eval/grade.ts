@@ -501,8 +501,7 @@ function clipFixtureToTopic(fx: ClipDistQ): TopicWithSources {
         avgScore: 90,
         provenance: 'manual',
         summary: fx.description,
-        // keyQuotes is exactly how SOT clips reach the writer (see
-        // extractedStoryToTopic#formatSotClip): "SPEAKER: text".
+        // keyQuotes is exactly how SOT clips reach the writer: "SPEAKER: text".
         keyQuotes: fx.clips.map((c) => `${c.speaker}: ${c.text}`),
       },
     ],

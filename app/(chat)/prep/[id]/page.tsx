@@ -119,19 +119,6 @@ function PrepBody({
   const [copySuccess, flashCopySuccess, resetCopySuccess] = useFlash(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [showUndoToast, flashShowUndoToast] = useFlash(false);
-  const inputRef = useRef<HTMLInputElement | null>(null);
-
-  // Auto-focus input when entering edit mode. setTimeout(0) defers focus
-  // until after React commits the populated value so setSelectionRange
-  // operates on the final length.
-  useEffect(() => {
-    if (!editingMessageId || !inputRef.current) return;
-    const timer = setTimeout(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(inputRef.current.value.length, inputRef.current.value.length);
-    }, 0);
-    return () => clearTimeout(timer);
-  }, [editingMessageId]);
 
   // Handle Escape key to cancel edit
   useEffect(() => {

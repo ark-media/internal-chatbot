@@ -21,7 +21,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 from pathlib import Path
 
 import psycopg
@@ -29,8 +28,6 @@ from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env.local")
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
 DEFAULT_KB_PATH = ROOT.parent / "transcripts" / "knowledge_base.json"

@@ -43,9 +43,3 @@ def embed_documents(texts: list[str]) -> list[list[float]]:
                 print(f"voyage embed batch failed ({e}); retry in {wait}s")
                 time.sleep(wait)
     return out
-
-
-def embed_query(text: str) -> list[float]:
-    client = _client()
-    resp = client.embed([text], model=MODEL, input_type="query")
-    return resp.embeddings[0]

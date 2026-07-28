@@ -7,8 +7,17 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "voyageai>=0.3",
     "python-dotenv>=1.0",
-    "anthropic>=0.40",
 ]
 
 [tool.setuptools]
-py-modules = ["parse", "chunk", "embed", "upsert", "main"]
+py-modules = [
+    "bootstrap",
+    "chunker",
+    "embed",
+    "main",
+    "normalize",
+    "parse",
+    "pending",
+    "review",
+    "upsert",
+]
