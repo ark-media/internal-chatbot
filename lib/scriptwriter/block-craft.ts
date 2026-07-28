@@ -12,6 +12,7 @@ import { computeMetadata } from '../orchestrator/script-craft';
 import type { ReviewCorrection } from '../orchestrator/types';
 import { buildBlockPrompt } from './prompts';
 import type { BlockSlot, StorySource } from './types';
+import { errText, warnEvent } from '../log-event';
 
 // Opus 4.8: sampling parameters are removed (a 400 if sent), so there is no
 // temperature here — lexical variety is steered by the voice sections of the
@@ -129,9 +130,7 @@ export async function reviewBlock(opts: {
     });
   } catch (err) {
     if (signal?.aborted) throw err;
-    console.warn(
-      JSON.stringify({ event: 'scriptwriter.block_review_error', err: String(err).slice(0, 200) }),
-    );
+    warnEvent('scriptwriter.block_review_error', { err: errText(err) });
     return { finalText: draftText, hardFixApplied: false, editorNotes: [] };
   }
 
@@ -191,9 +190,7 @@ export async function reviewBlock(opts: {
     };
   } catch (err) {
     if (signal?.aborted) throw err;
-    console.warn(
-      JSON.stringify({ event: 'scriptwriter.block_fix_error', err: String(err).slice(0, 200) }),
-    );
+    warnEvent('scriptwriter.block_fix_error', { err: errText(err) });
     return {
       finalText: draftText,
       hardFixApplied: false,

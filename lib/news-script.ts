@@ -1,3 +1,4 @@
+import { warnEvent } from './log-event';
 // Parsing helpers for finalized Ark News Daily scripts. Shared by the chat
 // route (which extracts the SOURCES list off a freshly written script) and the
 // breaking-news scan (which needs both the cited sources and the block
@@ -78,12 +79,7 @@ export function extractSources(text: string): { script: string; sources: Extract
   // with empty source lists.
   const headingMatch = text.match(/(^|\n)[#\s>*]*sources\b[\s:．·.\-—]*\n/i);
   if (!headingMatch || headingMatch.index === undefined) {
-    console.warn(
-      JSON.stringify({
-        event: 'news.extract_sources_format_not_found',
-        textLength: text.length,
-      })
-    );
+    warnEvent('news.extract_sources_format_not_found', { textLength: text.length });
     return { script: text, sources: [] };
   }
 
@@ -170,15 +166,12 @@ export function extractSources(text: string): { script: string; sources: Extract
   }
 
   if (parseErrors > 0) {
-    console.warn(
-      JSON.stringify({
-        event: 'news.extract_sources_parse_errors',
-        totalLines: lines.length,
-        parseErrors,
-        successfulParses: sources.length,
-        parseMethod,
-      })
-    );
+    warnEvent('news.extract_sources_parse_errors', {
+      totalLines: lines.length,
+      parseErrors,
+      successfulParses: sources.length,
+      parseMethod,
+    });
   }
 
   return { script, sources };

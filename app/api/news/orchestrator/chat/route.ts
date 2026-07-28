@@ -43,6 +43,7 @@ import {
 } from '@/lib/scriptwriter/state';
 import { createConductorTools, topicSummary, type EmitPart } from '@/lib/scriptwriter/tools';
 import type { PlannedTopic, ScriptRun } from '@/lib/scriptwriter/types';
+import { errText, logEvent, warnEvent } from '@/lib/log-event';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -132,7 +133,7 @@ export async function POST(req: Request) {
       redactFiles: true,
     });
   } catch (err) {
-    console.warn(JSON.stringify({ event: 'scripts.persist_user_error', err: String(err) }));
+    warnEvent('scripts.persist_user_error', { err: errText(err) });
   }
 
   const started = Date.now();
@@ -327,7 +328,7 @@ export async function POST(req: Request) {
         } catch (err) {
           if (req.signal.aborted) return;
           const message = String(err instanceof Error ? err.message : err).slice(0, 300);
-          console.warn(JSON.stringify({ event: 'scripts.sourcing_error', err: message }));
+          warnEvent('scripts.sourcing_error', { err: message });
           run = { ...run, stage: 'sourcing', errorMessage: message };
           await saveRun(run);
           transientOnly = true;
@@ -379,18 +380,15 @@ export async function POST(req: Request) {
         abortSignal: req.signal,
         onFinish: ({ usage, finishReason, steps }) => {
           const toolCalls = steps.flatMap((s) => s.toolCalls ?? []);
-          console.log(
-            JSON.stringify({
-              event: 'scripts.turn_finish',
-              ms: Date.now() - started,
-              stage: run.stage,
-              finishReason,
-              toolCalls: toolCalls.map((t) => t.toolName),
-              inputTokens: usage?.inputTokens,
-              outputTokens: usage?.outputTokens,
-              cachedInputTokens: usage?.cachedInputTokens,
-            }),
-          );
+          logEvent('scripts.turn_finish', {
+            ms: Date.now() - started,
+            stage: run.stage,
+            finishReason,
+            toolCalls: toolCalls.map((t) => t.toolName),
+            inputTokens: usage?.inputTokens,
+            outputTokens: usage?.outputTokens,
+            cachedInputTokens: usage?.cachedInputTokens,
+          });
         },
       });
 
@@ -422,9 +420,7 @@ export async function POST(req: Request) {
           redactFiles: true,
         });
       } catch (err) {
-        console.warn(
-          JSON.stringify({ event: 'scripts.persist_assistant_error', err: String(err) }),
-        );
+        warnEvent('scripts.persist_assistant_error', { err: errText(err) });
       }
     },
   });

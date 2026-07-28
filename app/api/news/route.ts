@@ -32,6 +32,7 @@ import {
   deleteMessageAndSubsequent,
 } from '@/lib/chats';
 import type { NewsUIMessage, ScanProgressSnapshot } from '@/components/news-types';
+import { errText, logEvent, warnEvent } from '@/lib/log-event';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -130,6 +131,7 @@ async function fetchArticle(articleUrl: string): Promise<TavilyExtractResponse> 
     return {
       ok: false,
       reason: 'error',
+      // Not `errText`: model-facing tool text, not a log line.
       note: String(err).slice(0, 300),
     };
   }
@@ -305,7 +307,7 @@ export async function POST(req: Request) {
     try {
       await deleteMessageAndSubsequent(chatId, editingMessageId);
     } catch (err) {
-      console.warn(JSON.stringify({ event: 'news.delete_for_edit_error', err: String(err) }));
+      warnEvent('news.delete_for_edit_error', { err: errText(err) });
     }
   }
 
@@ -322,7 +324,7 @@ export async function POST(req: Request) {
         redactFiles: true,
       });
     } catch (err) {
-      console.warn(JSON.stringify({ event: 'news.persist_user_error', err: String(err) }));
+      warnEvent('news.persist_user_error', { err: errText(err) });
     }
   }
 
@@ -496,17 +498,14 @@ export async function POST(req: Request) {
         abortSignal: req.signal,
         onFinish: ({ usage, finishReason, steps }) => {
           const toolCalls = steps.flatMap((s) => s.toolCalls ?? []);
-          console.log(
-            JSON.stringify({
-              event: 'news.finish',
-              ms: Date.now() - started,
-              finishReason,
-              toolCalls: toolCalls.map((t) => t.toolName),
-              inputTokens: usage?.inputTokens,
-              outputTokens: usage?.outputTokens,
-              cachedInputTokens: usage?.cachedInputTokens,
-            }),
-          );
+          logEvent('news.finish', {
+            ms: Date.now() - started,
+            finishReason,
+            toolCalls: toolCalls.map((t) => t.toolName),
+            inputTokens: usage?.inputTokens,
+            outputTokens: usage?.outputTokens,
+            cachedInputTokens: usage?.cachedInputTokens,
+          });
         },
       });
 
@@ -568,7 +567,7 @@ export async function POST(req: Request) {
       const reflectBudgetMs = REFLECT_DEADLINE_MS - elapsed;
       const skipReflect = isScript && reflectBudgetMs <= 0;
       if (skipReflect) {
-        console.warn(JSON.stringify({ event: 'news.reflect_skipped_over_budget', elapsed }));
+        warnEvent('news.reflect_skipped_over_budget', { elapsed });
       }
 
       let finalText = draftText;
@@ -622,29 +621,23 @@ export async function POST(req: Request) {
           ]);
 
           if (outcome === null) {
-            console.warn(
-              JSON.stringify({
-                event: 'news.reflect_deadline',
-                ms: Date.now() - started,
-                budgetMs: reflectBudgetMs,
-              }),
-            );
+            warnEvent('news.reflect_deadline', {
+              ms: Date.now() - started,
+              budgetMs: reflectBudgetMs,
+            });
           } else {
             finalText = outcome.finalScript.fullText;
 
-            console.log(
-              JSON.stringify({
-                event: 'news.reflect',
-                ms: Date.now() - started,
-                iterations: outcome.iterations,
-                history: outcome.history,
-              }),
-            );
+            logEvent('news.reflect', {
+              ms: Date.now() - started,
+              iterations: outcome.iterations,
+              history: outcome.history,
+            });
           }
         } catch (err) {
           // Reflect failure falls back to the unreviewed draft rather than
           // dropping the turn — finalText is still the original draft.
-          console.warn(JSON.stringify({ event: 'news.reflect_error', err: String(err) }));
+          warnEvent('news.reflect_error', { err: errText(err) });
         }
       }
 
@@ -700,16 +693,13 @@ export async function POST(req: Request) {
           redactFiles: true,
         });
 
-        console.log(
-          JSON.stringify({
-            event: 'news.sources_extracted',
-            chatId,
-            sourceCount: sources.length,
-            scriptLength: script.length,
-          })
-        );
+        logEvent('news.sources_extracted', {
+          chatId,
+          sourceCount: sources.length,
+          scriptLength: script.length,
+        });
       } catch (err) {
-        console.warn(JSON.stringify({ event: 'news.persist_assistant_error', err: String(err) }));
+        warnEvent('news.persist_assistant_error', { err: errText(err) });
       }
     },
   });

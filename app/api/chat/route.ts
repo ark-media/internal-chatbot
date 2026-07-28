@@ -36,6 +36,7 @@ import {
   persistIncomingMessages,
   deleteMessageAndSubsequent,
 } from '@/lib/chats';
+import { errText, logEvent, warnEvent } from '@/lib/log-event';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -583,7 +584,7 @@ export async function POST(req: Request) {
     try {
       await deleteMessageAndSubsequent(chatId, editingMessageId);
     } catch (err) {
-      console.warn(JSON.stringify({ event: 'chat.delete_for_edit_error', err: String(err) }));
+      warnEvent('chat.delete_for_edit_error', { err: errText(err) });
     }
   }
 
@@ -595,7 +596,7 @@ export async function POST(req: Request) {
         messages: messages.map((m) => ({ id: m.id, role: m.role, parts: m.parts ?? [] })),
       });
     } catch (err) {
-      console.warn(JSON.stringify({ event: 'chat.persist_user_error', err: String(err) }));
+      warnEvent('chat.persist_user_error', { err: errText(err) });
     }
   }
   const model = req.headers.get('x-model') || DEFAULT_MODEL_ID;
@@ -622,9 +623,7 @@ export async function POST(req: Request) {
     try {
       routed = await routeQuery(userText, today);
     } catch (err) {
-      console.warn(
-        JSON.stringify({ event: 'chat.route_error', q: queryHash, err: String(err) }),
-      );
+      warnEvent('chat.route_error', { q: queryHash, err: errText(err) });
     }
     routingMs = Date.now() - routeStart;
 
@@ -665,13 +664,7 @@ export async function POST(req: Request) {
           dossierSpeakerName = page.turns[0]?.speakerName ?? '';
           dossierBookend = page.bookend;
         } catch (err) {
-          console.warn(
-            JSON.stringify({
-              event: 'chat.dossier_error',
-              q: queryHash,
-              err: String(err),
-            }),
-          );
+          warnEvent('chat.dossier_error', { q: queryHash, err: errText(err) });
         }
       } else {
         // intent === 'lookup' (or dossier that fell back)
@@ -686,14 +679,11 @@ export async function POST(req: Request) {
           const results = await Promise.all(
             routed.subqueries.map((q) =>
               lookupCorpus({ query: q, filters, finalK: 6 }).catch((err) => {
-                console.warn(
-                  JSON.stringify({
-                    event: 'chat.preretrieval_error',
-                    q: queryHash,
-                    subquery: q,
-                    err: String(err),
-                  }),
-                );
+                warnEvent('chat.preretrieval_error', {
+                  q: queryHash,
+                  subquery: q,
+                  err: errText(err),
+                });
                 return [] as RetrievedChunk[];
               }),
             ),
@@ -706,9 +696,7 @@ export async function POST(req: Request) {
           // faithful paraphrase keeps a small bias for its highest-rank chunk.
           preRetrievedChunks = roundRobinMergeChunks(results, PRE_CHUNK_LIMIT);
         } catch (err) {
-          console.warn(
-            JSON.stringify({ event: 'chat.lookup_error', q: queryHash, err: String(err) }),
-          );
+          warnEvent('chat.lookup_error', { q: queryHash, err: errText(err) });
         }
       }
       retrievalMs = Date.now() - retrStart;
@@ -737,15 +725,12 @@ export async function POST(req: Request) {
       minTurns: 3,
     });
     if (trim.truncated) {
-      console.warn(
-        JSON.stringify({
-          event: 'chat.dossier_truncated',
-          q: queryHash,
-          originalCount: dossierTurns.length,
-          cappedCount: trim.turns.length,
-          bookend: dossierBookend !== null,
-        }),
-      );
+      warnEvent('chat.dossier_truncated', {
+        q: queryHash,
+        originalCount: dossierTurns.length,
+        cappedCount: trim.turns.length,
+        bookend: dossierBookend !== null,
+      });
     }
     dossierTurns = trim.turns;
     dossierBookend = trim.bookend;
@@ -803,15 +788,12 @@ export async function POST(req: Request) {
   const systemText = shortCircuitInstruction ?? (baseSystemPrompt + dynamicContent);
   const estimatedSystemTokens = Math.ceil(systemText.length / 4);
   if (estimatedSystemTokens > SYSTEM_OVERSIZE_WARN_TOKENS) {
-    console.warn(
-      JSON.stringify({
-        event: 'chat.context_oversize',
-        q: queryHash,
-        estimatedSystemTokens,
-        dossierTurnCount: dossierTurns.length,
-        preRetrievedCount: preRetrievedChunks.length,
-      }),
-    );
+    warnEvent('chat.context_oversize', {
+      q: queryHash,
+      estimatedSystemTokens,
+      dossierTurnCount: dossierTurns.length,
+      preRetrievedCount: preRetrievedChunks.length,
+    });
   }
 
   const preloaded: PreloadedSources = {
@@ -901,36 +883,27 @@ export async function POST(req: Request) {
       const isRefusal = text.trim() === NO_INFO;
       const violatesCitationRule =
         !hasCitation && !isRefusal && evidenceCount > 0 && !shortCircuitInstruction;
-      console.log(
-        JSON.stringify({
-          event: 'chat.finish',
-          q: queryHash,
-          ms: Date.now() - started,
-          finishReason,
-          intent: routed?.intent ?? null,
-          toolCalls: allToolCalls.length,
-          toolChunkCount,
-          preRetrievedCount: preRetrievedChunks.length,
-          dossierTurnCount: dossierTurns.length,
-          dossierTotal,
-          routingMs,
-          retrievalMs,
-          hasCitation,
-          isRefusal,
-          violatesCitationRule,
-          inputTokens: usage?.inputTokens,
-          outputTokens: usage?.outputTokens,
-          cachedInputTokens: usage?.cachedInputTokens,
-        }),
-      );
+      logEvent('chat.finish', {
+        q: queryHash,
+        ms: Date.now() - started,
+        finishReason,
+        intent: routed?.intent ?? null,
+        toolCalls: allToolCalls.length,
+        toolChunkCount,
+        preRetrievedCount: preRetrievedChunks.length,
+        dossierTurnCount: dossierTurns.length,
+        dossierTotal,
+        routingMs,
+        retrievalMs,
+        hasCitation,
+        isRefusal,
+        violatesCitationRule,
+        inputTokens: usage?.inputTokens,
+        outputTokens: usage?.outputTokens,
+        cachedInputTokens: usage?.cachedInputTokens,
+      });
       if (violatesCitationRule) {
-        console.warn(
-          JSON.stringify({
-            event: 'chat.citation_violation',
-            q: queryHash,
-            evidenceCount,
-          }),
-        );
+        warnEvent('chat.citation_violation', { q: queryHash, evidenceCount });
       }
     },
   });
@@ -974,7 +947,7 @@ export async function POST(req: Request) {
           },
         });
       } catch (err) {
-        console.warn(JSON.stringify({ event: 'chat.persist_assistant_error', err: String(err) }));
+        warnEvent('chat.persist_assistant_error', { err: errText(err) });
       }
     },
   });

@@ -20,6 +20,7 @@ import type { Article, Candidate } from '../orchestrator/types';
 import { NEWS_CORE_B } from '../news-prompt';
 import type { BlockSlot, PlannedTopic, Scope, StoryProposal, StorySource, TopicRun } from './types';
 import { storyCountForScope, slotsInScope } from './types';
+import { errText, warnEvent } from '../log-event';
 
 // The show's beat as durable, evergreen queries (carried over from the
 // retired allowlist discovery — they are beat-shaped, not outlet-shaped).
@@ -148,9 +149,7 @@ export async function discoverOpenWeb(opts: {
     searches.push(
       discoverXPosts(today, signal).catch((err) => {
         if (signal?.aborted) throw err;
-        console.warn(
-          JSON.stringify({ event: 'scriptwriter.discover_x_failed', err: String(err).slice(0, 200) }),
-        );
+        warnEvent('scriptwriter.discover_x_failed', { err: errText(err) });
         return [];
       }),
     );
@@ -164,9 +163,7 @@ export async function discoverOpenWeb(opts: {
     if (s.status === 'rejected') {
       if (signal?.aborted) throw s.reason;
       lastError = s.reason;
-      console.warn(
-        JSON.stringify({ event: 'scriptwriter.discover_query_error', err: String(s.reason).slice(0, 200) }),
-      );
+      warnEvent('scriptwriter.discover_query_error', { err: errText(s.reason) });
       continue;
     }
     anyFulfilled = true;
@@ -459,9 +456,7 @@ async function summarizeAndQuote(
   } else if (signal?.aborted) {
     throw summaries.reason;
   } else {
-    console.warn(
-      JSON.stringify({ event: 'scriptwriter.summary_failed', err: String(summaries.reason).slice(0, 200) }),
-    );
+    warnEvent('scriptwriter.summary_failed', { err: errText(summaries.reason) });
   }
 
   if (quotes.status === 'fulfilled') {
@@ -473,9 +468,7 @@ async function summarizeAndQuote(
   } else if (signal?.aborted) {
     throw quotes.reason;
   } else {
-    console.warn(
-      JSON.stringify({ event: 'scriptwriter.quotes_failed', err: String(quotes.reason).slice(0, 200) }),
-    );
+    warnEvent('scriptwriter.quotes_failed', { err: errText(quotes.reason) });
   }
 
   return out;
@@ -603,14 +596,11 @@ export async function sourceStories(opts: {
   // it simply came back short, so the caller can explain the thin rundown.
   let insufficientPool = selection.insufficientPool;
   if (selection.stories.length < expected) {
-    console.warn(
-      JSON.stringify({
-        event: 'scriptwriter.selection_short',
-        expected,
-        got: selection.stories.length,
-        flagged: Boolean(selection.insufficientPool),
-      }),
-    );
+    warnEvent('scriptwriter.selection_short', {
+      expected,
+      got: selection.stories.length,
+      flagged: Boolean(selection.insufficientPool),
+    });
     if (!insufficientPool) {
       insufficientPool = {
         reason:
@@ -779,9 +769,7 @@ async function frameNamedTopic(opts: {
   for (const s of settled) {
     if (s.status === 'rejected') {
       if (signal?.aborted) throw s.reason;
-      console.warn(
-        JSON.stringify({ event: 'scriptwriter.topic_link_error', err: String(s.reason).slice(0, 200) }),
-      );
+      warnEvent('scriptwriter.topic_link_error', { err: errText(s.reason) });
       continue;
     }
     if (s.value.content.length > 0) linked.push(s.value);
@@ -933,13 +921,10 @@ export async function sourceNamedTopics(opts: {
     planned.map((topic) =>
       frameNamedTopic({ topic, today, guidance, signal }).catch((err): NamedTopicResult => {
         if (signal?.aborted) throw err;
-        console.warn(
-          JSON.stringify({
-            event: 'scriptwriter.named_topic_error',
-            slot: topic.slot,
-            err: String(err).slice(0, 200),
-          }),
-        );
+        warnEvent('scriptwriter.named_topic_error', {
+          slot: topic.slot,
+          err: errText(err),
+        });
         return { ok: false, reason: 'no-coverage' };
       }),
     ),

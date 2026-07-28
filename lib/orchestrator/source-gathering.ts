@@ -11,6 +11,7 @@ import {
   newsSources,
 } from '../news-sources';
 import type { Article, Candidate } from './types';
+import { errText, logEvent, warnEvent } from '../log-event';
 
 // -- Freshness window --------------------------------------------------------
 // `today` is YYYY-MM-DD anchored in the writer's local timezone — the client
@@ -156,6 +157,8 @@ async function extractArticle(url: string, signal?: AbortSignal): Promise<Extrac
     // A cancelled gather must abort the whole run — don't bury it as a
     // per-article failure.
     if (signal?.aborted) throw err;
+    // Not `errText`: this note is tool-error text the model reads, so it must
+    // not drift when the logging cap changes.
     return { ok: false, note: String(err).slice(0, 200) };
   }
 }
@@ -413,13 +416,10 @@ export async function discoverXPosts(
       const candidates = parseCandidates(text).filter((c) => isApprovedSource(c.url));
       if (candidates.length > 0) {
         if (attempt > 1) {
-          console.warn(
-            JSON.stringify({
-              event: 'orchestrator.discover_x.recovered',
-              attempt,
-              candidateCount: candidates.length,
-            }),
-          );
+          warnEvent('orchestrator.discover_x.recovered', {
+            attempt,
+            candidateCount: candidates.length,
+          });
         }
         return candidates;
       }
@@ -427,36 +427,24 @@ export async function discoverXPosts(
       // handle list today. Accept it and let the caller degrade to "no X posts"
       // rather than burning two more grounded searches to hear it again.
       if (parsedArrayLength(text) === 0) {
-        console.warn(
-          JSON.stringify({
-            event: 'orchestrator.discover_x.none',
-            attempt,
-            finishReason,
-          }),
-        );
+        warnEvent('orchestrator.discover_x.none', { attempt, finishReason });
         return [];
       }
       // Completed, but unparseable text or only redirect/off-handle URLs — one
       // of the silent failures above. Log the miss so it stays visible, retry.
-      console.warn(
-        JSON.stringify({
-          event: 'orchestrator.discover_x.empty',
-          attempt,
-          finishReason,
-          textLength: text.length,
-        }),
-      );
+      warnEvent('orchestrator.discover_x.empty', {
+        attempt,
+        finishReason,
+        textLength: text.length,
+      });
     } catch (err) {
       // A cancelled gather must abort the whole run — don't retry past it.
       if (signal?.aborted) throw err;
       lastError = err;
-      console.warn(
-        JSON.stringify({
-          event: 'orchestrator.discover_x.error',
-          attempt,
-          err: String(err).slice(0, 300),
-        }),
-      );
+      warnEvent('orchestrator.discover_x.error', {
+        attempt,
+        err: errText(err),
+      });
     }
   }
 
@@ -623,21 +611,15 @@ export async function substitutePaywallMirrors(
       if (!isHardPaywallSource(c.url)) return c;
       const mirror = await findFreeMirror(c, signal);
       if (mirror) {
-        console.log(
-          JSON.stringify({
-            event: 'orchestrator.paywall_mirror.substituted',
-            paywalledUrl: c.url,
-            mirrorUrl: mirror.url,
-          }),
-        );
+        logEvent('orchestrator.paywall_mirror.substituted', {
+          paywalledUrl: c.url,
+          mirrorUrl: mirror.url,
+        });
       } else {
-        console.warn(
-          JSON.stringify({
-            event: 'orchestrator.paywall_mirror.dropped',
-            paywalledUrl: c.url,
-            title: c.title.slice(0, 120),
-          }),
-        );
+        warnEvent('orchestrator.paywall_mirror.dropped', {
+          paywalledUrl: c.url,
+          title: c.title.slice(0, 120),
+        });
       }
       return mirror;
     }),
@@ -716,12 +698,9 @@ export async function discoverCandidates(
       // burying it as one query's bad luck.
       if (signal?.aborted) throw s.reason;
       lastError = s.reason;
-      console.warn(
-        JSON.stringify({
-          event: 'orchestrator.discover.query_error',
-          err: String(s.reason).slice(0, 300),
-        }),
-      );
+      warnEvent('orchestrator.discover.query_error', {
+        err: errText(s.reason),
+      });
       continue;
     }
     anyFulfilled = true;

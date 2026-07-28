@@ -7,6 +7,7 @@
 import { streamText } from 'ai';
 
 import type { BlockSlot } from './types';
+import { errText, warnEvent } from '../log-event';
 
 const ASSEMBLY_MODEL = process.env.BLOCK_WRITER_MODEL ?? 'anthropic/claude-opus-4-8';
 
@@ -252,16 +253,13 @@ export function finalizeAssembly(
 ): { fullText: string; usedFallback: boolean } {
   const check = verifyBlocksVerbatim(assembled, ordered);
   if (check.ok) return { fullText: assembled, usedFallback: false };
-  console.warn(
-    JSON.stringify({
-      event: 'scriptwriter.assembly_verbatim_failed',
-      recalls: check.recalls.map((r) => ({
-        slot: r.slot,
-        recall: Number(r.recall.toFixed(3)),
-        added: r.added,
-      })),
-    }),
-  );
+  warnEvent('scriptwriter.assembly_verbatim_failed', {
+    recalls: check.recalls.map((r) => ({
+    slot: r.slot,
+    recall: Number(r.recall.toFixed(3)),
+    added: r.added,
+    }))
+  });
   return { fullText: fallbackStitch(ordered, today, timezone).fullText, usedFallback: true };
 }
 
@@ -307,9 +305,7 @@ Assemble the full episode now: header, blocks word-for-word (with globally renum
     assembled = assembled.trim();
   } catch (err) {
     if (signal?.aborted) throw err;
-    console.warn(
-      JSON.stringify({ event: 'scriptwriter.assembly_error', err: String(err).slice(0, 200) }),
-    );
+    warnEvent('scriptwriter.assembly_error', { err: errText(err) });
     const stitched = fallbackStitch(ordered, today, timezone);
     onDelta?.(stitched.fullText);
     return { fullText: stitched.fullText, usedFallback: true };

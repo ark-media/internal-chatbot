@@ -34,6 +34,7 @@ import {
   deleteMessageAndSubsequent,
 } from '@/lib/chats';
 import type { PrepUIMessage } from '@/components/prep-types';
+import { errText, logEvent, warnEvent } from '@/lib/log-event';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -397,13 +398,10 @@ async function loadGuestDossier(
     await setCached(cKey, result);
     return result;
   } catch (err) {
-    console.warn(
-      JSON.stringify({
-        event: 'prep.preload_dossier_error',
-        speakerId: guest.speakerId,
-        err: String(err),
-      }),
-    );
+    warnEvent('prep.preload_dossier_error', {
+      speakerId: guest.speakerId,
+      err: errText(err),
+    });
     return { turns: [], totalCount: 0 };
   }
 }
@@ -417,12 +415,7 @@ async function loadLinkedArticles(
   if (cached) return cached;
   const resp = await extractArticles(urls);
   if (resp.failed.length > 0) {
-    console.warn(
-      JSON.stringify({
-        event: 'prep.article_fetch_failed',
-        failures: resp.failed,
-      }),
-    );
+    warnEvent('prep.article_fetch_failed', { failures: resp.failed });
   }
   await setCached(cKey, resp.ok);
   return resp.ok;
@@ -485,7 +478,7 @@ export async function POST(req: Request) {
     try {
       await deleteMessageAndSubsequent(chatId, editingMessageId);
     } catch (err) {
-      console.warn(JSON.stringify({ event: 'prep.delete_for_edit_error', err: String(err) }));
+      warnEvent('prep.delete_for_edit_error', { err: errText(err) });
     }
   }
 
@@ -502,7 +495,7 @@ export async function POST(req: Request) {
         redactFiles: true,
       });
     } catch (err) {
-      console.warn(JSON.stringify({ event: 'prep.persist_user_error', err: String(err) }));
+      warnEvent('prep.persist_user_error', { err: errText(err) });
     }
   }
 
@@ -619,9 +612,7 @@ export async function POST(req: Request) {
         profileResults,
       };
     } catch (err) {
-      console.warn(
-        JSON.stringify({ event: 'prep.preretrieval_error', err: String(err) }),
-      );
+      warnEvent('prep.preretrieval_error', { err: errText(err) });
     }
     preMs = Date.now() - preStart;
   }
@@ -667,20 +658,17 @@ export async function POST(req: Request) {
     abortSignal: req.signal,
     onFinish: ({ usage, finishReason, steps }) => {
       const toolCalls = steps.flatMap((s) => s.toolCalls ?? []);
-      console.log(
-        JSON.stringify({
-          event: 'prep.finish',
-          show: show.id,
-          ms: Date.now() - started,
-          finishReason,
-          toolCalls: toolCalls.map((t) => t.toolName),
-          preMs,
-          preSummary,
-          inputTokens: usage?.inputTokens,
-          outputTokens: usage?.outputTokens,
-          cachedInputTokens: usage?.cachedInputTokens,
-        }),
-      );
+      logEvent('prep.finish', {
+        show: show.id,
+        ms: Date.now() - started,
+        finishReason,
+        toolCalls: toolCalls.map((t) => t.toolName),
+        preMs,
+        preSummary,
+        inputTokens: usage?.inputTokens,
+        outputTokens: usage?.outputTokens,
+        cachedInputTokens: usage?.cachedInputTokens,
+      });
     },
   });
 
@@ -707,7 +695,7 @@ export async function POST(req: Request) {
           redactFiles: true,
         });
       } catch (err) {
-        console.warn(JSON.stringify({ event: 'prep.persist_assistant_error', err: String(err) }));
+        warnEvent('prep.persist_assistant_error', { err: errText(err) });
       }
     },
   });
