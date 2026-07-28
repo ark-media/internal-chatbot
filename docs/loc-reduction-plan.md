@@ -4,7 +4,10 @@ A staged plan to cut ~3,100 lines (~10% of source) without changing behavior. Th
 
 Produced by a five-agent review sweep over `app/`, `components/`, `lib/`, `eval/`, `scripts/`, and `ingest/`. Every "dead code" claim was verified by repo-wide grep with a positive control, not by import graph alone.
 
-**Status:** Wave 1 shipped (PR #6). Waves 2–3 remain, ~2,100 lines.
+**Status:** Wave 1 shipped (PR #6). Wave 2 shipped. Wave 3 remains — but see
+[Wave 2 outcome](#wave-2--mechanical-dedup-shipped) before trusting its numbers:
+the tail of Wave 2 came in at about a tenth of its estimate, for reasons that
+apply to Wave 3 too.
 
 ---
 
@@ -48,15 +51,29 @@ Two latent breakages fixed en route: `ingest/pyproject.toml` listed `py-modules 
 
 ---
 
-## Wave 2 — Mechanical dedup (~700 lines, LOW risk)
+## Wave 2 — Mechanical dedup ✅ shipped
 
-1. **`lib/upload-parts.ts`** (−81 net) — `prep/route.ts:437-521` and `news/route.ts:261-336` are logic-identical; a diff shows *only* comment lines differ. Pure functions, trivial lift, and they become unit-testable once in `lib/`.
-2. **Four `components/ui/` primitives** (−136) — `TypingDots` (3 byte-identical copies), `ToolChip`, `BusyRow`, `UserBubble`. Both page tests render through them.
-3. **Test-suite structural dedup** (−390) — page-test `attachFiles`/`mockChatPage` helper (−150); `source-gathering.test.ts` fixture factory + env setup (−170); `breaking-scan.test.ts` stub hoist (−70). Zero assertion changes.
-4. **Table-driven test conversions** (−400) — `it.each` with `'%s'` names so failure messages stay legible. Calibrated against a measured prototype (`news-sources.test.ts` 99→57, 42%), discounted for mixed files.
-5. **`warnEvent()` / `logEvent()`** (−50) — 22 hand-rolled `console.warn(JSON.stringify({…}))` sites whose `slice()` lengths drift between 120/200/300 for no reason.
-6. **Shared retrieval projection fragments** (−14) — chunk projection is 7 byte-identical lines ×3, turn projection ×2. Zero-parameter fragments, so generated SQL is character-identical. Do this *before* item 10 to prove the pattern.
-7. **Misc** (−71) — `DISCOVERY_QUERIES` byte-identical in both pipelines → `lib/news-sources.ts`; `eval/grade.ts` bucket registry table; `router.ts` twin id resolvers; `streamTextAccumulate`; byte-identical prompt fragments only; `todayISO` in scripts.
+Items 1–3 landed first (−607). Items 4–7 were estimated at −535 and delivered
+**−68 source / +28 test**. The estimate was wrong; the detail is below, because
+the same failure modes are priced into Wave 3.
+
+1. **`lib/upload-parts.ts`** (−81 net) ✅ — `prep/route.ts` and `news/route.ts` were logic-identical; only comment lines differed.
+2. **Four `components/ui/` primitives** (−136) ✅ — `TypingDots` (3 byte-identical copies), `ToolChip`, `BusyRow`, `UserBubble`.
+3. **Test-suite structural dedup** (−390) ✅ — page-test `attachFiles` helper; `source-gathering.test.ts` fixture factory; `breaking-scan.test.ts` stub hoist.
+4. **Table-driven test conversions** — est. −400, **actual −129**. Converted `ChatErrorBanner` (80→58), `citation-parser` (113→83), `style-memory` (176→131), `news-sources` (85→49). The −400 assumed lots of single-assertion `it()` blocks; a count of single-`expect` blocks per file showed most test files already group related assertions under one descriptive `it()`, which is *fewer* lines than the equivalent table. `lib/scriptwriter/sourcing.test.ts` was converted, measured at **+9 lines**, and reverted — its inputs are long enough that each row costs more than the `it()` it replaced.
+5. **`warnEvent()` / `logEvent()`** — est. −50, **actual −65 source / +62 test**. Found 57 sites, not 22. Call sites shrank by 110; `lib/log-event.ts` (44) and its test (62) add back. The estimate didn't budget for testing the new helper.
+6. **Shared retrieval projection fragments** — est. −14, **actual +10 source / +95 test**. Five copies became two fragment definitions, but with real explanatory comments the definitions cost more than the duplication did. Kept anyway: this was always a correctness item, and `lib/retrieval-sql.test.ts` is the first unit test over any SQL in `retrieval.ts` — see item 10.
+7. **Misc** — est. −71, **actual −13**. `DISCOVERY_QUERIES` → `lib/news-sources.ts` ✅; `eval/grade.ts` bucket registry ✅; `router.ts` twin resolvers ✅; `todayISO` ✅ (3 copies, not 2 — the orchestrator page had the original). `streamTextAccumulate` **does not exist in the repo** — the item was fiction. Prompt fragments: the only cross-file duplicates are single lines inside larger prose blocks (see Rejected abstractions).
+
+### What this says about Wave 3's numbers
+
+Three biases showed up, all pushing the same way:
+
+- **Comments and tests aren't free.** Items 5 and 6 both produced a real structural win and a *worse* LOC number, because the extracted thing deserved a comment explaining why it exists and a test pinning it. Any Wave 3 item that ends "…and write a test first" should be assumed LOC-neutral at best.
+- **Duplication was over-counted from grep.** Item 4's −400 came from a per-file line count, not from counting the blocks that would actually collapse. Measure the collapsible unit, not the file.
+- **One item didn't exist.** Grep for the identifier before pricing the work — the Wave 1 lesson applies to additions, not just deletions.
+
+Wave 3's -1,000 should be read as an upper bound on *deleted* lines, not on net change. Items 8 and 9 (−496 combined) both explicitly require new tests first.
 
 ---
 
@@ -78,9 +95,11 @@ Two latent breakages fixed en route: `ingest/pyproject.toml` listed `py-modules 
 
 10. **Shared corpus scope filter in `retrieval.ts`** (−15) — small LOC, real correctness win: five copies of a five-predicate filter that must stay in lockstep across vector search, keyword search, and three dossier queries.
 
-    ⚠️ **Highest-risk item here.** No SQL in `retrieval.ts` is unit-tested. Gate on `BUCKET=lookup`, `BUCKET=dossier`, `BUCKET=aggregate` before *and* after — a regression is silent recall loss, not an exception. The vector query needs a `WHERE TRUE` anchor (its filter currently opens the `WHERE`; the shared fragment is additive).
+    ⚠️ Still the highest-risk item, but less so than when this was written. Gate on `BUCKET=lookup`, `BUCKET=dossier`, `BUCKET=aggregate` before *and* after — a regression is silent recall loss, not an exception. The vector query needs a `WHERE TRUE` anchor (its filter currently opens the `WHERE`; the shared fragment is additive).
 
-    Neon tagged templates *are* safely composable with parameters — `toParameterizedQuery` recurses into nested `sql\`…\`` fragments and renumbers `$n` lazily. Never concatenate values into SQL.
+    Composition is now verified rather than assumed. `toParameterizedQuery` recurses into nested `sql\`…\`` fragments and renumbers `$n` against the outer param array — confirmed by reading the driver source, and `lib/retrieval-sql.test.ts` pins it, including that numbering stays sequential across an interpolated fragment. `sql\`…\`` is also lazy (it only executes on `.then`/`.catch`/`.finally`), so module-level fragments are safe and testable without a database. Never concatenate values into SQL.
+
+    Wave 2 item 6 also established the technique for proving a SQL edit is neutral: expand the fragment references back out and diff every template against `HEAD` with whitespace collapsed. That caught nothing, but it is what makes "no behaviour change" a checked claim instead of an assertion.
 
 11. **`lib/show-lookup.ts`** (−48) — four implementations of one query shape (2 in the chat route, 2 in `eval/grade.ts`). ⚠️ The `note` strings are fed to the model as tool-error text; reproduce byte-for-byte or disambiguation behavior shifts.
 12. **Remaining route helpers** (−85) — `csrfGuard`/`clientIp`/`rateGuard`, telemetry `onFinish`, assistant-persist `onFinish`, `cachedSystem()`, chunk/turn serializers, `makeWebSearchTool` factory, `jsonBody()`, prep's stream shell → `toUIMessageStreamResponse`.
@@ -140,6 +159,9 @@ Considered and argued down. Recorded so they don't get re-proposed.
 - **Merging `ModelSelector`/`ShowSelector`/`TemperatureSelector`** — 6 props to save ~45 lines; the item bodies resist a common shape.
 - **Extracting `parse.py`'s duplicated `flush()`** — costs ~14 lines to save 10. LOC-negative.
 - **Table-driving `review.py`'s argparse subparsers** — idiomatic as-is; a data-driven rewrite is materially less readable.
+- **Table-driving `lib/scriptwriter/sourcing.test.ts`** — tried and measured: 273 → 283 lines. `extractUrls` / `slotsForUrlStories` / `topicTextWithoutUrls` take long string inputs, so each row wraps across 5–7 lines where the original `it()` fit in 3. Same applies to any test whose inputs don't fit on one line.
+- **Table-driving `citation-label`, `sidebar`, `dossier-budget`, `strip-tool-outputs`, `rss`** — already compact. The first three group several related assertions under one descriptive `it()`; the last two build a distinct fixture per case, and the fixture (XML, message trees) dominates the line count, not the wrapper.
+- **Extracting the duplicated prompt lines** — the only cross-file duplicates are single lines *inside* larger prose blocks (`prep-prompt.ts` ×2, `news-prompt.ts` ×2). Hoisting them to consts and interpolating saves ~4 lines, makes the prompts unreadable as prose, and puts the pinned `newsSystemPrompt()` hash at risk for nothing.
 
 ---
 
@@ -152,6 +174,7 @@ Considered and argued down. Recorded so they don't get re-proposed.
 
 ## Working notes
 
-- Verify a green baseline before and after every wave: `pnpm typecheck`, `pnpm lint`, `pnpm vitest run`, and `python -m unittest discover -s tests` from `ingest/`.
-- Reconcile test counts explicitly. Wave 1 went 476 → 439, and the 37 removed reconciled exactly as 31 + 4 + 2, every one covering a deleted subject. An unexplained delta means coverage was lost.
+- Verify a green baseline before and after every wave: `pnpm typecheck`, `pnpm lint`, `pnpm vitest run`, and `python -m unittest discover -s tests` from `ingest/`. Run `pnpm build` too when a client component is touched — the test suite does not catch a broken import in a page.
+- Reconcile test counts explicitly. Wave 1 went 476 → 439, and the 37 removed reconciled exactly as 31 + 4 + 2, every one covering a deleted subject. An unexplained delta means coverage was lost. Wave 2 went 440 → 471; the +31 reconciles as 8 (new SQL-fragment tests) + 11 (new log-event tests) + 12 (table rows split out of cases that had shared one `it()`).
+- Measure before committing to a dedup, and revert when the measurement disagrees. Two Wave 2 items looked like clear wins and were not; one was caught only by converting it and running `wc -l`.
 - `ingest/` has no `pip install` step in CI and only `parse.py` is under test — import-check any module you touch against the venv directly.
