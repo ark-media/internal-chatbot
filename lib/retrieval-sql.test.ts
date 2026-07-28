@@ -2,7 +2,25 @@ import { describe, expect, it } from 'vitest';
 import { sql } from './db';
 import { __sqlFragments } from './retrieval';
 
-const { CHUNK_COLS, CHUNK_FROM, TURN_COLS, TURN_FROM } = __sqlFragments;
+const {
+  CHUNK_COLS,
+  CHUNK_FROM,
+  TURN_COLS,
+  TURN_FROM,
+  CHUNK_EPISODE_COL,
+  TURN_EPISODE_COL,
+  corpusScope,
+  chunkScope,
+  turnScope,
+} = __sqlFragments;
+
+const SCOPE = {
+  showIds: [1, 2],
+  showGroupIds: [7],
+  episodeIds: ['ep-a', 'ep-b'],
+  since: '2025-01-01',
+  until: '2026-01-01',
+};
 
 // A neon tagged template is lazy: it only touches the network when something
 // calls `.then`/`.catch`/`.finally`. Reaching into `.queryData` renders the
@@ -91,5 +109,91 @@ describe('retrieval SQL fragments', () => {
     expect(query).toContain('$1');
     expect(query).toContain('$2');
     expect(query).toContain('$3');
+  });
+});
+
+// These DO bind values, so composition order matters. The whole point of the
+// shared scope filter is that vector search, keyword search and the three
+// dossier queries can't drift apart — when they do, the same question quietly
+// returns different rows depending on which path served it.
+describe('corpus scope filter', () => {
+  it.each([
+    ['CHUNK_EPISODE_COL', CHUNK_EPISODE_COL, 'c.episode_id'],
+    ['TURN_EPISODE_COL', TURN_EPISODE_COL, 't.episode_id'],
+  ])('%s is a zero-parameter identifier fragment', (_name, frag, expected) => {
+    const { query, params } = render(frag);
+    expect(norm(query)).toBe(expected);
+    // Critical: these are interpolated as SQL, not bound. If one ever carried a
+    // parameter it would mean a caller-supplied identifier — an injection path.
+    expect(params).toEqual([]);
+  });
+
+  it('emits the five scope predicates, additively', () => {
+    const { query, params } = render(
+      sql`SELECT 1 FROM chunks c WHERE TRUE${corpusScope(SCOPE, CHUNK_EPISODE_COL)}`,
+    );
+
+    // Additive: must start with AND so it can follow any existing predicate.
+    expect(norm(query)).toContain('WHERE TRUE AND (');
+    expect(norm(query)).toContain('sh.show_id = ANY(');
+    expect(norm(query)).toContain('sh.group_id = ANY(');
+    expect(norm(query)).toContain('c.episode_id = ANY(');
+    expect(norm(query)).toContain('e.date >= ');
+    expect(norm(query)).toContain('e.date <= ');
+    // Each predicate binds its value twice (the IS NULL guard and the compare).
+    expect(params).toEqual([
+      [1, 2], [1, 2],
+      [7], [7],
+      ['ep-a', 'ep-b'], ['ep-a', 'ep-b'],
+      '2025-01-01', '2025-01-01',
+      '2026-01-01', '2026-01-01',
+    ]);
+  });
+
+  it('switches the episode column with the fragment it is given', () => {
+    const chunk = render(sql`WHERE TRUE${corpusScope(SCOPE, CHUNK_EPISODE_COL)}`);
+    const turn = render(sql`WHERE TRUE${corpusScope(SCOPE, TURN_EPISODE_COL)}`);
+
+    expect(chunk.query).toContain('c.episode_id = ANY(');
+    expect(chunk.query).not.toContain('t.episode_id = ANY(');
+    expect(turn.query).toContain('t.episode_id = ANY(');
+    expect(turn.query).not.toContain('c.episode_id = ANY(');
+    // Only the column differs — same predicates, same bound values.
+    expect(turn.params).toEqual(chunk.params);
+  });
+
+  it('chunkScope appends the speaker-overlap EXISTS after the shared five', () => {
+    const { query, params } = render(
+      sql`WHERE TRUE${chunkScope(SCOPE, [42])}`,
+    );
+    const n = norm(query);
+
+    expect(n.indexOf('c.episode_id = ANY(')).toBeLessThan(n.indexOf('EXISTS ('));
+    expect(n).toContain('t.turn_id BETWEEN c.start_turn_id AND c.end_turn_id');
+    expect(params.slice(-2)).toEqual([[42], [42]]);
+  });
+
+  it('turnScope appends the topic predicate after the shared five', () => {
+    const { query, params } = render(
+      sql`WHERE TRUE${turnScope(SCOPE, 'hostages')}`,
+    );
+    const n = norm(query);
+
+    expect(n.indexOf('t.episode_id = ANY(')).toBeLessThan(n.indexOf('t.tsv @@'));
+    expect(n).toContain("websearch_to_tsquery('english',");
+    expect(params.slice(-2)).toEqual(['hostages', 'hostages']);
+  });
+
+  it('passes nulls straight through so the IS NULL guards short-circuit', () => {
+    const empty = {
+      showIds: null,
+      showGroupIds: null,
+      episodeIds: null,
+      since: null,
+      until: null,
+    };
+    const { params } = render(sql`WHERE TRUE${turnScope(empty, null)}`);
+
+    expect(params).toEqual(new Array(12).fill(null));
   });
 });

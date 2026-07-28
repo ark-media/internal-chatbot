@@ -156,7 +156,88 @@ const TURN_FROM = sql`FROM turns t
       JOIN shows sh ON sh.show_id = e.show_id
       JOIN speakers sp ON sp.speaker_id = t.speaker_id`;
 
-export const __sqlFragments = { CHUNK_COLS, CHUNK_FROM, TURN_COLS, TURN_FROM };
+// -- Corpus scope predicates --------------------------------------------------
+//
+// Every query that honours `CorpusFilters` must apply the same five predicates.
+// When they drift, the same question returns different rows depending on which
+// code path served it — silent recall loss, not an error. They lived in five
+// hand-maintained copies (vector search, keyword search, and three dossier
+// queries) before this.
+//
+// Unlike the projection fragments above, these bind values. The driver walks
+// the template in order and renumbers `$n` against the outer param array, so a
+// fragment dropped in where the inline text used to sit yields the same
+// parameters in the same order — `retrieval-sql.test.ts` pins that.
+//
+// These are ADDITIVE: every predicate is emitted with a leading `AND`, so the
+// caller's `WHERE` must already have something to anchor on. Use `WHERE TRUE`
+// where there is no other predicate.
+
+type ScopeValues = {
+  showIds: number[] | null;
+  showGroupIds: number[] | null;
+  episodeIds: string[] | null;
+  since: string | null;
+  until: string | null;
+};
+
+// Empty arrays mean "no filter", not "match nothing" — normalise them to NULL
+// so the `IS NULL OR …` predicates short-circuit.
+function toScopeValues(f: CorpusFilters): ScopeValues {
+  return {
+    showIds: f.showIds?.length ? f.showIds : null,
+    showGroupIds: f.showGroupIds?.length ? f.showGroupIds : null,
+    episodeIds: f.episodeIds?.length ? f.episodeIds : null,
+    since: f.since ?? null,
+    until: f.until ?? null,
+  };
+}
+
+// `episode_id` lives on the row being filtered, so its table alias differs
+// between the chunk and turn queries. These are fixed, zero-parameter fragments
+// — never anything caller-supplied — so interpolating one cannot inject.
+const CHUNK_EPISODE_COL = sql`c.episode_id`;
+const TURN_EPISODE_COL = sql`t.episode_id`;
+
+function corpusScope(v: ScopeValues, episodeCol: unknown) {
+  return sql`
+         AND (${v.showIds}::int[] IS NULL OR sh.show_id = ANY(${v.showIds}::int[]))
+         AND (${v.showGroupIds}::int[] IS NULL OR sh.group_id = ANY(${v.showGroupIds}::int[]))
+         AND (${v.episodeIds}::text[] IS NULL OR ${episodeCol} = ANY(${v.episodeIds}::text[]))
+         AND (${v.since}::date IS NULL OR e.date >= ${v.since}::date)
+         AND (${v.until}::date IS NULL OR e.date <= ${v.until}::date)`;
+}
+
+// Chunk queries additionally narrow to chunks containing a turn by one of the
+// requested speakers. The BETWEEN is on turn_id because a chunk records the
+// span of turns it was built from.
+function chunkScope(v: ScopeValues, speakerIds: number[] | null) {
+  return sql`${corpusScope(v, CHUNK_EPISODE_COL)}
+         AND (${speakerIds}::int[] IS NULL OR EXISTS (
+               SELECT 1 FROM turns t
+                WHERE t.episode_id = c.episode_id
+                  AND t.turn_id BETWEEN c.start_turn_id AND c.end_turn_id
+                  AND t.speaker_id = ANY(${speakerIds}::int[])
+             ))`;
+}
+
+// Dossier queries additionally narrow to turns matching a full-text topic.
+function turnScope(v: ScopeValues, topic: string | null) {
+  return sql`${corpusScope(v, TURN_EPISODE_COL)}
+         AND (${topic}::text IS NULL OR t.tsv @@ websearch_to_tsquery('english', ${topic}::text))`;
+}
+
+export const __sqlFragments = {
+  CHUNK_COLS,
+  CHUNK_FROM,
+  TURN_COLS,
+  TURN_FROM,
+  CHUNK_EPISODE_COL,
+  TURN_EPISODE_COL,
+  corpusScope,
+  chunkScope,
+  turnScope,
+};
 
 // -- Helpers ------------------------------------------------------------------
 
@@ -234,12 +315,8 @@ export async function lookupCorpus(
   const expandedNames = expandQueryWithKnownNames(opts.query);
   const ftsQuery = [opts.query, ...expandedNames].join(' ');
 
-  const showIds = f.showIds?.length ? f.showIds : null;
-  const showGroupIds = f.showGroupIds?.length ? f.showGroupIds : null;
+  const scope = toScopeValues(f);
   const speakerIds = f.speakerIds?.length ? f.speakerIds : null;
-  const episodeIds = f.episodeIds?.length ? f.episodeIds : null;
-  const since = f.since ?? null;
-  const until = f.until ?? null;
 
   const embedding = await embedQuery(opts.query);
   const vec = toVec(embedding);
@@ -250,17 +327,7 @@ export async function lookupCorpus(
              1 - (c.embedding <=> ${vec}::vector) AS vec_score,
              NULL::real AS fts_score
         ${CHUNK_FROM}
-       WHERE (${showIds}::int[] IS NULL OR sh.show_id = ANY(${showIds}::int[]))
-         AND (${showGroupIds}::int[] IS NULL OR sh.group_id = ANY(${showGroupIds}::int[]))
-         AND (${episodeIds}::text[] IS NULL OR c.episode_id = ANY(${episodeIds}::text[]))
-         AND (${since}::date IS NULL OR e.date >= ${since}::date)
-         AND (${until}::date IS NULL OR e.date <= ${until}::date)
-         AND (${speakerIds}::int[] IS NULL OR EXISTS (
-               SELECT 1 FROM turns t
-                WHERE t.episode_id = c.episode_id
-                  AND t.turn_id BETWEEN c.start_turn_id AND c.end_turn_id
-                  AND t.speaker_id = ANY(${speakerIds}::int[])
-             ))
+       WHERE TRUE${chunkScope(scope, speakerIds)}
     ORDER BY c.embedding <=> ${vec}::vector
        LIMIT ${candidates}
     `,
@@ -269,18 +336,7 @@ export async function lookupCorpus(
              NULL::real AS vec_score,
              ts_rank_cd(c.tsv, websearch_to_tsquery('english', ${ftsQuery})) AS fts_score
         ${CHUNK_FROM}
-       WHERE c.tsv @@ websearch_to_tsquery('english', ${ftsQuery})
-         AND (${showIds}::int[] IS NULL OR sh.show_id = ANY(${showIds}::int[]))
-         AND (${showGroupIds}::int[] IS NULL OR sh.group_id = ANY(${showGroupIds}::int[]))
-         AND (${episodeIds}::text[] IS NULL OR c.episode_id = ANY(${episodeIds}::text[]))
-         AND (${since}::date IS NULL OR e.date >= ${since}::date)
-         AND (${until}::date IS NULL OR e.date <= ${until}::date)
-         AND (${speakerIds}::int[] IS NULL OR EXISTS (
-               SELECT 1 FROM turns t
-                WHERE t.episode_id = c.episode_id
-                  AND t.turn_id BETWEEN c.start_turn_id AND c.end_turn_id
-                  AND t.speaker_id = ANY(${speakerIds}::int[])
-             ))
+       WHERE c.tsv @@ websearch_to_tsquery('english', ${ftsQuery})${chunkScope(scope, speakerIds)}
     ORDER BY fts_score DESC NULLS LAST
        LIMIT ${candidates}
     `,
@@ -404,11 +460,7 @@ export async function getDossier(opts: DossierOptions): Promise<DossierPage> {
   }
   const f = opts.filters ?? {};
 
-  const showIds = f.showIds?.length ? f.showIds : null;
-  const showGroupIds = f.showGroupIds?.length ? f.showGroupIds : null;
-  const episodeIds = f.episodeIds?.length ? f.episodeIds : null;
-  const since = f.since ?? null;
-  const until = f.until ?? null;
+  const scope = toScopeValues(f);
   const topic = opts.topic?.trim() || null;
 
   // Bookend mode: single CTE that selects first N + last N chronologically.
@@ -427,13 +479,7 @@ export async function getDossier(opts: DossierOptions): Promise<DossierPage> {
                ROW_NUMBER() OVER (ORDER BY e.date ASC NULLS LAST, t.episode_id, t.turn_index) AS rn,
                (COUNT(*) OVER ())::int AS total_cnt
           ${TURN_FROM}
-         WHERE t.speaker_id = ${opts.speakerId}
-           AND (${showIds}::int[] IS NULL OR sh.show_id = ANY(${showIds}::int[]))
-           AND (${showGroupIds}::int[] IS NULL OR sh.group_id = ANY(${showGroupIds}::int[]))
-           AND (${episodeIds}::text[] IS NULL OR t.episode_id = ANY(${episodeIds}::text[]))
-           AND (${since}::date IS NULL OR e.date >= ${since}::date)
-           AND (${until}::date IS NULL OR e.date <= ${until}::date)
-           AND (${topic}::text IS NULL OR t.tsv @@ websearch_to_tsquery('english', ${topic}::text))
+         WHERE t.speaker_id = ${opts.speakerId}${turnScope(scope, topic)}
       )
       SELECT * FROM ordered
        WHERE rn <= ${bookendHalf} OR rn > total_cnt - ${bookendHalf}
@@ -460,13 +506,7 @@ export async function getDossier(opts: DossierOptions): Promise<DossierPage> {
       FROM turns t
       JOIN episodes e ON e.episode_id = t.episode_id
       JOIN shows sh ON sh.show_id = e.show_id
-     WHERE t.speaker_id = ${opts.speakerId}
-       AND (${showIds}::int[] IS NULL OR sh.show_id = ANY(${showIds}::int[]))
-       AND (${showGroupIds}::int[] IS NULL OR sh.group_id = ANY(${showGroupIds}::int[]))
-       AND (${episodeIds}::text[] IS NULL OR t.episode_id = ANY(${episodeIds}::text[]))
-       AND (${since}::date IS NULL OR e.date >= ${since}::date)
-       AND (${until}::date IS NULL OR e.date <= ${until}::date)
-       AND (${topic}::text IS NULL OR t.tsv @@ websearch_to_tsquery('english', ${topic}::text))
+     WHERE t.speaker_id = ${opts.speakerId}${turnScope(scope, topic)}
   `) as unknown as Array<{ c: number }>;
   const totalCount = countRows[0]?.c ?? 0;
 
@@ -477,13 +517,7 @@ export async function getDossier(opts: DossierOptions): Promise<DossierPage> {
   const rows = (await sql`
     SELECT ${TURN_COLS}
       ${TURN_FROM}
-     WHERE t.speaker_id = ${opts.speakerId}
-       AND (${showIds}::int[] IS NULL OR sh.show_id = ANY(${showIds}::int[]))
-       AND (${showGroupIds}::int[] IS NULL OR sh.group_id = ANY(${showGroupIds}::int[]))
-       AND (${episodeIds}::text[] IS NULL OR t.episode_id = ANY(${episodeIds}::text[]))
-       AND (${since}::date IS NULL OR e.date >= ${since}::date)
-       AND (${until}::date IS NULL OR e.date <= ${until}::date)
-       AND (${topic}::text IS NULL OR t.tsv @@ websearch_to_tsquery('english', ${topic}::text))
+     WHERE t.speaker_id = ${opts.speakerId}${turnScope(scope, topic)}
   ORDER BY e.date ASC NULLS LAST, t.episode_id, t.turn_index
      LIMIT ${limit} OFFSET ${offset}
   `) as unknown as DossierRow[];
