@@ -17,9 +17,14 @@ import { getNewsExamplesForBlock, newsSystemPrompt } from './news-prompt';
 //   per-turn variants invalidated the cached prefix — and the conversation
 //   history behind it — on every intent switch. The per-turn Active Request
 //   Mode note now rides after the history, outside the cached prefix.
+//   Re-baselined again same day: the newschat eval's clean-output gate failed
+//   at 0.778 (target 0.9) because the writer appended trailing [FLAG] notes
+//   narrating its own sourcing decisions — the evidence-contract bullet now
+//   pins FLAG content (evidence gap only) and placement (inline where spoken
+//   or beside the SOURCES entry, never a trailing note).
 // - orchestrator: unchanged through the whole redesign.
 const EXPECTED_SHA256 = {
-  chat: 'd8c42f0fbb7df4a9e8bed850dca613b328d38bfa4ba5d40ef52e5a78a61ae514',
+  chat: 'e9e39b7592ff004a5f25e94e7a0c427a19a2b85984e2f95b612753f00fdce311',
   orchestrator: 'f29ab50f8218f3952225e058ac3f7ff09dccab3b0d978db1dba89dea5e7ae48c',
 } as const;
 
