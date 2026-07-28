@@ -21,7 +21,7 @@
     "@upstash/redis": "^1.38.0",
     "ai": "^6.0.167",
     "clsx": "^2.1.1",
-    "googleapis": "^171.4.0",
+    "googleapis": "^173.0.0",
     "lucide-react": "^1.27.0",
     "next": "16.2.12",
     "react": "19.2.8",
