@@ -6,14 +6,12 @@ import {
   useMemo,
   useRef,
   useState,
-  type ChangeEvent,
   type ReactNode,
 } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import { useParams } from 'next/navigation';
 import {
-  FileText,
   Loader2,
   X,
   HardDriveUpload,
@@ -42,21 +40,18 @@ import type {
 } from '@/components/news-types';
 import { BusyRow } from '@/components/ui/BusyRow';
 import { UserBubble } from '@/components/ui/UserBubble';
+import { FileAttachments } from '@/components/ui/FileAttachments';
 import { cn } from '@/lib/cn';
 import { chatFetch } from '@/lib/chat-fetch';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
 import { useFlash } from '@/lib/use-flash';
+import { useFileAttachments } from '@/lib/use-file-attachments';
 import { useHandoffSummary } from '@/lib/use-handoff-summary';
 import {
   NEWS_DEFAULT_TEMPERATURE_PRESET,
   type TemperaturePresetId,
 } from '@/lib/temperature';
-import {
-  MAX_FILES,
-  MAX_FILE_BYTES,
-  MAX_TOTAL_BYTES,
-  formatBytes,
-} from '@/lib/prep-limits';
+import { MAX_FILES, MAX_FILE_BYTES, formatBytes } from '@/lib/prep-limits';
 
 const EXAMPLE_PROMPTS = [
   'Outline: Lead — Trump signals end to Iran War. B Block — New Middle East realignment. C Block — Passover under bombardment. Sources: WSJ, CBS, Times of Israel',
@@ -71,11 +66,6 @@ const REFINEMENT_HINTS = [
   'Simplify the arms sales paragraph.',
   'Strengthen the opening to be more compelling.',
 ];
-
-type AttachedFile = {
-  id: string;
-  file: File;
-};
 
 export default function NewsPage() {
   const params = useParams<{ id: string }>();
@@ -144,9 +134,15 @@ function NewsBody({
   const [selectedTemperature, setSelectedTemperature] =
     useState<TemperaturePresetId>(NEWS_DEFAULT_TEMPERATURE_PRESET);
   const [input, setInput] = useState('');
-  const [files, setFiles] = useState<AttachedFile[]>([]);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const [fileAttachSuccess, flashFileAttachSuccess] = useFlash(false);
+  const {
+    files,
+    uploadError,
+    attachSuccess,
+    onPickFiles,
+    removeFile,
+    clearFiles,
+    asFileList,
+  } = useFileAttachments();
   const [driveLoading, setDriveLoading] = useState(false);
   const [driveLink, setDriveLink] = useState<string | null>(null);
   const [driveError, setDriveError] = useState<string | null>(null);
@@ -228,51 +224,6 @@ function NewsBody({
     });
   }, [messages, busy]);
 
-  const onPickFiles = useCallback(
-    (e: ChangeEvent<HTMLInputElement>) => {
-      // Convert FileList to array BEFORE clearing the input (FileList is a live collection)
-      const picked = e.target.files ? Array.from(e.target.files) : [];
-      e.target.value = '';
-      if (picked.length === 0) return;
-
-      const accepted: AttachedFile[] = [];
-      const rejected: string[] = [];
-      let total = files.reduce((n, f) => n + f.file.size, 0);
-      for (let i = 0; i < picked.length; i++) {
-        const f = picked[i];
-        if (!f) continue;
-        if (files.length + accepted.length >= MAX_FILES) {
-          rejected.push(`too many files (max ${MAX_FILES})`);
-          break;
-        }
-        if (f.size > MAX_FILE_BYTES) {
-          rejected.push(`"${f.name}" is ${formatBytes(f.size)}, exceeds ${formatBytes(MAX_FILE_BYTES)}`);
-          continue;
-        }
-        if (total + f.size > MAX_TOTAL_BYTES) {
-          rejected.push(`"${f.name}" would exceed ${formatBytes(MAX_TOTAL_BYTES)} total`);
-          continue;
-        }
-        total += f.size;
-        accepted.push({
-          id: `${f.name}-${f.size}-${f.lastModified}-${Date.now()}-${i}`,
-          file: f,
-        });
-      }
-      if (accepted.length > 0) {
-        setFiles((prev) => [...prev, ...accepted]);
-        flashFileAttachSuccess(true, 2500);
-      }
-      setUploadError(rejected.length > 0 ? rejected.join('; ') : null);
-    },
-    [files, flashFileAttachSuccess],
-  );
-
-  const removeFile = useCallback((id: string) => {
-    setFiles((prev) => prev.filter((f) => f.id !== id));
-    setUploadError(null);
-  }, []);
-
   const handleEdit = useCallback(
     (message: NewsUIMessage) => {
       const textContent = message.parts
@@ -292,12 +243,9 @@ function NewsBody({
     const q = text.trim();
     if ((!q && files.length === 0) || busy) return;
     const wasEditing = editingMessageId !== null;
-    const dt = new DataTransfer();
-    for (const f of files) dt.items.add(f.file);
-    const fileList = dt.files.length > 0 ? dt.files : undefined;
-    sendMessage({ text: q, files: fileList });
+    sendMessage({ text: q, files: asFileList() });
     setInput('');
-    setFiles([]);
+    clearFiles();
     if (wasEditing) {
       flashShowUndoToast(true, 3000);
     }
@@ -653,44 +601,13 @@ function NewsBody({
             tooltip: 'Attach source articles or outline notes',
           }}
           attachments={
-            <>
-              {fileAttachSuccess ? (
-                <div className="mb-2 flex items-center gap-2 rounded-lg bg-green-500/10 px-3 py-2 text-sm text-green-200 animate-in fade-in duration-200">
-                  <CheckCircle2 className="h-4 w-4" />
-                  <span>{files.length} file{files.length !== 1 ? 's' : ''} attached</span>
-                </div>
-              ) : null}
-              {files.length > 0 ? (
-                <div className="mb-2 flex flex-wrap gap-1.5">
-                  {files.map((f) => (
-                    <div
-                      key={f.id}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-overlay/10 bg-overlay/[0.04] px-2 py-1 text-[0.72rem] text-fg/75"
-                    >
-                      <FileText className="h-3 w-3 text-sky-brand" />
-                      <span className="max-w-[240px] truncate">{f.file.name}</span>
-                      <span className="text-fg/35">{formatBytes(f.file.size)}</span>
-                      <button
-                        type="button"
-                        onClick={() => removeFile(f.id)}
-                        className="ml-0.5 rounded p-0.5 text-fg/45 transition hover:bg-overlay/10 hover:text-fg"
-                        aria-label={`Remove ${f.file.name}`}
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-              {uploadError ? (
-                <div
-                  role="alert"
-                  className="mb-2 rounded-lg border border-amber-300/30 bg-amber-400/[0.08] px-3 py-2 text-[0.78rem] text-amber-100"
-                >
-                  Some files were not attached — {uploadError}.
-                </div>
-              ) : null}
-            </>
+            <FileAttachments
+              files={files}
+              uploadError={uploadError}
+              onRemove={removeFile}
+              showSuccess
+              attachSuccess={attachSuccess}
+            />
           }
         />
       </div>

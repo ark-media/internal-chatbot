@@ -6,7 +6,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type ChangeEvent,
 } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
@@ -21,7 +20,6 @@ import {
   Loader2,
   ScrollText,
   Search,
-  X,
 } from 'lucide-react';
 
 import { Header } from '@/components/Header';
@@ -41,31 +39,23 @@ import type {
 import { ToolChip } from '@/components/ui/ToolChip';
 import { BusyRow } from '@/components/ui/BusyRow';
 import { UserBubble } from '@/components/ui/UserBubble';
+import { FileAttachments } from '@/components/ui/FileAttachments';
 import { cn } from '@/lib/cn';
 import { chatFetch } from '@/lib/chat-fetch';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
 import { useFlash } from '@/lib/use-flash';
+import { useFileAttachments } from '@/lib/use-file-attachments';
 import { useHandoffSummary } from '@/lib/use-handoff-summary';
 import {
   PREP_DEFAULT_TEMPERATURE_PRESET,
   type TemperaturePresetId,
 } from '@/lib/temperature';
-import {
-  MAX_FILES,
-  MAX_FILE_BYTES,
-  MAX_TOTAL_BYTES,
-  formatBytes,
-} from '@/lib/prep-limits';
+import { MAX_FILES, MAX_FILE_BYTES, formatBytes } from '@/lib/prep-limits';
 import {
   DEFAULT_PREP_SHOW_ID,
   getPrepShow,
   type PrepShowId,
 } from '@/lib/prep-shows';
-
-type AttachedFile = {
-  id: string;
-  file: File;
-};
 
 export default function PrepPage() {
   const params = useParams<{ id: string }>();
@@ -108,8 +98,8 @@ function PrepBody({
     useState<PrepShowId>(DEFAULT_PREP_SHOW_ID);
   const currentShow = getPrepShow(selectedShow);
   const [input, setInput] = useState('');
-  const [files, setFiles] = useState<AttachedFile[]>([]);
-  const [uploadError, setUploadError] = useState<string | null>(null);
+  const { files, uploadError, onPickFiles, removeFile, clearFiles, asFileList } =
+    useFileAttachments();
   const [driveLoading, setDriveLoading] = useState(false);
   const [driveLink, setDriveLink] = useState<string | null>(null);
   const [driveError, setDriveError] = useState<string | null>(null);
@@ -193,49 +183,6 @@ function PrepBody({
     });
   }, [messages, busy]);
 
-  const onPickFiles = useCallback(
-    (e: ChangeEvent<HTMLInputElement>) => {
-      // Snapshot FileList into an array before clearing the input — FileList is
-      // a live collection tied to the input element, so reading it after
-      // setting value='' yields zero entries and the PDF never makes it to state.
-      const picked = e.target.files ? Array.from(e.target.files) : [];
-      e.target.value = '';
-      if (picked.length === 0) return;
-      const accepted: AttachedFile[] = [];
-      const rejected: string[] = [];
-      let total = files.reduce((n, f) => n + f.file.size, 0);
-      for (let i = 0; i < picked.length; i++) {
-        const f = picked[i];
-        if (!f) continue;
-        if (files.length + accepted.length >= MAX_FILES) {
-          rejected.push(`too many files (max ${MAX_FILES})`);
-          break;
-        }
-        if (f.size > MAX_FILE_BYTES) {
-          rejected.push(`"${f.name}" is ${formatBytes(f.size)}, exceeds ${formatBytes(MAX_FILE_BYTES)}`);
-          continue;
-        }
-        if (total + f.size > MAX_TOTAL_BYTES) {
-          rejected.push(`"${f.name}" would exceed ${formatBytes(MAX_TOTAL_BYTES)} total`);
-          continue;
-        }
-        total += f.size;
-        accepted.push({
-          id: `${f.name}-${f.size}-${f.lastModified}-${Date.now()}-${i}`,
-          file: f,
-        });
-      }
-      if (accepted.length > 0) setFiles((prev) => [...prev, ...accepted]);
-      setUploadError(rejected.length > 0 ? rejected.join('; ') : null);
-    },
-    [files],
-  );
-
-  const removeFile = useCallback((id: string) => {
-    setFiles((prev) => prev.filter((f) => f.id !== id));
-    setUploadError(null);
-  }, []);
-
   const handleEdit = useCallback(
     (message: PrepUIMessage) => {
       const textContent = message.parts
@@ -255,15 +202,12 @@ function PrepBody({
     const q = text.trim();
     if ((!q && files.length === 0) || busy) return;
     const wasEditing = editingMessageId !== null;
-    const dt = new DataTransfer();
-    for (const f of files) dt.items.add(f.file);
-    const fileList = dt.files.length > 0 ? dt.files : undefined;
     // Send the live selections per-message. useChat captures the transport at
     // creation, so a header set only on the memoized transport can be stale on
     // the first turn (e.g. switching show before the first send). Per-request
     // headers always reflect the current selection and override the transport.
     sendMessage(
-      { text: q, files: fileList },
+      { text: q, files: asFileList() },
       {
         headers: {
           'x-model': selectedModel,
@@ -273,7 +217,7 @@ function PrepBody({
       },
     );
     setInput('');
-    setFiles([]);
+    clearFiles();
     if (wasEditing) {
       flashShowUndoToast(true, 3000);
     }
@@ -595,38 +539,11 @@ function PrepBody({
             tooltip: 'Attach prep notes, transcripts, or outlines',
           }}
           attachments={
-            <>
-              {files.length > 0 ? (
-                <div className="mb-2 flex flex-wrap gap-1.5">
-                  {files.map((f) => (
-                    <div
-                      key={f.id}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-overlay/10 bg-overlay/[0.04] px-2 py-1 text-[0.72rem] text-fg/75"
-                    >
-                      <FileText className="h-3 w-3 text-sky-brand" />
-                      <span className="max-w-[240px] truncate">{f.file.name}</span>
-                      <span className="text-fg/35">{formatBytes(f.file.size)}</span>
-                      <button
-                        type="button"
-                        onClick={() => removeFile(f.id)}
-                        className="ml-0.5 rounded p-0.5 text-fg/45 transition hover:bg-overlay/10 hover:text-fg"
-                        aria-label={`Remove ${f.file.name}`}
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-              {uploadError ? (
-                <div
-                  role="alert"
-                  className="mb-2 rounded-lg border border-amber-300/30 bg-amber-400/[0.08] px-3 py-2 text-[0.78rem] text-amber-100"
-                >
-                  Some files were not attached — {uploadError}.
-                </div>
-              ) : null}
-            </>
+            <FileAttachments
+              files={files}
+              uploadError={uploadError}
+              onRemove={removeFile}
+            />
           }
         />
 
