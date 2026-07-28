@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import PrepPage from './page';
+import { attachFiles, stubEmptyChatFetch } from '@/test-helpers/chat-page';
 
 vi.mock('@ai-sdk/react', () => ({
   useChat: () => ({
@@ -18,15 +19,7 @@ vi.mock('next/navigation', () => ({
   useParams: () => ({ id: 'test-chat-id' }),
 }));
 
-beforeEach(() => {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ messages: [] }),
-    }),
-  );
-});
+beforeEach(stubEmptyChatFetch);
 
 describe('PrepPage - File Attachment Regression Test', () => {
   beforeEach(() => {
@@ -35,24 +28,9 @@ describe('PrepPage - File Attachment Regression Test', () => {
 
   it('should attach files when onChange fires (regression: FileList live collection)', async () => {
     render(<PrepPage />);
-
-    const fileInput = await waitFor(() => {
-      const el = document.querySelector('input[type="file"]') as HTMLInputElement | null;
-      if (!el) throw new Error('file input not yet rendered');
-      return el;
-    });
-
-    const testFile = new File(['test content'], 'episode-notes.pdf', { type: 'application/pdf' });
-
-    const dataTransfer = new DataTransfer();
-    dataTransfer.items.add(testFile);
-
-    Object.defineProperty(fileInput, 'files', {
-      value: dataTransfer.files,
-      writable: false,
-    });
-
-    fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    await attachFiles(
+      new File(['test content'], 'episode-notes.pdf', { type: 'application/pdf' }),
+    );
 
     await waitFor(() => {
       expect(screen.getByText(/episode-notes\.pdf/)).toBeInTheDocument();
@@ -61,26 +39,10 @@ describe('PrepPage - File Attachment Regression Test', () => {
 
   it('should handle multiple file attachments', async () => {
     render(<PrepPage />);
-
-    const fileInput = await waitFor(() => {
-      const el = document.querySelector('input[type="file"]') as HTMLInputElement | null;
-      if (!el) throw new Error('file input not yet rendered');
-      return el;
-    });
-
-    const file1 = new File(['content1'], 'outline.pdf', { type: 'application/pdf' });
-    const file2 = new File(['content2'], 'transcript.txt', { type: 'text/plain' });
-
-    const dataTransfer = new DataTransfer();
-    dataTransfer.items.add(file1);
-    dataTransfer.items.add(file2);
-
-    Object.defineProperty(fileInput, 'files', {
-      value: dataTransfer.files,
-      writable: false,
-    });
-
-    fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    await attachFiles(
+      new File(['content1'], 'outline.pdf', { type: 'application/pdf' }),
+      new File(['content2'], 'transcript.txt', { type: 'text/plain' }),
+    );
 
     await waitFor(() => {
       expect(screen.getByText(/outline\.pdf/)).toBeInTheDocument();
@@ -90,24 +52,7 @@ describe('PrepPage - File Attachment Regression Test', () => {
 
   it('should display file size information', async () => {
     render(<PrepPage />);
-
-    const fileInput = await waitFor(() => {
-      const el = document.querySelector('input[type="file"]') as HTMLInputElement | null;
-      if (!el) throw new Error('file input not yet rendered');
-      return el;
-    });
-
-    const testFile = new File(['a'.repeat(1024)], 'notes.pdf', { type: 'application/pdf' });
-
-    const dataTransfer = new DataTransfer();
-    dataTransfer.items.add(testFile);
-
-    Object.defineProperty(fileInput, 'files', {
-      value: dataTransfer.files,
-      writable: false,
-    });
-
-    fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    await attachFiles(new File(['a'.repeat(1024)], 'notes.pdf', { type: 'application/pdf' }));
 
     await waitFor(() => {
       expect(screen.getByText(/notes\.pdf/)).toBeInTheDocument();
