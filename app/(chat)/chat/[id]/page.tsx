@@ -10,7 +10,7 @@ import {
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import { useParams } from 'next/navigation';
-import { Sparkles, FileText, ChevronRight, Copy, CheckCircle2, Pencil, ScrollText } from 'lucide-react';
+import { Sparkles, FileText, ChevronRight, Copy, CheckCircle2, ScrollText } from 'lucide-react';
 
 import { MessageText } from '@/components/MessageText';
 import { SourcePanel } from '@/components/SourcePanel';
@@ -33,6 +33,7 @@ import type {
 } from '@/components/chat-types';
 import { ToolChip } from '@/components/ui/ToolChip';
 import { BusyRow } from '@/components/ui/BusyRow';
+import { UserBubble } from '@/components/ui/UserBubble';
 import { cn } from '@/lib/cn';
 import { chatFetch } from '@/lib/chat-fetch';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
@@ -570,40 +571,11 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
 
   if (message.role === 'user') {
     return (
-      <div className="ark-fade-up flex justify-end gap-2 items-start group">
-        <div
-          className={cn(
-            'max-w-[82%] rounded-2xl rounded-br-md px-4 py-2.5',
-            'bg-gradient-to-br from-sky-brand to-sky-brand-deep text-ink-950',
-            'shadow-[0_8px_22px_-10px_rgba(62,181,249,0.6)]',
-            'text-[0.95rem] font-medium leading-relaxed',
-            'transition-all duration-200',
-            isEditing && 'ring-2 ring-blue-400/50 shadow-[0_8px_22px_-10px_rgba(59,130,246,0.5)]',
-          )}
-        >
-          {message.parts.map((p, i) =>
-            p.type === 'text' ? (
-              <span key={i} className="whitespace-pre-wrap">
-                {p.text}
-              </span>
-            ) : null,
-          )}
-        </div>
-        {onEdit ? (
-          <button
-            onClick={() => onEdit(message as ChatUIMessage)}
-            className={cn(
-              'mt-1 p-1.5 rounded-lg transition-all opacity-0 group-hover:opacity-100 duration-200',
-              isEditing
-                ? 'bg-blue-400/20 text-blue-300 hover:bg-blue-400/30'
-                : 'hover:bg-overlay/10 text-fg/50 hover:text-fg/70',
-            )}
-            title="Edit message (or click to edit)"
-          >
-            <Pencil className="h-4 w-4" />
-          </button>
-        ) : null}
-      </div>
+      <UserBubble
+        textParts={message.parts.flatMap((p) => (p.type === 'text' ? [p.text] : []))}
+        isEditing={isEditing}
+        onEdit={onEdit ? () => onEdit(message as ChatUIMessage) : undefined}
+      />
     );
   }
 
