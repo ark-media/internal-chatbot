@@ -88,6 +88,30 @@ def apply_migration(conn: psycopg.Connection) -> None:
     print(f"migration applied: {MIGRATION_PATH.name}")
 
 
+def add_alias(conn: psycopg.Connection, alias: str, speaker_id: int) -> None:
+    conn.execute(
+        """
+        INSERT INTO speaker_aliases (alias_lower, alias_display, speaker_id)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (alias_lower) DO NOTHING
+        """,
+        (alias.lower(), alias, speaker_id),
+    )
+
+
+def add_show_host(
+    conn: psycopg.Connection, show_id: int, speaker_id: int, is_primary: bool
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO show_hosts (show_id, speaker_id, is_primary)
+        VALUES (%s, %s, %s)
+        ON CONFLICT DO NOTHING
+        """,
+        (show_id, speaker_id, is_primary),
+    )
+
+
 def insert_speaker(
     conn: psycopg.Connection, canonical_name: str, review_status: str = "canonical"
 ) -> int:
@@ -104,26 +128,8 @@ def insert_speaker(
     assert row is not None
     sid = row[0]
     # self-alias so runtime lookups of the canonical name always succeed
-    conn.execute(
-        """
-        INSERT INTO speaker_aliases (alias_lower, alias_display, speaker_id)
-        VALUES (%s, %s, %s)
-        ON CONFLICT (alias_lower) DO NOTHING
-        """,
-        (canonical_name.lower(), canonical_name, sid),
-    )
+    add_alias(conn, canonical_name, sid)
     return sid
-
-
-def add_alias(conn: psycopg.Connection, alias: str, speaker_id: int) -> None:
-    conn.execute(
-        """
-        INSERT INTO speaker_aliases (alias_lower, alias_display, speaker_id)
-        VALUES (%s, %s, %s)
-        ON CONFLICT (alias_lower) DO NOTHING
-        """,
-        (alias.lower(), alias, speaker_id),
-    )
 
 
 def seed_speakers(conn: psycopg.Connection, kb: dict) -> dict[str, int]:
@@ -205,24 +211,10 @@ def seed_shows(
 
         host = info.get("host")
         if host and host in name_to_sid:
-            conn.execute(
-                """
-                INSERT INTO show_hosts (show_id, speaker_id, is_primary)
-                VALUES (%s, %s, TRUE)
-                ON CONFLICT DO NOTHING
-                """,
-                (show_id, name_to_sid[host]),
-            )
+            add_show_host(conn, show_id, name_to_sid[host], True)
         for co in info.get("co_hosts") or []:
             if co in name_to_sid:
-                conn.execute(
-                    """
-                    INSERT INTO show_hosts (show_id, speaker_id, is_primary)
-                    VALUES (%s, %s, FALSE)
-                    ON CONFLICT DO NOTHING
-                    """,
-                    (show_id, name_to_sid[co]),
-                )
+                add_show_host(conn, show_id, name_to_sid[co], False)
 
     # Rotating / extra hosts not encoded in knowledge_base.json
     for show_name, extra_hosts in EXTRA_SHOW_HOSTS.items():
@@ -233,14 +225,7 @@ def seed_shows(
             sid = name_to_sid.get(host_name)
             if sid is None:
                 continue
-            conn.execute(
-                """
-                INSERT INTO show_hosts (show_id, speaker_id, is_primary)
-                VALUES (%s, %s, FALSE)
-                ON CONFLICT DO NOTHING
-                """,
-                (show_id, sid),
-            )
+            add_show_host(conn, show_id, sid, False)
 
     conn.commit()
     return show_name_to_id
