@@ -85,7 +85,6 @@ function ChatBody({
   const [copySuccess, flashCopySuccess] = useFlash(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [showUndoToast, flashShowUndoToast] = useFlash(false);
-  const inputRef = useRef<HTMLInputElement | null>(null);
 
   // Custom fetch that adds editingMessageId to the body if present
   const customFetch = useCallback<typeof fetch>(
@@ -350,18 +349,6 @@ function ChatBody({
       contextWindow: getContextWindow(selectedModel),
     };
   }, [messages, selectedModel]);
-
-  // Auto-focus input when entering edit mode. The setTimeout(0) defers the
-  // focus until after React commits the input value so setSelectionRange
-  // operates on the populated value, not the empty initial render.
-  useEffect(() => {
-    if (!editingMessageId || !inputRef.current) return;
-    const timer = setTimeout(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(inputRef.current.value.length, inputRef.current.value.length);
-    }, 0);
-    return () => clearTimeout(timer);
-  }, [editingMessageId]);
 
   // Handle Escape key to cancel edit
   useEffect(() => {

@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -36,8 +35,6 @@ from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env.local")
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
 def _conn_str() -> str:

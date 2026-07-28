@@ -260,13 +260,6 @@ export async function loadChat(chatId: string): Promise<ChatRecord | null> {
   return { id: chat.id, surface: chat.surface, title: chat.title, messages };
 }
 
-export async function chatExists(chatId: string): Promise<boolean> {
-  const rows = (await sql`SELECT 1 FROM chats WHERE id = ${chatId} LIMIT 1`) as unknown as Array<{
-    '?column?': number;
-  }>;
-  return rows.length > 0;
-}
-
 export async function deleteChat(chatId: string): Promise<boolean> {
   const rows = (await sql`
     DELETE FROM chats WHERE id = ${chatId} RETURNING 1

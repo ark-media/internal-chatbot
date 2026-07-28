@@ -85,14 +85,6 @@ export type SpeakerSummary = {
   shows: string[];
 };
 
-export type AppearanceCount = {
-  episodeCount: number;
-  turnCount: number;
-  firstDate: string | null;
-  lastDate: string | null;
-  byShow: Array<{ showName: string; episodeCount: number; turnCount: number }>;
-};
-
 export type GuestAppearanceEpisode = {
   episodeId: string;
   title: string;
@@ -127,23 +119,6 @@ export type TopGuestRow = {
   firstDate: string | null;
   lastDate: string | null;
   episodes: TopGuestEpisode[];
-};
-
-export type EpisodeDetail = {
-  episodeId: string;
-  showId: number;
-  showName: string;
-  title: string;
-  date: string | null;
-  driveUrl: string | null;
-  turns: Array<{
-    turnId: number;
-    turnIndex: number;
-    speakerId: number;
-    speakerName: string;
-    section: string | null;
-    text: string;
-  }>;
 };
 
 // -- Helpers ------------------------------------------------------------------
@@ -592,81 +567,6 @@ export async function listSpeakers(opts: {
   }));
 }
 
-// -- countAppearances: aggregation -------------------------------------------
-
-export async function countAppearances(opts: {
-  speakerId: number;
-  filters?: Omit<CorpusFilters, 'speakerIds'>;
-}): Promise<AppearanceCount> {
-  const f = opts.filters ?? {};
-  const showIds = f.showIds?.length ? f.showIds : null;
-  const showGroupIds = f.showGroupIds?.length ? f.showGroupIds : null;
-  const episodeIds = f.episodeIds?.length ? f.episodeIds : null;
-  const since = f.since ?? null;
-  const until = f.until ?? null;
-
-  const [totalsArr, byShowArr] = (await Promise.all([
-    sql`
-      SELECT COUNT(DISTINCT t.episode_id)::int AS episode_count,
-             COUNT(*)::int AS turn_count,
-             MIN(e.date)::text AS first_date,
-             MAX(e.date)::text AS last_date
-        FROM turns t
-        JOIN episodes e ON e.episode_id = t.episode_id
-        JOIN shows sh ON sh.show_id = e.show_id
-       WHERE t.speaker_id = ${opts.speakerId}
-         AND (${showIds}::int[] IS NULL OR sh.show_id = ANY(${showIds}::int[]))
-         AND (${showGroupIds}::int[] IS NULL OR sh.group_id = ANY(${showGroupIds}::int[]))
-         AND (${episodeIds}::text[] IS NULL OR t.episode_id = ANY(${episodeIds}::text[]))
-         AND (${since}::date IS NULL OR e.date >= ${since}::date)
-         AND (${until}::date IS NULL OR e.date <= ${until}::date)
-    `,
-    sql`
-      SELECT sh.name AS show_name,
-             COUNT(DISTINCT t.episode_id)::int AS episode_count,
-             COUNT(*)::int AS turn_count
-        FROM turns t
-        JOIN episodes e ON e.episode_id = t.episode_id
-        JOIN shows sh ON sh.show_id = e.show_id
-       WHERE t.speaker_id = ${opts.speakerId}
-         AND (${showIds}::int[] IS NULL OR sh.show_id = ANY(${showIds}::int[]))
-         AND (${showGroupIds}::int[] IS NULL OR sh.group_id = ANY(${showGroupIds}::int[]))
-         AND (${episodeIds}::text[] IS NULL OR t.episode_id = ANY(${episodeIds}::text[]))
-         AND (${since}::date IS NULL OR e.date >= ${since}::date)
-         AND (${until}::date IS NULL OR e.date <= ${until}::date)
-    GROUP BY sh.name
-    ORDER BY episode_count DESC, sh.name ASC
-    `,
-  ])) as unknown as [
-    Array<{
-      episode_count: number;
-      turn_count: number;
-      first_date: string | null;
-      last_date: string | null;
-    }>,
-    Array<{ show_name: string; episode_count: number; turn_count: number }>,
-  ];
-
-  const totals = totalsArr[0] ?? {
-    episode_count: 0,
-    turn_count: 0,
-    first_date: null,
-    last_date: null,
-  };
-
-  return {
-    episodeCount: totals.episode_count,
-    turnCount: totals.turn_count,
-    firstDate: totals.first_date,
-    lastDate: totals.last_date,
-    byShow: byShowArr.map((r) => ({
-      showName: r.show_name,
-      episodeCount: r.episode_count,
-      turnCount: r.turn_count,
-    })),
-  };
-}
-
 // -- countGuestAppearancesOnShow: episode count by speaker + title match ----
 
 export async function countGuestAppearancesOnShow(opts: {
@@ -763,67 +663,6 @@ export async function countGuestAppearancesOnShow(opts: {
     showName: meta.show_name,
     count: episodes.length,
     episodes,
-  };
-}
-
-// -- getEpisode: full episode detail -----------------------------------------
-
-export async function getEpisode(
-  episodeId: string,
-): Promise<EpisodeDetail | null> {
-  const [epRows, turnRows] = (await Promise.all([
-    sql`
-      SELECT e.episode_id, e.title, e.date::text AS date, e.drive_url,
-             sh.show_id, sh.name AS show_name
-        FROM episodes e
-        JOIN shows sh ON sh.show_id = e.show_id
-       WHERE e.episode_id = ${episodeId}
-    `,
-    sql`
-      SELECT t.turn_id, t.turn_index, t.section, t.text,
-             t.speaker_id, sp.canonical_name AS speaker_name
-        FROM turns t
-        JOIN speakers sp ON sp.speaker_id = t.speaker_id
-       WHERE t.episode_id = ${episodeId}
-    ORDER BY t.turn_index
-    `,
-  ])) as unknown as [
-    Array<{
-      episode_id: string;
-      title: string;
-      date: string | null;
-      drive_url: string | null;
-      show_id: number;
-      show_name: string;
-    }>,
-    Array<{
-      turn_id: number;
-      turn_index: number;
-      section: string | null;
-      text: string;
-      speaker_id: number;
-      speaker_name: string;
-    }>,
-  ];
-
-  const ep = epRows[0];
-  if (!ep) return null;
-
-  return {
-    episodeId: ep.episode_id,
-    showId: ep.show_id,
-    showName: ep.show_name,
-    title: ep.title,
-    date: ep.date,
-    driveUrl: ep.drive_url,
-    turns: turnRows.map((r) => ({
-      turnId: r.turn_id,
-      turnIndex: r.turn_index,
-      speakerId: r.speaker_id,
-      speakerName: r.speaker_name,
-      section: r.section,
-      text: r.text,
-    })),
   };
 }
 

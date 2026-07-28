@@ -77,7 +77,3 @@ export function getPrepShow(id: string | null | undefined): PrepShow {
   }
   return PREP_SHOWS_BY_ID.get(DEFAULT_PREP_SHOW_ID)!;
 }
-
-export function isPrepShowId(id: string | null | undefined): id is PrepShowId {
-  return !!id && PREP_SHOWS_BY_ID.has(id as PrepShowId);
-}

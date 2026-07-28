@@ -129,28 +129,6 @@ export const hardPaywallHostnames = [
   'ft.com',
 ];
 
-// Major Western international outlets. Discovery's beat queries are Israel-
-// centric, where the high-volume Israeli outlets out-rank these in Tavily's
-// relevance order — so left alone they rarely surface. gatherCandidates reserves
-// a share of the triage pool for this tier so the desk reliably sees how the
-// international press is covering a story. Hard-paywall members (NYT, WaPo, WSJ,
-// FT) are normally swapped for free mirrors upstream; a Reuters/Guardian/BBC
-// re-report still counts toward the quota, which is the point.
-export const internationalHostnames = [
-  'nytimes.com',
-  'washingtonpost.com',
-  'reuters.com',
-  'reut.rs',
-  'apnews.com',
-  'ap.org',
-  'wsj.com',
-  'ft.com',
-  'theguardian.com',
-  'bbc.com',
-  'bbc.co.uk',
-  'bloomberg.com',
-];
-
 const approvedXHandles = new Set(
   newsSources.xAccounts.map((a) => a.handle.replace(/^@/, '').toLowerCase()),
 );
@@ -167,11 +145,6 @@ function hostInList(url: string, domains: string[]): boolean {
 // True when the URL is a hard-paywall outlet whose body Tavily can't extract.
 export function isHardPaywallSource(url: string): boolean {
   return hostInList(url, hardPaywallHostnames);
-}
-
-// True when the URL is a major Western international outlet (the reserved tier).
-export function isInternationalSource(url: string): boolean {
-  return hostInList(url, internationalHostnames);
 }
 
 export function isApprovedSource(url: string): boolean {
