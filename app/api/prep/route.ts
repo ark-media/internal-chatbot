@@ -2,7 +2,6 @@ import {
   convertToModelMessages,
   createUIMessageStream,
   createUIMessageStreamResponse,
-  safeValidateUIMessages,
   stepCountIs,
   streamText,
   tool,
@@ -24,17 +23,15 @@ import { prepSystemPrompt } from '@/lib/prep-prompt';
 import { getPrepShow } from '@/lib/prep-shows';
 import { ensureTable, getCached, setCached, cacheKey } from '@/lib/tool-cache';
 import { normalizeMessages, validateUploads } from '@/lib/upload-parts';
-import { checkRateLimit } from '@/lib/rate-limit';
 import { resolveTemperature } from '@/lib/temperature';
 import { stripStaleToolOutputs } from '@/lib/strip-tool-outputs';
 import {
   ensureChatTables,
   persistAssistantMessage,
-  persistIncomingMessages,
-  deleteMessageAndSubsequent,
 } from '@/lib/chats';
 import type { PrepUIMessage } from '@/components/prep-types';
 import { errText, logEvent, warnEvent } from '@/lib/log-event';
+import { prepareChatRoute, persistTurn } from '@/lib/chat-route';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -424,42 +421,16 @@ async function loadLinkedArticles(
 // -- Route handler -----------------------------------------------------------
 
 export async function POST(req: Request) {
-  await ensureTable();
-  await ensureChatTables();
+  const prep = await prepareChatRoute(req, {
+    rateLimitKey: 'prep',
+    ensureTables: async () => {
+      await ensureTable();
+      await ensureChatTables();
+    },
+  });
+  if (!prep.ok) return prep.response;
+  const { messages, chatId, editingMessageId } = prep.prepared;
 
-  const ip =
-    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-    req.headers.get('x-real-ip') ||
-    'unknown';
-  const { ok } = await checkRateLimit(`prep:${ip}`);
-  if (!ok) {
-    return new Response('Rate limit exceeded', { status: 429 });
-  }
-
-  const origin = req.headers.get('origin');
-  const host = req.headers.get('host');
-  if (origin && host) {
-    try {
-      if (new URL(origin).host !== host) {
-        return new Response('Forbidden', { status: 403 });
-      }
-    } catch {
-      return new Response('Forbidden', { status: 403 });
-    }
-  }
-
-  const body = (await req.json()) as { messages?: unknown; chatId?: string; editingMessageId?: string };
-  const chatId = typeof body.chatId === 'string' ? body.chatId : undefined;
-  const editingMessageId = typeof body.editingMessageId === 'string' ? body.editingMessageId : undefined;
-
-  const validated = await safeValidateUIMessages<UIMessage>({ messages: body.messages });
-  if (!validated.success) {
-    return new Response(
-      JSON.stringify({ error: 'invalid_messages', detail: validated.error.message }),
-      { status: 400, headers: { 'content-type': 'application/json' } },
-    );
-  }
-  const messages = validated.data;
   const model = req.headers.get('x-model') || DEFAULT_MODEL_ID;
   const temperature = resolveTemperature(req.headers.get('x-temperature'));
   // Show selection drives both the system prompt and whether we pre-load web
@@ -474,30 +445,14 @@ export async function POST(req: Request) {
     });
   }
 
-  if (chatId && editingMessageId) {
-    try {
-      await deleteMessageAndSubsequent(chatId, editingMessageId);
-    } catch (err) {
-      warnEvent('prep.delete_for_edit_error', { err: errText(err) });
-    }
-  }
-
-  if (chatId) {
-    try {
-      await persistIncomingMessages({
-        chatId,
-        surface: 'prep',
-        messages: messages.map((m) => ({
-          id: m.id,
-          role: m.role,
-          parts: (m.parts ?? []) as Array<{ type: string; [key: string]: unknown }>,
-        })),
-        redactFiles: true,
-      });
-    } catch (err) {
-      warnEvent('prep.persist_user_error', { err: errText(err) });
-    }
-  }
+  await persistTurn({
+    chatId,
+    editingMessageId,
+    surface: 'prep',
+    messages,
+    redactFiles: true,
+    logKey: 'prep',
+  });
 
   // Prepare history for the model: replace stale tool outputs in older
   // assistant messages with stubs. The most-recent assistant is left intact

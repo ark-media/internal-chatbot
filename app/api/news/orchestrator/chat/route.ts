@@ -8,20 +8,16 @@ import {
   convertToModelMessages,
   createUIMessageStream,
   createUIMessageStreamResponse,
-  safeValidateUIMessages,
   stepCountIs,
   streamText,
   type ModelMessage,
-  type UIMessage,
 } from 'ai';
 
 import {
   ensureChatTables,
   persistAssistantMessage,
-  persistIncomingMessages,
 } from '@/lib/chats';
 import { getNewsExamples } from '@/lib/news-prompt';
-import { checkRateLimit } from '@/lib/rate-limit';
 import { stripStaleToolOutputs } from '@/lib/strip-tool-outputs';
 import { ensureTable as ensureToolCacheTable } from '@/lib/tool-cache';
 import { CONDUCTOR_SYSTEM, buildRunStateContext } from '@/lib/scriptwriter/prompts';
@@ -44,6 +40,7 @@ import {
 import { createConductorTools, topicSummary, type EmitPart } from '@/lib/scriptwriter/tools';
 import type { PlannedTopic, ScriptRun } from '@/lib/scriptwriter/types';
 import { errText, logEvent, warnEvent } from '@/lib/log-event';
+import { prepareChatRoute, persistTurn } from '@/lib/chat-route';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -77,64 +74,32 @@ function topicCard(run: ScriptRun, index: number) {
 }
 
 export async function POST(req: Request) {
-  await Promise.all([ensureChatTables(), ensureScriptRunTables(), ensureToolCacheTable()]);
+  const prep = await prepareChatRoute(req, {
+    rateLimitKey: 'scripts',
+    ensureTables: () =>
+      Promise.all([ensureChatTables(), ensureScriptRunTables(), ensureToolCacheTable()]),
+  });
+  if (!prep.ok) return prep.response;
+  const { messages, chatId } = prep.prepared;
 
-  const ip =
-    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-    req.headers.get('x-real-ip') ||
-    'unknown';
-  const { ok } = await checkRateLimit(`scripts:${ip}`);
-  if (!ok) return new Response('Rate limit exceeded', { status: 429 });
-
-  const origin = req.headers.get('origin');
-  const host = req.headers.get('host');
-  if (origin && host) {
-    try {
-      if (new URL(origin).host !== host) return new Response('Forbidden', { status: 403 });
-    } catch {
-      return new Response('Forbidden', { status: 403 });
-    }
-  }
-
-  let body: { messages?: unknown; chatId?: string };
-  try {
-    body = (await req.json()) as { messages?: unknown; chatId?: string };
-  } catch {
-    return Response.json({ error: 'invalid_json' }, { status: 400 });
-  }
-  const chatId = typeof body.chatId === 'string' ? body.chatId : undefined;
+  // Unlike the other three surfaces, a turn here is meaningless without a run
+  // to attach it to.
   if (!chatId) {
     return Response.json({ error: 'missing_chat_id' }, { status: 400 });
   }
-
-  const validated = await safeValidateUIMessages<UIMessage>({ messages: body.messages });
-  if (!validated.success) {
-    return Response.json(
-      { error: 'invalid_messages', detail: validated.error.message },
-      { status: 400 },
-    );
-  }
-  const messages = validated.data;
 
   const initialRun = await loadRun(chatId);
   if (!initialRun) {
     return Response.json({ error: 'run_not_found' }, { status: 404 });
   }
 
-  try {
-    await persistIncomingMessages({
-      chatId,
-      surface: 'scripts',
-      messages: messages.map((m) => ({
-        id: m.id,
-        role: m.role,
-        parts: (m.parts ?? []) as Array<{ type: string; [key: string]: unknown }>,
-      })),
-      redactFiles: true,
-    });
-  } catch (err) {
-    warnEvent('scripts.persist_user_error', { err: errText(err) });
-  }
+  await persistTurn({
+    chatId,
+    surface: 'scripts',
+    messages,
+    redactFiles: true,
+    logKey: 'scripts',
+  });
 
   const started = Date.now();
 

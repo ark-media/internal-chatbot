@@ -212,6 +212,20 @@ describe.each(ROUTES)('$name route preamble', ({ post, url, rateKey }) => {
   });
 });
 
+// A real divergence the extraction normalises. chat/prep/news called
+// `req.json()` unwrapped, so a malformed body escaped as an unhandled rejection
+// and the platform served a 500 with an HTML body — which ChatErrorBanner can
+// only render as the bare statusText, telling the user nothing. The scripts
+// route already returned a 400. The 400 wins.
+describe.each(ROUTES)('$name route malformed body', ({ post, url }) => {
+  it('returns 400 invalid_json instead of throwing', async () => {
+    const res = await post(makeRequest(url, { rawBody: '{ not json' }));
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_json' });
+  });
+});
+
 // The scripts route requires a chat id because a turn is meaningless without a
 // run to attach it to; the other three treat it as optional and skip
 // persistence when it is absent.
