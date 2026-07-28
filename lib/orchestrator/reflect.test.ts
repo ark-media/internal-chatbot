@@ -5,7 +5,7 @@ vi.mock('ai', () => ({ generateObject: vi.fn() }));
 vi.mock('./script-craft', () => ({ craftScript: vi.fn() }));
 
 // Import AFTER the mocks are registered.
-import { buildReviewerSystemContent, reflectLoop, truncateAtParagraph } from './reflect';
+import { buildReviewerSystemContent, reflectLoop, reviewScript, truncateAtParagraph } from './reflect';
 import { craftScript } from './script-craft';
 
 const mockGen = vi.mocked(generateObject);
@@ -168,4 +168,133 @@ describe('reflectLoop', () => {
     expect(outcome.iterations).toBe(3);
   });
 
+});
+
+describe('reflectLoop revision contract', () => {
+  const soft = (issue: string) => ({ type: 'soft' as const, issue, detail: 'd' });
+  const hard = (issue: string) => ({ type: 'hard' as const, issue, detail: 'd' });
+
+  const C_BLOCK = '[C BLOCK]\n\nBoy George released a song.\n\n---\n\nSOURCES:\n\n1. NME';
+
+  // mockReset, not clearAllMocks: these tests intentionally leave unconsumed
+  // `mockResolvedValueOnce` verdicts behind (the guard exits the loop early),
+  // and clearAllMocks does not drain that queue — the leftovers would be served
+  // to the next test as its first review.
+  beforeEach(() => {
+    mockGen.mockReset();
+    mockCraft.mockReset();
+  });
+
+  function queueReviews(...rounds: Array<Array<{ type: string; issue: string }>>) {
+    for (const problems of rounds) {
+      mockGen.mockResolvedValueOnce({
+        object: { problems, decision: 'loop', corrections: [] },
+      } as never);
+    }
+  }
+
+  const runOn = (fullText: string) =>
+    reflectLoop({
+      initialScript: { fullText, metadata: {} as never },
+      sourceList: '- NME (2026-07-27): https://nme.com/x',
+      cachedSystemContent: 'sys',
+      cachedReviewerSystemContent: 'reviewer-sys',
+    });
+
+  // The incident: a correction pass answered with "I can't produce a
+  // broadcast-ready script from this input" and the loop shipped it verbatim,
+  // overwriting a finished C block.
+  it('discards a re-craft that comes back as a refusal', async () => {
+    queueReviews([hard('unverifiable figure')], [hard('unverifiable figure')]);
+    mockCraft.mockResolvedValue({
+      fullText: "I can't produce a broadcast-ready script from this input.",
+      metadata: {} as never,
+    } as never);
+
+    const outcome = await runOn(C_BLOCK);
+
+    expect(outcome.finalScript.fullText).toBe(C_BLOCK);
+    expect(mockCraft).toHaveBeenCalledTimes(1);
+  });
+
+  it('discards a re-craft that grows a single-block draft into a full episode', async () => {
+    queueReviews([hard('bad cite')], [hard('bad cite')]);
+    mockCraft.mockResolvedValue({
+      fullText: '[A BLOCK]\n\nOne.\n\n[B BLOCK]\n\nTwo.\n\n[C BLOCK]\n\nThree.',
+      metadata: {} as never,
+    } as never);
+
+    const outcome = await runOn(C_BLOCK);
+
+    expect(outcome.finalScript.fullText).toBe(C_BLOCK);
+  });
+
+  it('accepts a re-craft that keeps the draft’s block structure', async () => {
+    queueReviews([hard('bad cite')], [soft('nit')]);
+    mockCraft.mockImplementation(async ({ previousScript }) => ({
+      fullText: `${previousScript}\n\nrevised.`,
+      metadata: {} as never,
+    }));
+
+    const outcome = await runOn(C_BLOCK);
+
+    expect(outcome.finalScript.fullText).toBe(`${C_BLOCK}\n\nrevised.`);
+  });
+
+  // Exhaustion used to ship the last draft even when the reviewer had just
+  // hard-failed it and an earlier pass scored strictly better.
+  it('ships the best-scoring reviewed draft on exhaustion, not the last', async () => {
+    queueReviews(
+      [hard('a'), soft('b')], // draft 1 — 1 hard, 2 problems
+      [hard('a'), soft('b'), soft('c'), soft('d')], // draft 2 — 1 hard, 4 problems
+      [hard('a'), soft('b'), soft('c')], // draft 3 — 1 hard, 3 problems
+    );
+    mockCraft.mockImplementation(async ({ previousScript }) => ({
+      fullText: `${previousScript}\n\nmore.`,
+      metadata: {} as never,
+    }));
+
+    const outcome = await runOn(C_BLOCK);
+
+    expect(outcome.iterations).toBe(3);
+    expect(mockCraft).toHaveBeenCalledTimes(2);
+    expect(outcome.finalScript.fullText).toBe(C_BLOCK);
+  });
+});
+
+describe('reviewScript source framing', () => {
+  beforeEach(() => {
+    mockGen.mockReset();
+    mockCraft.mockReset();
+    mockGen.mockResolvedValue({
+      object: { problems: [], decision: 'exit', corrections: [] },
+    } as never);
+  });
+
+  const call = (sourcesAreSelfReported?: boolean) =>
+    reviewScript({
+      script: { fullText: '[C BLOCK]\n\nBody.', metadata: {} as never },
+      reviewerSystemContent: 'reviewer-sys',
+      sourceList: '- NME (2026-07-27): https://nme.com/x',
+      sourcesAreSelfReported,
+    });
+
+  const promptOf = () => (mockGen.mock.calls[0][0] as { prompt: string }).prompt;
+
+  it('defaults to the approved-source framing', async () => {
+    await call();
+    expect(promptOf()).toContain('APPROVED SOURCES');
+    expect(promptOf()).not.toContain('do NOT raise a HARD failure');
+  });
+
+  // The news chat builds the list off the draft's own SOURCES section, so
+  // "not in the sources" is unfalsifiable — and the correction pass answered
+  // it by deleting confirmed figures.
+  it('tells the reviewer not to hard-fail unverifiable claims when the list is self-reported', async () => {
+    await call(true);
+    expect(promptOf()).not.toContain('APPROVED SOURCES');
+    expect(promptOf()).toContain("the script's own bibliography");
+    expect(promptOf()).toContain('do NOT raise a HARD failure');
+    expect(promptOf()).toContain('never grounds to cut it');
+  });
 });

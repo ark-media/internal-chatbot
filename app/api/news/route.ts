@@ -694,6 +694,10 @@ export async function POST(req: Request) {
             reflectLoop({
               initialScript: { fullText: draftText, metadata: computeMetadata(draftText) },
               sourceList,
+              // This list came off the draft's own SOURCES section (above), not
+              // from an approved topic set — tell the reviewer so it doesn't
+              // hard-fail every figure it can't independently check.
+              sourcesAreSelfReported: true,
               cachedSystemContent,
               cachedReviewerSystemContent,
             }),

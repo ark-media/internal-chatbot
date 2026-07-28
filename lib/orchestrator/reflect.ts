@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 
+import { parseScriptCoverage } from '../news-script';
 import { craftScript } from './script-craft';
 import type {
   ReviewResult,
@@ -79,16 +80,36 @@ export const PILEUP_THRESHOLD = 3;
 // tokens. 2000 tokens covers a thorough review at normal verbosity.
 const REVIEWER_MAX_OUTPUT_TOKENS = 2000;
 
+// The orchestrator and the scriptwriter hand the reviewer an independently
+// approved source list, so "this claim isn't in the sources" is a real finding.
+// The freeform news chat has no such list — it builds one from the script's own
+// SOURCES section, which makes the check self-referential: the reviewer is asked
+// to verify a draft against citations that draft wrote. It ruled every specific
+// figure unverifiable, and since the correction pass has no tools to verify
+// anything with, the only way to satisfy it was to delete the fact. Confirmed
+// figures were being stripped out of finished scripts one reflect pass at a time.
+function sourceBlockFor(sourceList: string, selfReported: boolean): string {
+  if (!selfReported) {
+    return `APPROVED SOURCES (every superscript citation in the script should map to one of these):
+
+${sourceList}`;
+  }
+  return `SOURCES THE SCRIPT CITES (the script's own bibliography — NOT an independently approved list, and the underlying articles are not available to you):
+
+${sourceList}
+
+Because this list is the script's own, do NOT raise a HARD failure merely because a claim is not restated in it — you have no way to check the claim against the source text, and the correction pass has no tools to look it up. Restrict hard source-fidelity findings to defects visible in the script itself: a superscript with no matching entry, a misnumbered or ambiguous superscript, or material attributed to a source the script does not cite. A specific figure or quotation you simply cannot verify is at most SOFT feedback (suggest an inline [FLAG: ...]), never a hard failure, and never grounds to cut it.`;
+}
+
 export async function reviewScript(opts: {
   script: Script;
   reviewerSystemContent: string;
   sourceList: string;
+  sourcesAreSelfReported?: boolean;
 }): Promise<ReviewResult> {
-  const { script, reviewerSystemContent, sourceList } = opts;
+  const { script, reviewerSystemContent, sourceList, sourcesAreSelfReported = false } = opts;
 
-  const prompt = `APPROVED SOURCES (every superscript citation in the script should map to one of these):
-
-${sourceList}
+  const prompt = `${sourceBlockFor(sourceList, sourcesAreSelfReported)}
 
 SCRIPT TO REVIEW:
 
@@ -183,20 +204,57 @@ export type ReflectOutcome = {
   }>;
 };
 
+// Rank a reviewed draft: fewest hard failures first, then fewest problems
+// overall. Ties go to the later draft so a soft-only revision pass still lands.
+function candidateScore(review: ReviewResult): [number, number] {
+  return [review.problems.filter((p) => p.type === 'hard').length, review.problems.length];
+}
+
+// The structural shape a revision must preserve — the ordered block labels.
+function blockSignature(fullText: string): string {
+  return parseScriptCoverage(fullText)
+    .blocks.map((b) => b.label.toUpperCase())
+    .join(',');
+}
+
 export async function reflectLoop(opts: {
   initialScript: Script;
-  // Pre-formatted "APPROVED SOURCES" list the reviewer checks superscript
-  // citations against — one `- source — title (date): url` line per source.
-  // The orchestrator builds this from approved topics; the freeform news chat
-  // builds it from the script's own SOURCES section.
+  // Pre-formatted source list the reviewer checks superscript citations
+  // against — one `- source — title (date): url` line per source. The
+  // orchestrator builds this from approved topics; the freeform news chat
+  // builds it from the script's own SOURCES section and sets
+  // `sourcesAreSelfReported` so the reviewer weighs it accordingly.
   sourceList: string;
+  sourcesAreSelfReported?: boolean;
   cachedSystemContent: string;
   cachedReviewerSystemContent: string;
 }): Promise<ReflectOutcome> {
-  const { initialScript, sourceList, cachedSystemContent, cachedReviewerSystemContent } = opts;
+  const {
+    initialScript,
+    sourceList,
+    sourcesAreSelfReported = false,
+    cachedSystemContent,
+    cachedReviewerSystemContent,
+  } = opts;
 
   let script = initialScript;
   const history: ReflectOutcome['history'] = [];
+
+  // Every draft that has been through `reviewScript`, so the exhaustion path
+  // can ship the best one rather than whichever happened to be last. The loop
+  // used to return the final draft even when the reviewer had just hard-failed
+  // it and an earlier pass scored better.
+  const candidates: Array<{ script: Script; review: ReviewResult }> = [];
+  const bestScript = (): Script => {
+    if (candidates.length === 0) return script;
+    let bestIdx = 0;
+    for (let i = 1; i < candidates.length; i++) {
+      const [hard, total] = candidateScore(candidates[i].review);
+      const [bestHard, bestTotal] = candidateScore(candidates[bestIdx].review);
+      if (hard < bestHard || (hard === bestHard && total <= bestTotal)) bestIdx = i;
+    }
+    return candidates[bestIdx].script;
+  };
 
   // A soft-only draft gets at most ONE revision pass. The reviewer can always
   // find three stylistic tells in any draft, so the "3+ problems" rule on its
@@ -209,13 +267,20 @@ export async function reflectLoop(opts: {
   for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     let review: ReviewResult;
     try {
-      review = await reviewScript({ script, reviewerSystemContent: cachedReviewerSystemContent, sourceList });
+      review = await reviewScript({
+        script,
+        reviewerSystemContent: cachedReviewerSystemContent,
+        sourceList,
+        sourcesAreSelfReported,
+      });
     } catch (err) {
       // If the reviewer call fails, fall back to the writer's own judgment
-      // and exit the loop with the latest draft.
+      // and exit the loop with the best draft reviewed so far.
       console.warn(JSON.stringify({ event: 'orchestrator.reflect.reviewer_error', err: String(err) }));
-      return { finalScript: script, iterations: iteration, history };
+      return { finalScript: bestScript(), iterations: iteration, history };
     }
+
+    candidates.push({ script, review });
 
     // Spend the single soft-only revision, then exit rather than looping on
     // stylistic feedback forever.
@@ -230,22 +295,46 @@ export async function reflectLoop(opts: {
     });
 
     if (decision === 'exit' || iteration === MAX_ITERATIONS) {
-      return { finalScript: script, iterations: iteration, history };
+      return { finalScript: bestScript(), iterations: iteration, history };
     }
 
     if (softOnly) softRevisionUsed = true;
 
+    let revised: Script;
     try {
-      script = await craftScript({
+      revised = await craftScript({
         cachedSystemContent,
         corrections: review.corrections,
         previousScript: script.fullText,
       });
     } catch (err) {
       console.warn(JSON.stringify({ event: 'orchestrator.reflect.refine_error', err: String(err) }));
-      return { finalScript: script, iterations: iteration, history };
+      return { finalScript: bestScript(), iterations: iteration, history };
     }
+
+    // A correction pass must return the same script it was revising. When it
+    // comes back a different shape — a refusal, an apology, or a full episode
+    // grown out of a single-block draft — it is not a candidate at all, and
+    // shipping it would replace the writer's draft with text nobody asked for.
+    // (This is exactly how a re-craft's "I can't produce a script from this
+    // input" once overwrote a finished C block.) Stop and keep the best
+    // reviewed draft instead.
+    const expected = blockSignature(script.fullText);
+    const got = blockSignature(revised.fullText);
+    if (got !== expected) {
+      console.warn(
+        JSON.stringify({
+          event: 'orchestrator.reflect.recraft_off_contract',
+          expected,
+          got,
+          preview: revised.fullText.slice(0, 200),
+        }),
+      );
+      return { finalScript: bestScript(), iterations: iteration, history };
+    }
+
+    script = revised;
   }
 
-  return { finalScript: script, iterations: MAX_ITERATIONS, history };
+  return { finalScript: bestScript(), iterations: MAX_ITERATIONS, history };
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildSourceBlock } from './script-craft';
+import { buildOutputInstruction, buildSourceBlock } from './script-craft';
 import type { TopicWithSources } from './types';
 
 const rated = (over: Partial<TopicWithSources['articles'][number]> = {}) => ({
@@ -92,5 +92,48 @@ describe('buildSourceBlock', () => {
     );
     expect(block).toContain('Excerpt:');
     expect(block).toContain('raw body text');
+  });
+});
+
+describe('buildOutputInstruction', () => {
+  // The single-C-block regression: a scope-limited draft was handed the
+  // full-episode instruction, so the correction pass was told to open with a
+  // SONIC ID and invent A and B blocks it had no sources for.
+  it('asks for a full episode on an initial craft', () => {
+    expect(buildOutputInstruction()).toContain('SONIC ID:');
+    expect(buildOutputInstruction()).toContain('1000–1200 words');
+  });
+
+  it('holds a single-block draft to its own scope', () => {
+    const draft = '[C BLOCK]\n\nBoy George released a song.\n\n---\n\nSOURCES:\n\n1. NME';
+    const instruction = buildOutputInstruction(draft);
+
+    expect(instruction).toContain('[C BLOCK]');
+    expect(instruction).toContain('no SONIC ID');
+    expect(instruction).not.toContain('1000–1200 words');
+    expect(instruction).not.toContain('[A BLOCK]');
+  });
+
+  it('lists every block of a multi-block draft', () => {
+    const instruction = buildOutputInstruction('[A BLOCK]\n\nOne.\n\n[B BLOCK]\n\nTwo.');
+
+    expect(instruction).toContain('[A BLOCK], [B BLOCK]');
+    expect(instruction).toContain('Begin your response with "[A BLOCK]"');
+  });
+
+  it('treats a draft with a SONIC ID as a full episode', () => {
+    const draft = 'SONIC ID: intro\n\n[A BLOCK]\n\nOne.';
+    expect(buildOutputInstruction(draft)).toBe(buildOutputInstruction());
+  });
+
+  it('falls back to the full episode when the draft has no blocks', () => {
+    expect(buildOutputInstruction('just some prose')).toBe(buildOutputInstruction());
+  });
+
+  // The substance-stripping failure: each correction pass satisfied the
+  // reviewer by deleting the fact it could not verify.
+  it('forbids dropping sourced detail to satisfy a correction', () => {
+    const instruction = buildOutputInstruction('[C BLOCK]\n\nBody.');
+    expect(instruction).toContain('dropping a sourced detail');
   });
 });

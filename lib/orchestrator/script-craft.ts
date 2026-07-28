@@ -1,6 +1,7 @@
 import { generateText } from 'ai';
 
 import { newsContextForDate, newsSystemPrompt } from '../news-prompt';
+import { parseScriptCoverage } from '../news-script';
 import type {
   Article,
   ReviewCorrection,
@@ -155,6 +156,27 @@ ${dateContext}
 ${sourceBlock}${styleBlock}`;
 }
 
+const FULL_EPISODE_INSTRUCTION = `Write the broadcast-ready script now. Begin your response with "SONIC ID:" — no preamble, no announcements about fetching or searching, no commentary about what you're about to do. Follow the Output Format from the system prompt exactly: SONIC ID + intro, [A BLOCK]/[B BLOCK]/[C BLOCK] (and [D BLOCK] if warranted), outro, then "---" then "SOURCES:" with a numbered list. Use superscript footnotes (¹²³…) for every factual claim. Add inline [FLAG: ...] notes for uncertain or weak sourcing. Aim for 1000–1200 words of script body.`;
+
+// A revision has to come back at the scope of the draft it is revising. The
+// writer is often asked for less than a full episode ("just a C block"), and
+// handing that draft the full-episode instruction told the model to open with
+// a SONIC ID and invent A and B blocks it had no sources for — turning a
+// targeted correction pass into a from-scratch rewrite. Derived from the draft
+// rather than passed in, so every caller gets it without threading a flag.
+// Exported for tests.
+export function buildOutputInstruction(previousScript?: string): string {
+  if (!previousScript) return FULL_EPISODE_INSTRUCTION;
+  const labels = parseScriptCoverage(previousScript).blocks.map((b) => b.label.toUpperCase());
+  // No blocks to preserve, or a SONIC ID marking a genuine full episode: the
+  // full Output Format is the right target.
+  if (labels.length === 0 || /(?:^|\n)[ \t>*#]*SONIC ID\b/i.test(previousScript)) {
+    return FULL_EPISODE_INSTRUCTION;
+  }
+  const markers = labels.map((l) => `[${l} BLOCK]`).join(', ');
+  return `Return the revised draft at exactly the scope it already has: ${markers} — no SONIC ID, no host intro, no additional blocks, no preamble, no commentary. Begin your response with "[${labels[0]} BLOCK]" and keep the length close to the draft's. Preserve every factual claim, quotation, superscript citation, and [FLAG: ...] that the corrections above do not explicitly tell you to change: dropping a sourced detail to satisfy a correction is a failure, not a fix. End with "---" then "SOURCES:" and the numbered list, renumbered only if a correction requires it.`;
+}
+
 export async function craftScript(opts: {
   cachedSystemContent: string;
   corrections?: ReviewCorrection[];
@@ -169,7 +191,7 @@ export async function craftScript(opts: {
 
   const prompt = `${previousBlock}${refineBlock}
 
-Write the broadcast-ready script now. Begin your response with "SONIC ID:" — no preamble, no announcements about fetching or searching, no commentary about what you're about to do. Follow the Output Format from the system prompt exactly: SONIC ID + intro, [A BLOCK]/[B BLOCK]/[C BLOCK] (and [D BLOCK] if warranted), outro, then "---" then "SOURCES:" with a numbered list. Use superscript footnotes (¹²³…) for every factual claim. Add inline [FLAG: ...] notes for uncertain or weak sourcing. Aim for 1000–1200 words of script body.`;
+${buildOutputInstruction(previousScript)}`;
 
   const { text } = await generateText({
     model: SCRIPT_WRITER_MODEL,
