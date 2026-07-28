@@ -31,6 +31,8 @@ import type {
   TopGuestsToolOutput,
   UsageData,
 } from '@/components/chat-types';
+import { ToolChip } from '@/components/ui/ToolChip';
+import { TypingDots } from '@/components/ui/TypingDots';
 import { cn } from '@/lib/cn';
 import { chatFetch } from '@/lib/chat-fetch';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
@@ -641,7 +643,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
               part.state === 'input-streaming' ||
               part.state === 'input-available'
             ) {
-              return <ToolChip key={i} icon="search" label="Searching transcripts…" pulsing />;
+              return <ToolChip key={i} icon={Sparkles} label="Searching transcripts…" pulsing />;
             }
             if (part.state === 'output-available') {
               const out = part.output as LookupToolOutput;
@@ -649,7 +651,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
               return (
                 <ToolChip
                   key={i}
-                  icon="search"
+                  icon={Sparkles}
                   label={
                     n > 0
                       ? `Retrieved ${n} excerpt${n === 1 ? '' : 's'}`
@@ -664,7 +666,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
               part.state === 'input-streaming' ||
               part.state === 'input-available'
             ) {
-              return <ToolChip key={i} icon="file" label="Loading dossier page…" pulsing />;
+              return <ToolChip key={i} icon={FileText} label="Loading dossier page…" pulsing />;
             }
             if (part.state === 'output-available') {
               const out = part.output as DossierToolOutput;
@@ -673,7 +675,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
               return (
                 <ToolChip
                   key={i}
-                  icon="file"
+                  icon={FileText}
                   label={
                     n > 0
                       ? `Loaded ${n} of ${total} turn${total === 1 ? '' : 's'}`
@@ -688,7 +690,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
               part.state === 'input-streaming' ||
               part.state === 'input-available'
             ) {
-              return <ToolChip key={i} icon="file" label="Ranking guests…" pulsing />;
+              return <ToolChip key={i} icon={FileText} label="Ranking guests…" pulsing />;
             }
             if (part.state === 'output-available') {
               const out = part.output as TopGuestsToolOutput;
@@ -697,7 +699,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
                 return (
                   <ToolChip
                     key={i}
-                    icon="file"
+                    icon={FileText}
                     label={out.note ?? 'No matching guests'}
                   />
                 );
@@ -717,7 +719,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
               part.state === 'input-available'
             ) {
               return (
-                <ToolChip key={i} icon="file" label="Counting appearances…" pulsing />
+                <ToolChip key={i} icon={FileText} label="Counting appearances…" pulsing />
               );
             }
             if (part.state === 'output-available') {
@@ -726,7 +728,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
                 return (
                   <ToolChip
                     key={i}
-                    icon="file"
+                    icon={FileText}
                     label={`${out.speakerName ?? 'Speaker'} is a host of ${out.showName ?? 'the show'}`}
                   />
                 );
@@ -737,7 +739,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
                 return (
                   <ToolChip
                     key={i}
-                    icon="file"
+                    icon={FileText}
                     label={out.note ?? 'No appearances found'}
                   />
                 );
@@ -745,7 +747,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
               return (
                 <div key={i} className="space-y-2">
                   <ToolChip
-                    icon="file"
+                    icon={FileText}
                     label={`${count} appearance${count === 1 ? '' : 's'}${out.speakerName && out.showName ? ` · ${out.speakerName} on ${out.showName}` : ''}`}
                   />
                   <EpisodeList
@@ -973,45 +975,4 @@ function RankBadge({ rank }: { rank: number }) {
   return <span className="font-mono text-fg/55">{rank}</span>;
 }
 
-function ToolChip({
-  icon,
-  label,
-  pulsing,
-}: {
-  icon: 'search' | 'file';
-  label: string;
-  pulsing?: boolean;
-}) {
-  const Icon = icon === 'search' ? Sparkles : FileText;
-  return (
-    <div
-      className={cn(
-        'inline-flex items-center gap-2 rounded-lg border border-overlay/10 bg-overlay/[0.03]',
-        'px-2.5 py-1 text-[0.72rem] text-fg/65',
-      )}
-    >
-      <Icon
-        className={cn(
-          'h-3.5 w-3.5 text-sky-brand',
-          pulsing && 'ark-pulse-dot',
-        )}
-      />
-      <span>{label}</span>
-    </div>
-  );
-}
-
-function TypingDots() {
-  return (
-    <span className="inline-flex items-end gap-1">
-      {[0, 1, 2].map((i) => (
-        <span
-          key={i}
-          className="h-1.5 w-1.5 rounded-full bg-sky-brand ark-pulse-dot"
-          style={{ animationDelay: `${i * 140}ms` }}
-        />
-      ))}
-    </span>
-  );
-}
 

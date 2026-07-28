@@ -22,7 +22,6 @@ import {
   Loader2,
   ScrollText,
   Search,
-  Sparkles,
   Square,
   X,
 } from 'lucide-react';
@@ -41,6 +40,8 @@ import type {
   SearchCorpusToolOutput,
   WebSearchToolOutput,
 } from '@/components/prep-types';
+import { ToolChip } from '@/components/ui/ToolChip';
+import { TypingDots } from '@/components/ui/TypingDots';
 import { cn } from '@/lib/cn';
 import { chatFetch } from '@/lib/chat-fetch';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
@@ -856,47 +857,6 @@ function QuestionHeading({
       >
         {tag}
       </span>
-    </span>
-  );
-}
-
-function ToolChip({
-  icon: Icon,
-  label,
-  pulsing,
-}: {
-  icon: typeof Sparkles;
-  label: string;
-  pulsing?: boolean;
-}) {
-  return (
-    <div
-      className={cn(
-        'inline-flex items-center gap-2 rounded-lg border border-overlay/10 bg-overlay/[0.03]',
-        'px-2.5 py-1 text-[0.72rem] text-fg/65',
-      )}
-    >
-      <Icon
-        className={cn(
-          'h-3.5 w-3.5 text-sky-brand',
-          pulsing && 'ark-pulse-dot',
-        )}
-      />
-      <span>{label}</span>
-    </div>
-  );
-}
-
-function TypingDots() {
-  return (
-    <span className="inline-flex items-end gap-1">
-      {[0, 1, 2].map((i) => (
-        <span
-          key={i}
-          className="h-1.5 w-1.5 rounded-full bg-sky-brand ark-pulse-dot"
-          style={{ animationDelay: `${i * 140}ms` }}
-        />
-      ))}
     </span>
   );
 }
