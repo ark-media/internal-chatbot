@@ -10,7 +10,7 @@ import {
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import { useParams } from 'next/navigation';
-import { Square, Sparkles, FileText, ChevronRight, Copy, CheckCircle2, Pencil, ScrollText } from 'lucide-react';
+import { Sparkles, FileText, ChevronRight, Copy, CheckCircle2 } from 'lucide-react';
 
 import { MessageText } from '@/components/MessageText';
 import { SourcePanel } from '@/components/SourcePanel';
@@ -31,10 +31,17 @@ import type {
   TopGuestsToolOutput,
   UsageData,
 } from '@/components/chat-types';
+import { ToolChip } from '@/components/ui/ToolChip';
+import { BusyRow } from '@/components/ui/BusyRow';
+import { UserBubble } from '@/components/ui/UserBubble';
+import { EditingBanner } from '@/components/ui/EditingBanner';
+import { CopyButton } from '@/components/ui/CopyButton';
+import { HandoffButton } from '@/components/ui/HandoffButton';
 import { cn } from '@/lib/cn';
-import { chatFetch } from '@/lib/chat-fetch';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
 import { useFlash } from '@/lib/use-flash';
+import { useInitialMessages } from '@/lib/use-initial-messages';
+import { useMessageEditing } from '@/lib/use-message-editing';
 import { useHandoffSummary } from '@/lib/use-handoff-summary';
 
 const EXAMPLE_PROMPTS = [
@@ -47,23 +54,7 @@ const EXAMPLE_PROMPTS = [
 export default function ChatPage() {
   const params = useParams<{ id: string }>();
   const chatId = params?.id;
-  const [initialMessages, setInitialMessages] = useState<ChatUIMessage[] | null>(null);
-
-  useEffect(() => {
-    if (!chatId) return;
-    let cancelled = false;
-    fetch(`/api/chats/${chatId}`)
-      .then((r) => (r.ok ? r.json() : { messages: [] }))
-      .then((d: { messages?: ChatUIMessage[] }) => {
-        if (!cancelled) setInitialMessages((d.messages ?? []) as ChatUIMessage[]);
-      })
-      .catch(() => {
-        if (!cancelled) setInitialMessages([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [chatId]);
+  const initialMessages = useInitialMessages<ChatUIMessage>(chatId);
 
   if (!chatId || initialMessages === null) {
     return null;
@@ -83,62 +74,47 @@ function ChatBody({
   const [openPanel, setOpenPanel] = useState<PanelView | null>(null);
   const [episodeCount, setEpisodeCount] = useState<number | null>(null);
   const [copySuccess, flashCopySuccess] = useFlash(false);
-  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [showUndoToast, flashShowUndoToast] = useFlash(false);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const {
+    editingMessageId,
+    startEditing,
+    cancelEditing,
+    finishEditing,
+    editingFetch,
+  } = useMessageEditing({ setInput, scrollRef });
 
-  // Custom fetch that adds editingMessageId to the body if present
-  const customFetch = useCallback<typeof fetch>(
-    async (input, init) => {
-      try {
-        const body = init?.body ? JSON.parse(init.body as string) : {};
-        if (editingMessageId) {
-          body.editingMessageId = editingMessageId;
-        }
-        return chatFetch(input, { ...init, body: JSON.stringify(body) });
-      } catch (e) {
-        console.error('Failed to parse request body for edit:', e);
-        return chatFetch(input, init);
-      }
-    },
-    [editingMessageId],
+  // Rebuilt only when something it carries changes — not on every render —
+  // so a keystroke elsewhere doesn't churn a fresh transport. The header
+  // value (model) is captured here, so a change to it flows through on the
+  // next send. Matches prep/news/orchestrator.
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport({
+        api: '/api/chat',
+        fetch: editingFetch,
+        headers: {
+          'x-model': selectedModel,
+        },
+        body: { chatId },
+      }),
+    [editingFetch, selectedModel, chatId],
   );
 
   const { messages, sendMessage, status, stop, error, regenerate, clearError } =
     useChat<ChatUIMessage>({
       id: chatId,
       messages: initialMessages,
-      transport: new DefaultChatTransport({
-        api: '/api/chat',
-        fetch: customFetch,
-        headers: {
-          'x-model': selectedModel,
-        },
-        body: { chatId },
-      }),
+      transport,
       onFinish: () => {
         notifyChatUpdated();
-        setEditingMessageId(null);
+        finishEditing();
       },
     });
 
   const openSource = useCallback((source: Source, quote?: string) => {
     setOpenPanel({ view: 'source', source, quote });
   }, []);
-
-  const handleEdit = useCallback(
-    (message: ChatUIMessage) => {
-      const textContent = message.parts
-        ?.filter((p) => p.type === 'text')
-        .map((p) => (p.type === 'text' ? p.text : ''))
-        .join('\n\n');
-      if (textContent) {
-        setInput(textContent);
-        setEditingMessageId(message.id);
-        scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-      }
-    },
-    [],
-  );
 
   const extractAnswerText = useCallback(() => {
     const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
@@ -164,8 +140,6 @@ function ChatBody({
       alert('Failed to copy to clipboard');
     }
   }, [extractAnswerText, flashCopySuccess]);
-
-  const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -350,21 +324,6 @@ function ChatBody({
     };
   }, [messages, selectedModel]);
 
-  // Handle Escape key to cancel edit
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && editingMessageId) {
-        e.preventDefault();
-        setEditingMessageId(null);
-        setInput('');
-      }
-    };
-    if (editingMessageId) {
-      window.addEventListener('keydown', handleKeyDown);
-      return () => window.removeEventListener('keydown', handleKeyDown);
-    }
-  }, [editingMessageId]);
-
   const submit = (text: string) => {
     const q = text.trim();
     if (!q || busy) return;
@@ -410,7 +369,7 @@ function ChatBody({
                 sources={sources}
                 onOpen={openSource}
                 onOpenPanel={setOpenPanel}
-                onEdit={handleEdit}
+                onEdit={startEditing}
                 isEditing={editingMessageId === m.id}
               />
             ))}
@@ -418,60 +377,28 @@ function ChatBody({
             {messages.some((m) => m.role === 'assistant') && !busy ? (
               <div className="flex flex-col gap-3 pl-12">
                 <div className="flex flex-wrap gap-2">
-                  <button
+                  <CopyButton
                     onClick={copyToClipboard}
+                    copied={copySuccess}
+                    label="Copy Answer"
                     disabled={!messages.some((m) => m.role === 'assistant')}
-                    className={cn(
-                      'flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
-                      'bg-emerald-500/20 text-emerald-200 transition hover:bg-emerald-500/30',
-                      'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-emerald-500/20',
-                    )}
-                  >
-                    {copySuccess ? (
-                      <>
-                        <CheckCircle2 className="h-4 w-4" />
-                        Copied!
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="h-4 w-4" />
-                        Copy Answer
-                      </>
-                    )}
-                  </button>
-                  <button
+                  />
+                  <HandoffButton
                     onClick={openSummary}
-                    className={cn(
-                      'flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
-                      'border border-overlay/10 bg-overlay/5 text-fg/75 transition hover:bg-overlay/10 hover:text-fg',
-                    )}
                     title="Compose a handoff message you can paste into a fresh chat to continue this conversation"
-                  >
-                    <ScrollText className="h-4 w-4" />
-                    Hand off to new chat
-                  </button>
+                  />
                 </div>
-                {cumulativeUsage && (
+                {cumulativeUsage ? (
                   <TokenUsageIndicator usage={cumulativeUsage} />
-                )}
+                ) : null}
               </div>
             ) : null}
 
             {busy ? (
-              <div className="flex items-center gap-3 pl-12 text-xs text-fg/50">
-                <TypingDots />
-                <span className="tracking-wide">
-                  {status === 'submitted' ? 'Summoning context…' : 'Writing…'}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => stop()}
-                  className="ml-2 inline-flex items-center gap-1 rounded-md border border-overlay/10 bg-overlay/5 px-2 py-0.5 text-[0.7rem] text-fg/70 transition hover:bg-overlay/10 hover:text-fg"
-                >
-                  <Square className="h-2.5 w-2.5 fill-current" />
-                  Stop
-                </button>
-              </div>
+              <BusyRow
+                label={status === 'submitted' ? 'Summoning context…' : 'Writing…'}
+                onStop={stop}
+              />
             ) : null}
 
             <ChatErrorBanner
@@ -487,23 +414,7 @@ function ChatBody({
         </main>
 
         {/* ---------- Edit Mode Indicator ---------- */}
-        {editingMessageId ? (
-          <div className="border-t border-blue-500/20 bg-blue-500/5 px-6 py-2.5 flex items-center justify-between animate-in fade-in duration-200">
-            <div className="flex items-center gap-2">
-              <div className="h-2 w-2 rounded-full bg-blue-400 animate-pulse" />
-              <span className="text-xs font-medium text-blue-300/80">Editing • Press ESC to cancel</span>
-            </div>
-            <button
-              onClick={() => {
-                setEditingMessageId(null);
-                setInput('');
-              }}
-              className="text-xs px-2.5 py-1 rounded text-blue-300/60 hover:text-blue-300 hover:bg-blue-500/10 transition"
-            >
-              Cancel
-            </button>
-          </div>
-        ) : null}
+        <EditingBanner editing={editingMessageId !== null} onCancel={cancelEditing} />
 
         {/* ---------- Undo Toast ---------- */}
         {showUndoToast ? (
@@ -578,40 +489,11 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
 
   if (message.role === 'user') {
     return (
-      <div className="ark-fade-up flex justify-end gap-2 items-start group">
-        <div
-          className={cn(
-            'max-w-[82%] rounded-2xl rounded-br-md px-4 py-2.5',
-            'bg-gradient-to-br from-sky-brand to-sky-brand-deep text-ink-950',
-            'shadow-[0_8px_22px_-10px_rgba(62,181,249,0.6)]',
-            'text-[0.95rem] font-medium leading-relaxed',
-            'transition-all duration-200',
-            isEditing && 'ring-2 ring-blue-400/50 shadow-[0_8px_22px_-10px_rgba(59,130,246,0.5)]',
-          )}
-        >
-          {message.parts.map((p, i) =>
-            p.type === 'text' ? (
-              <span key={i} className="whitespace-pre-wrap">
-                {p.text}
-              </span>
-            ) : null,
-          )}
-        </div>
-        {onEdit ? (
-          <button
-            onClick={() => onEdit(message as ChatUIMessage)}
-            className={cn(
-              'mt-1 p-1.5 rounded-lg transition-all opacity-0 group-hover:opacity-100 duration-200',
-              isEditing
-                ? 'bg-blue-400/20 text-blue-300 hover:bg-blue-400/30'
-                : 'hover:bg-overlay/10 text-fg/50 hover:text-fg/70',
-            )}
-            title="Edit message (or click to edit)"
-          >
-            <Pencil className="h-4 w-4" />
-          </button>
-        ) : null}
-      </div>
+      <UserBubble
+        textParts={message.parts.flatMap((p) => (p.type === 'text' ? [p.text] : []))}
+        isEditing={isEditing}
+        onEdit={onEdit ? () => onEdit(message as ChatUIMessage) : undefined}
+      />
     );
   }
 
@@ -641,7 +523,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
               part.state === 'input-streaming' ||
               part.state === 'input-available'
             ) {
-              return <ToolChip key={i} icon="search" label="Searching transcripts…" pulsing />;
+              return <ToolChip key={i} icon={Sparkles} label="Searching transcripts…" pulsing />;
             }
             if (part.state === 'output-available') {
               const out = part.output as LookupToolOutput;
@@ -649,7 +531,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
               return (
                 <ToolChip
                   key={i}
-                  icon="search"
+                  icon={Sparkles}
                   label={
                     n > 0
                       ? `Retrieved ${n} excerpt${n === 1 ? '' : 's'}`
@@ -664,7 +546,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
               part.state === 'input-streaming' ||
               part.state === 'input-available'
             ) {
-              return <ToolChip key={i} icon="file" label="Loading dossier page…" pulsing />;
+              return <ToolChip key={i} icon={FileText} label="Loading dossier page…" pulsing />;
             }
             if (part.state === 'output-available') {
               const out = part.output as DossierToolOutput;
@@ -673,7 +555,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
               return (
                 <ToolChip
                   key={i}
-                  icon="file"
+                  icon={FileText}
                   label={
                     n > 0
                       ? `Loaded ${n} of ${total} turn${total === 1 ? '' : 's'}`
@@ -688,7 +570,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
               part.state === 'input-streaming' ||
               part.state === 'input-available'
             ) {
-              return <ToolChip key={i} icon="file" label="Ranking guests…" pulsing />;
+              return <ToolChip key={i} icon={FileText} label="Ranking guests…" pulsing />;
             }
             if (part.state === 'output-available') {
               const out = part.output as TopGuestsToolOutput;
@@ -697,7 +579,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
                 return (
                   <ToolChip
                     key={i}
-                    icon="file"
+                    icon={FileText}
                     label={out.note ?? 'No matching guests'}
                   />
                 );
@@ -717,7 +599,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
               part.state === 'input-available'
             ) {
               return (
-                <ToolChip key={i} icon="file" label="Counting appearances…" pulsing />
+                <ToolChip key={i} icon={FileText} label="Counting appearances…" pulsing />
               );
             }
             if (part.state === 'output-available') {
@@ -726,7 +608,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
                 return (
                   <ToolChip
                     key={i}
-                    icon="file"
+                    icon={FileText}
                     label={`${out.speakerName ?? 'Speaker'} is a host of ${out.showName ?? 'the show'}`}
                   />
                 );
@@ -737,7 +619,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
                 return (
                   <ToolChip
                     key={i}
-                    icon="file"
+                    icon={FileText}
                     label={out.note ?? 'No appearances found'}
                   />
                 );
@@ -745,7 +627,7 @@ function MessageRow({ message, sources, onOpen, onOpenPanel, onEdit, isEditing }
               return (
                 <div key={i} className="space-y-2">
                   <ToolChip
-                    icon="file"
+                    icon={FileText}
                     label={`${count} appearance${count === 1 ? '' : 's'}${out.speakerName && out.showName ? ` · ${out.speakerName} on ${out.showName}` : ''}`}
                   />
                   <EpisodeList
@@ -973,45 +855,4 @@ function RankBadge({ rank }: { rank: number }) {
   return <span className="font-mono text-fg/55">{rank}</span>;
 }
 
-function ToolChip({
-  icon,
-  label,
-  pulsing,
-}: {
-  icon: 'search' | 'file';
-  label: string;
-  pulsing?: boolean;
-}) {
-  const Icon = icon === 'search' ? Sparkles : FileText;
-  return (
-    <div
-      className={cn(
-        'inline-flex items-center gap-2 rounded-lg border border-overlay/10 bg-overlay/[0.03]',
-        'px-2.5 py-1 text-[0.72rem] text-fg/65',
-      )}
-    >
-      <Icon
-        className={cn(
-          'h-3.5 w-3.5 text-sky-brand',
-          pulsing && 'ark-pulse-dot',
-        )}
-      />
-      <span>{label}</span>
-    </div>
-  );
-}
-
-function TypingDots() {
-  return (
-    <span className="inline-flex items-end gap-1">
-      {[0, 1, 2].map((i) => (
-        <span
-          key={i}
-          className="h-1.5 w-1.5 rounded-full bg-sky-brand ark-pulse-dot"
-          style={{ animationDelay: `${i * 140}ms` }}
-        />
-      ))}
-    </span>
-  );
-}
 

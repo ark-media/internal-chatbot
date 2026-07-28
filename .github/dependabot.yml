@@ -1,0 +1,59 @@
+# Dependabot config. Note this lives at .github/dependabot.yml, not under
+# .github/workflows/ — it is read directly by GitHub rather than run as an
+# Actions workflow.
+#
+# Security updates for vulnerable dependencies are raised automatically and are
+# not configured here; they require Dependabot alerts to be enabled for the repo
+# under Settings > Code security. The schedules below cover routine version
+# updates, which is what catches a dependency before an advisory lands on it.
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    groups:
+      # One PR for the routine within-major churn, so weekly noise stays at a
+      # single reviewable change rather than a dozen.
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # Majors that are migrations rather than upgrades. Each needs its own
+      # deliberate PR, so exclude them from the automated stream instead of
+      # letting Dependabot reopen them every week.
+      #
+      # ai / @ai-sdk/*: v7 and v4 rework the streaming and transport APIs that
+      #   every chat surface is built on.
+      # eslint: 10 breaks the eslint-plugin-react bundled by eslint-config-next.
+      # typescript: 7 is a compiler rewrite.
+      - dependency-name: ai
+        update-types: [version-update:semver-major]
+      - dependency-name: '@ai-sdk/*'
+        update-types: [version-update:semver-major]
+      - dependency-name: eslint
+        update-types: [version-update:semver-major]
+      - dependency-name: typescript
+        update-types: [version-update:semver-major]
+
+  # ingest/ declares its Python dependencies in pyproject.toml.
+  - package-ecosystem: pip
+    directory: /ingest
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    labels:
+      - dependencies

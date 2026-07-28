@@ -18,44 +18,39 @@ from __future__ import annotations
 import re
 
 
+def _word(literal: str) -> re.Pattern:
+    """Word-bounded, case-insensitive match on a literal string."""
+    return re.compile(r"\b" + re.escape(literal) + r"\b", re.IGNORECASE)
+
+
 class Normalizer:
     def __init__(self, kb: dict) -> None:
-        self._corrections: list[tuple[re.Pattern, str]] = []
+        # One ordered list rather than three. `apply` walks it front to back, so
+        # list order IS the pass order documented above — keep these three
+        # blocks in sequence. Keys starting with "_" are kb comments, not data.
+        self._subs: list[tuple[re.Pattern, str]] = []
+
+        # 1. corrections — the pattern is already a regex, so it is not escaped.
         for pattern, replacement in (kb.get("corrections") or {}).items():
             if pattern.startswith("_"):
                 continue
-            self._corrections.append((re.compile(pattern, re.IGNORECASE), replacement))
+            self._subs.append((re.compile(pattern, re.IGNORECASE), replacement))
 
-        self._people: list[tuple[re.Pattern, str]] = []
+        # 2. people — every alias maps to its canonical name.
         for canonical, aliases in (kb.get("people") or {}).items():
             if canonical.startswith("_") or not isinstance(aliases, list):
                 continue
             for alias in aliases:
-                if not alias:
-                    continue
-                self._people.append(
-                    (
-                        re.compile(r"\b" + re.escape(alias) + r"\b", re.IGNORECASE),
-                        canonical,
-                    )
-                )
+                if alias:
+                    self._subs.append((_word(alias), canonical))
 
-        self._vocab: list[tuple[re.Pattern, str]] = []
+        # 3. vocabulary — domain term to preferred casing.
         for term, replacement in (kb.get("vocabulary") or {}).items():
             if term.startswith("_"):
                 continue
-            self._vocab.append(
-                (
-                    re.compile(r"\b" + re.escape(term) + r"\b", re.IGNORECASE),
-                    replacement,
-                )
-            )
+            self._subs.append((_word(term), replacement))
 
     def apply(self, text: str) -> str:
-        for pattern, repl in self._corrections:
-            text = pattern.sub(repl, text)
-        for pattern, repl in self._people:
-            text = pattern.sub(repl, text)
-        for pattern, repl in self._vocab:
+        for pattern, repl in self._subs:
             text = pattern.sub(repl, text)
         return text

@@ -5,6 +5,7 @@ import { CheckCircle2, Copy, Square, X } from 'lucide-react';
 
 import { MessageText } from '@/components/MessageText';
 import type { Source } from '@/components/chat-types';
+import { TypingDots } from '@/components/ui/TypingDots';
 import { cn } from '@/lib/cn';
 import { useFlash } from '@/lib/use-flash';
 
@@ -286,19 +287,5 @@ export function SummaryModal({
         </footer>
       </div>
     </div>
-  );
-}
-
-function TypingDots() {
-  return (
-    <span className="inline-flex items-end gap-1">
-      {[0, 1, 2].map((i) => (
-        <span
-          key={i}
-          className="h-1.5 w-1.5 rounded-full bg-sky-brand ark-pulse-dot"
-          style={{ animationDelay: `${i * 140}ms` }}
-        />
-      ))}
-    </span>
   );
 }

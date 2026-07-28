@@ -36,6 +36,7 @@ import type {
 import { chatFetch } from '@/lib/chat-fetch';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
 import { cn } from '@/lib/cn';
+import { todayISO } from '@/lib/today-iso';
 
 // Quick-start presets, sent verbatim as the brief. The empty full-episode
 // default is offered separately as "Find today's stories".
@@ -54,12 +55,6 @@ const PLAN_PLACEHOLDERS: Record<BlockSlot, string> = {
   B: 'Second story — topic, or paste a link',
   C: 'The close — a warmer or cultural story',
 };
-
-function todayISO(): string {
-  const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
 
 export default function ScriptwriterPage() {
   const params = useParams<{ id: string }>();

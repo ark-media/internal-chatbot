@@ -13,6 +13,7 @@ dependencies = [
 py-modules = [
     "bootstrap",
     "chunker",
+    "db",
     "embed",
     "main",
     "normalize",

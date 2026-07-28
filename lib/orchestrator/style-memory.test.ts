@@ -15,37 +15,25 @@ import {
 } from './style-memory';
 
 describe('normalizeProfileText', () => {
-  it('strips a single HTML comment', () => {
-    expect(normalizeProfileText('<!-- note --> body')).toBe('body');
-  });
-
-  it('strips multiple HTML comments', () => {
-    expect(normalizeProfileText('<!-- a -->mid<!-- b -->')).toBe('mid');
-  });
-
-  it('strips multi-line HTML comments', () => {
-    const input = `<!--
-      block-style note that spans
-      multiple lines
-    -->
-    real content`;
-    expect(normalizeProfileText(input)).toBe('real content');
-  });
-
-  it('returns empty string when input is comment-only', () => {
-    expect(normalizeProfileText('<!-- only a note -->')).toBe('');
-    expect(normalizeProfileText('   <!-- pad -->   ')).toBe('');
-  });
-
-  it('returns trimmed input when there are no comments', () => {
-    expect(normalizeProfileText('  hello world  ')).toBe('hello world');
-  });
-
-  it('preserves comment-like content inside the body', () => {
+  it.each([
+    ['strips a single HTML comment', '<!-- note --> body', 'body'],
+    ['strips multiple HTML comments', '<!-- a -->mid<!-- b -->', 'mid'],
+    [
+      'strips a multi-line HTML comment',
+      '<!--\n  block-style note that spans\n  multiple lines\n-->\nreal content',
+      'real content',
+    ],
+    ['comment-only input yields empty', '<!-- only a note -->', ''],
+    ['comment-only input with padding yields empty', '   <!-- pad -->   ', ''],
+    ['trims when there are no comments', '  hello world  ', 'hello world'],
     // Only paired <!-- ... --> tokens are stripped. Stray angle brackets stay.
-    expect(normalizeProfileText('use < and > in prose')).toBe(
+    [
+      'leaves unpaired angle brackets in the body',
       'use < and > in prose',
-    );
+      'use < and > in prose',
+    ],
+  ])('%s', (_case, input, expected) => {
+    expect(normalizeProfileText(input)).toBe(expected);
   });
 });
 
@@ -121,55 +109,23 @@ describe('MAX_PROFILE_CHARS', () => {
 });
 
 describe('shouldSkipDistillation', () => {
-  it('skips when lastDistilledVersion equals refineHistoryLength', () => {
+  // Case, refineHistoryLength, lastDistilledVersion, expected.
+  it.each([
+    ['already distilled at this exact version', 3, 3, true],
+    ['refineHistory has grown since last distillation', 5, 3, false],
+    // After undo, the recorded version points at a *future* state. The route
+    // should NOT short-circuit — the writer is on a different version now. The
+    // undo route also clears lastDistilledVersion, but the helper defends
+    // against the stale value too.
+    ['undo dropped refineHistory below lastDistilledVersion', 2, 3, false],
+    ['never distilled before', 4, undefined, false],
+    // The route has a separate `scriptVersions.length === 0` guard that returns
+    // 409 before reaching this helper, so length 0 never occurs in production.
+    // Verify the pure rule anyway.
+    ['refineHistory is empty, nothing to learn from', 0, undefined, false],
+  ])('%s', (_case, refineHistoryLength, lastDistilledVersion, expected) => {
     expect(
-      shouldSkipDistillation({
-        refineHistoryLength: 3,
-        lastDistilledVersion: 3,
-      }),
-    ).toBe(true);
-  });
-
-  it('does not skip when refineHistory has grown since last distillation', () => {
-    expect(
-      shouldSkipDistillation({
-        refineHistoryLength: 5,
-        lastDistilledVersion: 3,
-      }),
-    ).toBe(false);
-  });
-
-  it('does not skip when undo has reduced refineHistory below lastDistilledVersion', () => {
-    // After undo, the recorded version points at a future state. The route
-    // should NOT short-circuit — the writer is on a different version now.
-    // The undo route also clears lastDistilledVersion in this case, but the
-    // helper itself defends against the stale value too.
-    expect(
-      shouldSkipDistillation({
-        refineHistoryLength: 2,
-        lastDistilledVersion: 3,
-      }),
-    ).toBe(false);
-  });
-
-  it('does not skip when there has never been a distillation', () => {
-    expect(
-      shouldSkipDistillation({
-        refineHistoryLength: 4,
-        lastDistilledVersion: undefined,
-      }),
-    ).toBe(false);
-  });
-
-  it('does not skip when refineHistory is empty (nothing to learn from)', () => {
-    // Note: the route also has a separate `scriptVersions.length === 0` guard
-    // that returns 409 before reaching this helper, so the helper never sees
-    // refineHistoryLength=0 in production. Verify the pure rule anyway.
-    expect(
-      shouldSkipDistillation({
-        refineHistoryLength: 0,
-        lastDistilledVersion: undefined,
-      }),
-    ).toBe(false);
+      shouldSkipDistillation({ refineHistoryLength, lastDistilledVersion }),
+    ).toBe(expected);
   });
 });

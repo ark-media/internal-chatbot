@@ -1,3 +1,21 @@
 ignoredBuiltDependencies:
   - sharp
   - unrs-resolver
+
+# Transitive dependencies pinned forward to their patched releases. Every entry
+# is a within-major bump that pnpm cannot reach on its own, because the packages
+# depending on them still request the vulnerable range. Drop an entry once the
+# dependency that pulls it in has moved past the advisory by itself.
+overrides:
+  # googleapis-common pins gaxios to exactly 7.1.3, which still carries rimraf
+  # and drags in glob > minimatch > brace-expansion. 7.3.0 dropped rimraf
+  # outright, so pinning forward removes that chain from the production tree.
+  gaxios: ^7.3.0
+  js-yaml@4: ^4.3.0
+  postcss@8: ^8.5.18
+  qs@6: ^6.15.2
+  sharp: ^0.35.0
+  undici@7: ^7.28.0
+  # Plain key, not vite@8: the @8 selector does not match here, because vite is
+  # resolved as a peer of @vitejs/plugin-react rather than a direct dependency.
+  vite: ^8.0.16

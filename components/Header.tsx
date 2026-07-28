@@ -78,12 +78,12 @@ export function Header({ variant, episodeCount }: HeaderProps) {
           </Link>
         </nav>
 
-        {episodeCount !== undefined && (
+        {episodeCount !== undefined ? (
           <div className="hidden items-center gap-2 text-[0.7rem] text-fg/40 sm:flex">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.6)]" />
             <span>{episodeCount ?? '—'} episodes indexed</span>
           </div>
-        )}
+        ) : null}
 
         <ThemeToggle />
       </div>

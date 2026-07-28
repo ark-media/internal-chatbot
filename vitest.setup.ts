@@ -9,11 +9,16 @@ if (!process.env.DATABASE_URL) {
   process.env.DATABASE_URL = 'postgresql://test:test@localhost:5432/test';
 }
 
-// Mock scrollTo which is not implemented in jsdom
-Element.prototype.scrollTo = vi.fn();
+// The DOM shims below only apply to the suites that run under jsdom (see
+// `environmentMatchGlobs` in vitest.config.ts). Everything else runs in node,
+// where these globals don't exist and aren't needed.
+if (typeof Element !== 'undefined') {
+  // Mock scrollTo which is not implemented in jsdom
+  Element.prototype.scrollTo = vi.fn();
+}
 
 // Polyfill DataTransfer which jsdom doesn't fully support
-if (typeof global.DataTransfer === 'undefined') {
+if (typeof globalThis.document !== 'undefined' && typeof global.DataTransfer === 'undefined') {
   class DataTransferPolyfill {
     items = {
       _files: [] as File[],

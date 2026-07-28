@@ -29,6 +29,18 @@ function cand(over: Partial<BreakingCandidate> = {}): BreakingCandidate {
   };
 }
 
+// Grades every candidate as a corroborated, on-beat, high-significance story —
+// the shape that survives all the way to a Swap suggestion.
+const gradeAllHigh = async (cs: BreakingCandidate[]): Promise<BreakingCandidate[]> =>
+  cs.map((c) => ({
+    ...c,
+    onBeat: true,
+    confidence: 'confirmed' as const,
+    significance: 'high' as const,
+    globalShock: false,
+    corroboration: { independentSources: 2, primarySource: 'Reuters' },
+  }));
+
 describe('resolveCutoff', () => {
   const now = '2026-06-30T22:00:00.000Z'; // 6pm ET
 
@@ -268,39 +280,31 @@ describe('T-008: tier routing', () => {
     });
   }
 
-  it('off-beat NEW cannot reach Swap', () => {
-    const { suggestions } = routeTiers([graded({ onBeat: false, novelty: 'NEW' })], CUTOFF);
-    expect(suggestions).toHaveLength(0);
-  });
+  // Single-candidate routing. `tier: null` means the story is dropped
+  // entirely; `block` is asserted only where the tier pins one.
+  const ROUTING: Array<[string, Partial<BreakingCandidate>, string | null, string?]> = [
+    ['off-beat NEW cannot reach Swap', { onBeat: false, novelty: 'NEW' }, null],
+    ['a medium-significance NEW on-beat story does not clear the Swap bar', { novelty: 'NEW', significance: 'medium' }, null],
+    ['a low-significance NEW on-beat story does not clear the Swap bar', { novelty: 'NEW', significance: 'low' }, null],
+    ['a high-significance NEW on-beat story reaches Swap', { novelty: 'NEW', significance: 'high' }, 'Swap'],
+    ["off-beat global-shock + confirmed reaches Can't-ignore", { onBeat: false, globalShock: true, confidence: 'confirmed' }, "Can't-ignore"],
+    ["off-beat global-shock + provisional does NOT reach Can't-ignore", { onBeat: false, globalShock: true, confidence: 'provisional' }, null],
+    ['routes a NEW on-beat human-interest story below the Swap bar to the C block', { novelty: 'NEW', significance: 'low', humanInterest: true }, 'Human-interest', 'C'],
+    // A moving profile graded high must still close the show, not displace a
+    // hard-news block as a Swap.
+    ['keeps a high-significance human-interest story in the Human-interest tier, not Swap', { novelty: 'NEW', significance: 'high', humanInterest: true }, 'Human-interest', 'C'],
+    ['names the updated block for an Update', { novelty: 'UPDATE', updatesBlock: 'A' }, 'Update', 'A'],
+  ];
 
-  it('a medium/low-significance NEW on-beat story does not clear the Swap bar', () => {
-    const medium = routeTiers([graded({ novelty: 'NEW', significance: 'medium' })], CUTOFF);
-    expect(medium.suggestions).toHaveLength(0);
-    const low = routeTiers([graded({ novelty: 'NEW', significance: 'low' })], CUTOFF);
-    expect(low.suggestions).toHaveLength(0);
-  });
-
-  it('a high-significance NEW on-beat story reaches Swap', () => {
-    const { suggestions } = routeTiers([graded({ novelty: 'NEW', significance: 'high' })], CUTOFF);
+  it.each(ROUTING)('%s', (_label, over, tier, block) => {
+    const { suggestions } = routeTiers([graded(over)], CUTOFF);
+    if (tier === null) {
+      expect(suggestions).toHaveLength(0);
+      return;
+    }
     expect(suggestions).toHaveLength(1);
-    expect(suggestions[0].tier).toBe('Swap');
-  });
-
-  it('off-beat global-shock + confirmed reaches Can\'t-ignore', () => {
-    const { suggestions } = routeTiers(
-      [graded({ onBeat: false, globalShock: true, confidence: 'confirmed' })],
-      CUTOFF,
-    );
-    expect(suggestions).toHaveLength(1);
-    expect(suggestions[0].tier).toBe("Can't-ignore");
-  });
-
-  it('off-beat global-shock + provisional does NOT reach Can\'t-ignore', () => {
-    const { suggestions } = routeTiers(
-      [graded({ onBeat: false, globalShock: true, confidence: 'provisional' })],
-      CUTOFF,
-    );
-    expect(suggestions).toHaveLength(0);
+    expect(suggestions[0].tier).toBe(tier);
+    if (block) expect(suggestions[0].block).toBe(block);
   });
 
   it('orders tiers and caps at 6 with suppressedCount reporting the remainder', () => {
@@ -322,28 +326,6 @@ describe('T-008: tier routing', () => {
     expect(suggestions[1].tier).toBe('Update');
     expect(suggestions[2].tier).toBe('Update');
     expect(suggestions[3].tier).toBe('Swap');
-  });
-
-  it('routes a NEW on-beat human-interest story below the Swap bar to the C block', () => {
-    const { suggestions } = routeTiers(
-      [graded({ novelty: 'NEW', significance: 'low', humanInterest: true })],
-      CUTOFF,
-    );
-    expect(suggestions).toHaveLength(1);
-    expect(suggestions[0].tier).toBe('Human-interest');
-    expect(suggestions[0].block).toBe('C');
-  });
-
-  it('keeps a high-significance human-interest story in the Human-interest tier, not Swap', () => {
-    const { suggestions } = routeTiers(
-      [graded({ novelty: 'NEW', significance: 'high', humanInterest: true })],
-      CUTOFF,
-    );
-    expect(suggestions).toHaveLength(1);
-    // A moving profile graded high must still close the show, not displace a
-    // hard-news block as a Swap.
-    expect(suggestions[0].tier).toBe('Human-interest');
-    expect(suggestions[0].block).toBe('C');
   });
 
   it('reserves the closing slot for a human-interest story so hard news cannot crowd it out', () => {
@@ -381,12 +363,6 @@ describe('T-008: tier routing', () => {
     expect(suggestions[0].tier).toBe('Swap');
     expect(suggestions[0].flaggedUnconfirmed).toBe(true);
     expect(suggestions[0].block).toBe('C');
-  });
-
-  it('names the updated block for an Update', () => {
-    const { suggestions } = routeTiers([graded({ novelty: 'UPDATE', updatesBlock: 'A' })], CUTOFF);
-    expect(suggestions[0].tier).toBe('Update');
-    expect(suggestions[0].block).toBe('A');
   });
 
   it('returns an empty result when nothing qualifies, echoing the cutoff', () => {
@@ -486,15 +462,7 @@ SOURCES:
             ...c,
             novelty: c.title.startsWith('Already') ? ('DUPLICATE' as const) : ('NEW' as const),
           })),
-        gradeSignificance: async (cs) =>
-          cs.map((c) => ({
-            ...c,
-            onBeat: true,
-            confidence: 'confirmed' as const,
-            significance: 'high' as const,
-            globalShock: false,
-            corroboration: { independentSources: 2, primarySource: 'Reuters' },
-          })),
+        gradeSignificance: gradeAllHigh,
       },
     );
 
@@ -546,15 +514,7 @@ SOURCES:
         classifyExclusions: async (cs) =>
           cs.map((c, i) => ({ ...c, excluded: i === 0 })),
         classifyNovelty: async (cs) => cs.map((c) => ({ ...c, novelty: 'NEW' as const })),
-        gradeSignificance: async (cs) =>
-          cs.map((c) => ({
-            ...c,
-            onBeat: true,
-            confidence: 'confirmed' as const,
-            significance: 'high' as const,
-            globalShock: false,
-            corroboration: { independentSources: 2, primarySource: 'Reuters' },
-          })),
+        gradeSignificance: gradeAllHigh,
       },
     );
 

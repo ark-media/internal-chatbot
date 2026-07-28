@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 import { parseScriptCoverage } from '../news-script';
 import { craftScript } from './script-craft';
+import { errText, warnEvent } from '../log-event';
 import type {
   ReviewResult,
   Script,
@@ -276,7 +277,7 @@ export async function reflectLoop(opts: {
     } catch (err) {
       // If the reviewer call fails, fall back to the writer's own judgment
       // and exit the loop with the best draft reviewed so far.
-      console.warn(JSON.stringify({ event: 'orchestrator.reflect.reviewer_error', err: String(err) }));
+      warnEvent('orchestrator.reflect.reviewer_error', { err: errText(err) });
       return { finalScript: bestScript(), iterations: iteration, history };
     }
 
@@ -308,7 +309,7 @@ export async function reflectLoop(opts: {
         previousScript: script.fullText,
       });
     } catch (err) {
-      console.warn(JSON.stringify({ event: 'orchestrator.reflect.refine_error', err: String(err) }));
+      warnEvent('orchestrator.reflect.refine_error', { err: errText(err) });
       return { finalScript: bestScript(), iterations: iteration, history };
     }
 
@@ -322,14 +323,11 @@ export async function reflectLoop(opts: {
     const expected = blockSignature(script.fullText);
     const got = blockSignature(revised.fullText);
     if (got !== expected) {
-      console.warn(
-        JSON.stringify({
-          event: 'orchestrator.reflect.recraft_off_contract',
-          expected,
-          got,
-          preview: revised.fullText.slice(0, 200),
-        }),
-      );
+      warnEvent('orchestrator.reflect.recraft_off_contract', {
+        expected,
+        got,
+        preview: revised.fullText.slice(0, 200),
+      });
       return { finalScript: bestScript(), iterations: iteration, history };
     }
 

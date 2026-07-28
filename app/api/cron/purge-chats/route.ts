@@ -3,6 +3,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { ensureChatTables, purgeExpired } from '@/lib/chats';
 import { sql } from '@/lib/db';
 import { ensureScriptRunTables } from '@/lib/scriptwriter/state';
+import { errorEvent, logEvent } from '@/lib/log-event';
 
 export const runtime = 'nodejs';
 
@@ -20,9 +21,7 @@ function authorized(req: Request): boolean {
   if (!expected) {
     // Loud config error: a missing CRON_SECRET means the daily purge silently
     // 401s forever, so expired chats accumulate. Surface it noisily.
-    console.error(
-      JSON.stringify({ event: 'cron.misconfigured', detail: 'CRON_SECRET is not set' }),
-    );
+    errorEvent('cron.misconfigured', { detail: 'CRON_SECRET is not set' });
     return false;
   }
   const header = req.headers.get('authorization');
@@ -52,14 +51,11 @@ async function run(req: Request) {
   } catch {
     // Table already dropped — nothing to sweep.
   }
-  console.log(
-    JSON.stringify({
-      event: 'chats.purge',
-      deleted,
-      scriptRunsPurged: runsPurged.length,
-      legacyOrchestratorRunsPurged: legacyPurged,
-    }),
-  );
+  logEvent('chats.purge', {
+    deleted,
+    scriptRunsPurged: runsPurged.length,
+    legacyOrchestratorRunsPurged: legacyPurged,
+  });
   return Response.json({ deleted, scriptRunsPurged: runsPurged.length });
 }
 

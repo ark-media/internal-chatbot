@@ -57,14 +57,14 @@ export function ArkLogo({
           fill="none"
         />
       </svg>
-      {!markOnly && (
+      {!markOnly ? (
         <span
           className="font-display text-[1.1em] font-black tracking-tight text-fg"
           style={{ letterSpacing: '-0.01em' }}
         >
           Ark Media
         </span>
-      )}
+      ) : null}
     </span>
   );
 }

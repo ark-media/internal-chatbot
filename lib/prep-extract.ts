@@ -1,5 +1,6 @@
 import { generateObject } from 'ai';
 import { z } from 'zod';
+import { errText, warnEvent } from './log-event';
 
 // Pre-retrieval helper for the prep route. Extracts the three things we need
 // to fan out before the model writes its first token:
@@ -131,9 +132,7 @@ profileQuery is also a plain web-search query, but it targets EVERGREEN profile 
       profileQuery: object.profileQuery?.trim() || null,
     };
   } catch (err) {
-    console.warn(
-      JSON.stringify({ event: 'prep.extract_error', err: String(err) }),
-    );
+    warnEvent('prep.extract_error', { err: errText(err) });
     return { guests: [], topic: null, urls, webQuery: null, profileQuery: null };
   }
 }

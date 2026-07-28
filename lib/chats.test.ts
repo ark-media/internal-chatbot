@@ -97,7 +97,7 @@ describe('persistIncomingMessages', () => {
       surface: 'archive',
       messages: [],
     });
-    expect(result.newCount).toEqual({ newCount: 0 }.newCount);
+    expect(result.newCount).toBe(0);
     expect(mockSql.transaction).not.toHaveBeenCalled();
   });
 

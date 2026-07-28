@@ -114,7 +114,7 @@ export function ChatComposer({
             'focus-within:shadow-[0_12px_40px_-14px_rgba(62,181,249,0.55)]',
           )}
         >
-          {fileAttach && (
+          {fileAttach ? (
             <input
               ref={fileInputRef}
               type="file"
@@ -125,7 +125,7 @@ export function ChatComposer({
               tabIndex={-1}
               aria-hidden="true"
             />
-          )}
+          ) : null}
 
           {/* Input row — items-end keeps the attach + send buttons pinned to the
               textarea baseline as it auto-grows. */}
@@ -152,7 +152,7 @@ export function ChatComposer({
               />
             </div>
 
-            {fileAttach && (
+            {fileAttach ? (
               <IconButton
                 size="md"
                 onClick={() => fileInputRef.current?.click()}
@@ -162,7 +162,7 @@ export function ChatComposer({
               >
                 <Paperclip className="h-4 w-4" />
               </IconButton>
-            )}
+            ) : null}
 
             <button
               type="submit"

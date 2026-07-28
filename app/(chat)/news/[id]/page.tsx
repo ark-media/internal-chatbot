@@ -6,23 +6,17 @@ import {
   useMemo,
   useRef,
   useState,
-  type ChangeEvent,
   type ReactNode,
 } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import { useParams } from 'next/navigation';
 import {
-  FileText,
   Loader2,
-  Square,
   X,
   HardDriveUpload,
   ExternalLink,
   CheckCircle2,
-  Copy,
-  Pencil,
-  ScrollText,
   Radar,
 } from 'lucide-react';
 
@@ -42,21 +36,25 @@ import type {
   Suggestion,
   Tier,
 } from '@/components/news-types';
+import { BusyRow } from '@/components/ui/BusyRow';
+import { UserBubble } from '@/components/ui/UserBubble';
+import { EditingBanner } from '@/components/ui/EditingBanner';
+import { CopyButton } from '@/components/ui/CopyButton';
+import { HandoffButton } from '@/components/ui/HandoffButton';
+import { FileAttachments } from '@/components/ui/FileAttachments';
 import { cn } from '@/lib/cn';
-import { chatFetch } from '@/lib/chat-fetch';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
 import { useFlash } from '@/lib/use-flash';
+import { useDriveSave } from '@/lib/use-drive-save';
+import { useInitialMessages } from '@/lib/use-initial-messages';
+import { useMessageEditing } from '@/lib/use-message-editing';
+import { useFileAttachments } from '@/lib/use-file-attachments';
 import { useHandoffSummary } from '@/lib/use-handoff-summary';
 import {
   NEWS_DEFAULT_TEMPERATURE_PRESET,
   type TemperaturePresetId,
 } from '@/lib/temperature';
-import {
-  MAX_FILES,
-  MAX_FILE_BYTES,
-  MAX_TOTAL_BYTES,
-  formatBytes,
-} from '@/lib/prep-limits';
+import { MAX_FILES, MAX_FILE_BYTES, formatBytes } from '@/lib/prep-limits';
 
 const EXAMPLE_PROMPTS = [
   'Outline: Lead — Trump signals end to Iran War. B Block — New Middle East realignment. C Block — Passover under bombardment. Sources: WSJ, CBS, Times of Israel',
@@ -72,31 +70,10 @@ const REFINEMENT_HINTS = [
   'Strengthen the opening to be more compelling.',
 ];
 
-type AttachedFile = {
-  id: string;
-  file: File;
-};
-
 export default function NewsPage() {
   const params = useParams<{ id: string }>();
   const chatId = params?.id;
-  const [initialMessages, setInitialMessages] = useState<NewsUIMessage[] | null>(null);
-
-  useEffect(() => {
-    if (!chatId) return;
-    let cancelled = false;
-    fetch(`/api/chats/${chatId}`)
-      .then((r) => (r.ok ? r.json() : { messages: [] }))
-      .then((d: { messages?: NewsUIMessage[] }) => {
-        if (!cancelled) setInitialMessages((d.messages ?? []) as NewsUIMessage[]);
-      })
-      .catch(() => {
-        if (!cancelled) setInitialMessages([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [chatId]);
+  const initialMessages = useInitialMessages<NewsUIMessage>(chatId);
 
   if (!chatId || initialMessages === null) {
     return null;
@@ -144,50 +121,28 @@ function NewsBody({
   const [selectedTemperature, setSelectedTemperature] =
     useState<TemperaturePresetId>(NEWS_DEFAULT_TEMPERATURE_PRESET);
   const [input, setInput] = useState('');
-  const [files, setFiles] = useState<AttachedFile[]>([]);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const [fileAttachSuccess, flashFileAttachSuccess] = useFlash(false);
-  const [driveLoading, setDriveLoading] = useState(false);
-  const [driveLink, setDriveLink] = useState<string | null>(null);
-  const [driveError, setDriveError] = useState<string | null>(null);
-  const [driveSaveInProgress, setDriveSaveInProgress] = useState(false);
+  const {
+    files,
+    uploadError,
+    attachSuccess,
+    onPickFiles,
+    removeFile,
+    clearFiles,
+    asFileList,
+  } = useFileAttachments();
+  const { driveLoading, driveLink, driveError, save, resetDrive } =
+    useDriveSave('/api/news/upload');
   const [openSource, setOpenSource] = useState<NewsSource | null>(null);
-  const [allSources, setAllSources] = useState<NewsSource[]>([]);
   const [copySuccess, flashCopySuccess, resetCopySuccess] = useFlash(false);
-  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [showUndoToast, flashShowUndoToast] = useFlash(false);
-
-  // Handle Escape key to cancel edit
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && editingMessageId) {
-        e.preventDefault();
-        setEditingMessageId(null);
-        setInput('');
-      }
-    };
-    if (editingMessageId) {
-      window.addEventListener('keydown', handleKeyDown);
-      return () => window.removeEventListener('keydown', handleKeyDown);
-    }
-  }, [editingMessageId]);
-
-  // Custom fetch that adds editingMessageId to the body if present
-  const customFetch = useCallback<typeof fetch>(
-    async (input, init) => {
-      try {
-        const body = init?.body ? JSON.parse(init.body as string) : {};
-        if (editingMessageId) {
-          body.editingMessageId = editingMessageId;
-        }
-        return chatFetch(input, { ...init, body: JSON.stringify(body) });
-      } catch (e) {
-        console.error('Failed to parse request body for edit:', e);
-        return chatFetch(input, init);
-      }
-    },
-    [editingMessageId],
-  );
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const {
+    editingMessageId,
+    startEditing,
+    cancelEditing,
+    finishEditing,
+    editingFetch,
+  } = useMessageEditing({ setInput, scrollRef });
 
   // Rebuilt only when something it carries changes — not on every render —
   // so a keystroke elsewhere doesn't churn a fresh transport. The header
@@ -197,14 +152,14 @@ function NewsBody({
     () =>
       new DefaultChatTransport({
         api: '/api/news',
-        fetch: customFetch,
+        fetch: editingFetch,
         headers: {
           'x-model': selectedModel,
           'x-temperature': selectedTemperature,
         },
         body: { chatId },
       }),
-    [customFetch, selectedModel, selectedTemperature, chatId],
+    [editingFetch, selectedModel, selectedTemperature, chatId],
   );
 
   const { messages, sendMessage, status, stop, error, regenerate, clearError } =
@@ -214,11 +169,9 @@ function NewsBody({
       transport,
       onFinish: () => {
         notifyChatUpdated();
-        setEditingMessageId(null);
+        finishEditing();
       },
     });
-
-  const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const busy = status === 'submitted' || status === 'streaming';
 
@@ -229,82 +182,18 @@ function NewsBody({
     });
   }, [messages, busy]);
 
-  const onPickFiles = useCallback(
-    (e: ChangeEvent<HTMLInputElement>) => {
-      // Convert FileList to array BEFORE clearing the input (FileList is a live collection)
-      const picked = e.target.files ? Array.from(e.target.files) : [];
-      e.target.value = '';
-      if (picked.length === 0) return;
-
-      const accepted: AttachedFile[] = [];
-      const rejected: string[] = [];
-      let total = files.reduce((n, f) => n + f.file.size, 0);
-      for (let i = 0; i < picked.length; i++) {
-        const f = picked[i];
-        if (!f) continue;
-        if (files.length + accepted.length >= MAX_FILES) {
-          rejected.push(`too many files (max ${MAX_FILES})`);
-          break;
-        }
-        if (f.size > MAX_FILE_BYTES) {
-          rejected.push(`"${f.name}" is ${formatBytes(f.size)}, exceeds ${formatBytes(MAX_FILE_BYTES)}`);
-          continue;
-        }
-        if (total + f.size > MAX_TOTAL_BYTES) {
-          rejected.push(`"${f.name}" would exceed ${formatBytes(MAX_TOTAL_BYTES)} total`);
-          continue;
-        }
-        total += f.size;
-        accepted.push({
-          id: `${f.name}-${f.size}-${f.lastModified}-${Date.now()}-${i}`,
-          file: f,
-        });
-      }
-      if (accepted.length > 0) {
-        setFiles((prev) => [...prev, ...accepted]);
-        flashFileAttachSuccess(true, 2500);
-      }
-      setUploadError(rejected.length > 0 ? rejected.join('; ') : null);
-    },
-    [files],
-  );
-
-  const removeFile = useCallback((id: string) => {
-    setFiles((prev) => prev.filter((f) => f.id !== id));
-    setUploadError(null);
-  }, []);
-
-  const handleEdit = useCallback(
-    (message: NewsUIMessage) => {
-      const textContent = message.parts
-        ?.filter((p) => p.type === 'text')
-        .map((p) => (p.type === 'text' ? p.text : ''))
-        .join('\n\n');
-      if (textContent) {
-        setInput(textContent);
-        setEditingMessageId(message.id);
-        scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-      }
-    },
-    [],
-  );
-
   const submit = (text: string) => {
     const q = text.trim();
     if ((!q && files.length === 0) || busy) return;
     const wasEditing = editingMessageId !== null;
-    const dt = new DataTransfer();
-    for (const f of files) dt.items.add(f.file);
-    const fileList = dt.files.length > 0 ? dt.files : undefined;
-    sendMessage({ text: q, files: fileList });
+    sendMessage({ text: q, files: asFileList() });
     setInput('');
-    setFiles([]);
+    clearFiles();
     if (wasEditing) {
       flashShowUndoToast(true, 3000);
     }
     // Reset post-generation actions when starting a new turn.
-    setDriveLink(null);
-    setDriveError(null);
+    resetDrive();
     resetCopySuccess();
   };
 
@@ -359,12 +248,21 @@ function NewsBody({
     return textParts.map((p) => (p.type === 'text' ? p.text : '')).join('\n');
   }, [messages]);
 
-  useEffect(() => {
-    const scriptText = extractScriptText();
-    if (scriptText) {
-      setAllSources(extractSources(scriptText));
-    }
-  }, [messages, extractScriptText]);
+  // Derived from the most recent assistant message that actually carries text.
+  // Scanning for the last *text-bearing* message rather than the last message
+  // outright keeps the source panel populated through turns that open with tool
+  // calls, where the newest assistant message has no text parts yet. The state +
+  // effect this replaces got the same effect by never clearing on a null script.
+  const allSources = useMemo<NewsSource[]>(() => {
+    const lastWithText = [...messages]
+      .reverse()
+      .find((m) => m.role === 'assistant' && m.parts?.some((p) => p.type === 'text'));
+    if (!lastWithText) return [];
+    const scriptText = (lastWithText.parts ?? [])
+      .map((p) => (p.type === 'text' ? p.text : ''))
+      .join('\n');
+    return scriptText ? extractSources(scriptText) : [];
+  }, [messages]);
 
   const { openSummary, modal: summaryModal } = useHandoffSummary({
     chatId,
@@ -385,47 +283,14 @@ function NewsBody({
   }, [extractScriptText, flashCopySuccess]);
 
   const saveScriptToDrive = useCallback(async () => {
-    // Debounce: prevent multiple simultaneous uploads
-    if (driveSaveInProgress) return;
-
     const scriptText = extractScriptText();
     if (!scriptText?.trim()) return;
-
-    setDriveSaveInProgress(true);
-    setDriveLoading(true);
-    setDriveError(null);
-    setDriveLink(null);
-
-    try {
-      // Extract headline from script or use generic title
-      const headline = extractHeadline(scriptText) || 'News Script';
-      const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-
-      const res = await fetch('/api/news/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          scriptText,
-          title: headline,
-          date: today,
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        setDriveError(data.error || 'Upload failed');
-        return;
-      }
-
-      setDriveLink(data.driveUrl);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setDriveError(`Failed to upload: ${msg}`);
-    } finally {
-      setDriveLoading(false);
-      setDriveSaveInProgress(false);
-    }
-  }, [driveSaveInProgress, extractScriptText]);
+    await save({
+      scriptText,
+      title: extractHeadline(scriptText) || 'News Script',
+      date: new Date().toISOString().split('T')[0],
+    });
+  }, [save, extractScriptText]);
 
   return (
     <div className="flex min-w-0 flex-1">
@@ -454,29 +319,14 @@ function NewsBody({
                 message={m}
                 onSourceClick={setOpenSource}
                 sources={allSources}
-                onEdit={handleEdit}
+                onEdit={startEditing}
                 isEditing={editingMessageId === m.id}
                 onAccept={acceptSuggestion}
                 busy={busy}
               />
             ))}
 
-            {busy ? (
-              <div className="flex items-center gap-3 pl-12 text-xs text-fg/50">
-                <TypingDots />
-                <span className="tracking-wide">
-                  {busyLabel(messages, status)}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => stop()}
-                  className="ml-2 inline-flex items-center gap-1 rounded-md border border-overlay/10 bg-overlay/5 px-2 py-0.5 text-[0.7rem] text-fg/70 transition hover:bg-overlay/10 hover:text-fg"
-                >
-                  <Square className="h-2.5 w-2.5 fill-current" />
-                  Stop
-                </button>
-              </div>
-            ) : null}
+            {busy ? <BusyRow label={busyLabel(messages, status)} onStop={stop} /> : null}
 
             <ChatErrorBanner
               error={error}
@@ -511,7 +361,7 @@ function NewsBody({
                   ) : (
                     <button
                       onClick={saveScriptToDrive}
-                      disabled={driveLoading || driveSaveInProgress || !messages.length}
+                      disabled={driveLoading || !messages.length}
                       className={cn(
                         'inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
                         'bg-blue-500/20 text-blue-200 transition hover:bg-blue-500/30',
@@ -532,39 +382,17 @@ function NewsBody({
                     </button>
                   )}
 
-                  <button
+                  <CopyButton
                     onClick={copyScriptToClipboard}
+                    copied={copySuccess}
+                    label="Copy to Clipboard"
                     disabled={!messages.length}
-                    className={cn(
-                      'inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
-                      'bg-emerald-500/20 text-emerald-200 transition hover:bg-emerald-500/30',
-                      'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-emerald-500/20',
-                    )}
-                  >
-                    {copySuccess ? (
-                      <>
-                        <CheckCircle2 className="h-4 w-4" />
-                        Copied!
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="h-4 w-4" />
-                        Copy to Clipboard
-                      </>
-                    )}
-                  </button>
+                  />
 
-                  <button
+                  <HandoffButton
                     onClick={openSummary}
-                    className={cn(
-                      'inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5',
-                      'border border-overlay/10 bg-overlay/5 text-fg/75 transition hover:bg-overlay/10 hover:text-fg',
-                    )}
                     title="Compose a handoff message you can paste into a fresh chat to continue this script"
-                  >
-                    <ScrollText className="h-4 w-4" />
-                    Hand off to new chat
-                  </button>
+                  />
                 </div>
 
                 <div className="mt-2">
@@ -594,23 +422,7 @@ function NewsBody({
         </main>
 
         {/* Edit Mode Indicator */}
-        {editingMessageId ? (
-          <div className="border-t border-blue-500/20 bg-blue-500/5 px-6 py-2.5 flex items-center justify-between animate-in fade-in duration-200">
-            <div className="flex items-center gap-2">
-              <div className="h-2 w-2 rounded-full bg-blue-400 animate-pulse" />
-              <span className="text-xs font-medium text-blue-300/80">Editing • Press ESC to cancel</span>
-            </div>
-            <button
-              onClick={() => {
-                setEditingMessageId(null);
-                setInput('');
-              }}
-              className="text-xs px-2.5 py-1 rounded text-blue-300/60 hover:text-blue-300 hover:bg-blue-500/10 transition"
-            >
-              Cancel
-            </button>
-          </div>
-        ) : null}
+        <EditingBanner editing={editingMessageId !== null} onCancel={cancelEditing} />
 
         {/* Undo Toast */}
         {showUndoToast ? (
@@ -660,44 +472,13 @@ function NewsBody({
             tooltip: 'Attach source articles or outline notes',
           }}
           attachments={
-            <>
-              {fileAttachSuccess ? (
-                <div className="mb-2 flex items-center gap-2 rounded-lg bg-green-500/10 px-3 py-2 text-sm text-green-200 animate-in fade-in duration-200">
-                  <CheckCircle2 className="h-4 w-4" />
-                  <span>{files.length} file{files.length !== 1 ? 's' : ''} attached</span>
-                </div>
-              ) : null}
-              {files.length > 0 ? (
-                <div className="mb-2 flex flex-wrap gap-1.5">
-                  {files.map((f) => (
-                    <div
-                      key={f.id}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-overlay/10 bg-overlay/[0.04] px-2 py-1 text-[0.72rem] text-fg/75"
-                    >
-                      <FileText className="h-3 w-3 text-sky-brand" />
-                      <span className="max-w-[240px] truncate">{f.file.name}</span>
-                      <span className="text-fg/35">{formatBytes(f.file.size)}</span>
-                      <button
-                        type="button"
-                        onClick={() => removeFile(f.id)}
-                        className="ml-0.5 rounded p-0.5 text-fg/45 transition hover:bg-overlay/10 hover:text-fg"
-                        aria-label={`Remove ${f.file.name}`}
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-              {uploadError ? (
-                <div
-                  role="alert"
-                  className="mb-2 rounded-lg border border-amber-300/30 bg-amber-400/[0.08] px-3 py-2 text-[0.78rem] text-amber-100"
-                >
-                  Some files were not attached — {uploadError}.
-                </div>
-              ) : null}
-            </>
+            <FileAttachments
+              files={files}
+              uploadError={uploadError}
+              onRemove={removeFile}
+              showSuccess
+              attachSuccess={attachSuccess}
+            />
           }
         />
       </div>
@@ -819,25 +600,12 @@ function MessageRow({
     const textParts = message.parts?.filter((p) => p.type === 'text') ?? [];
     const fileParts = message.parts?.filter((p) => p.type === 'file') ?? [];
     return (
-      <div className="ark-fade-up flex justify-end gap-2 items-start group">
-        <div
-          className={cn(
-            'max-w-[82%] rounded-2xl rounded-br-md px-4 py-2.5',
-            'bg-gradient-to-br from-sky-brand to-sky-brand-deep text-ink-950',
-            'shadow-[0_8px_22px_-10px_rgba(62,181,249,0.6)]',
-            'text-[0.95rem] font-medium leading-relaxed',
-            'transition-all duration-200',
-            isEditing && 'ring-2 ring-blue-400/50 shadow-[0_8px_22px_-10px_rgba(59,130,246,0.5)]',
-          )}
-        >
-          {textParts.map((p, i) =>
-            p.type === 'text' ? (
-              <span key={i} className="whitespace-pre-wrap">
-                {p.text}
-              </span>
-            ) : null,
-          )}
-          {fileParts.length > 0 ? (
+      <UserBubble
+        textParts={textParts.flatMap((p) => (p.type === 'text' ? [p.text] : []))}
+        isEditing={isEditing}
+        onEdit={onEdit ? () => onEdit(message) : undefined}
+        files={
+          fileParts.length > 0 ? (
             <div className="mt-2 flex flex-wrap gap-1">
               {fileParts.map((p, i) => (
                 <span key={i} className="inline-block rounded bg-overlay/20 px-1.5 py-0.5 text-[0.85rem]">
@@ -845,23 +613,9 @@ function MessageRow({
                 </span>
               ))}
             </div>
-          ) : null}
-        </div>
-        {onEdit ? (
-          <button
-            onClick={() => onEdit(message)}
-            className={cn(
-              'mt-1 p-1.5 rounded-lg transition-all opacity-0 group-hover:opacity-100 duration-200',
-              isEditing
-                ? 'bg-blue-400/20 text-blue-300 hover:bg-blue-400/30'
-                : 'hover:bg-overlay/10 text-fg/50 hover:text-fg/70',
-            )}
-            title="Edit message (or click to edit)"
-          >
-            <Pencil className="h-4 w-4" />
-          </button>
-        ) : null}
-      </div>
+          ) : null
+        }
+      />
     );
   }
 
@@ -1407,19 +1161,3 @@ function renderFootnotes(
   return children;
 }
 
-function TypingDots() {
-  return (
-    <span className="flex gap-1">
-      {[0, 1, 2].map((i) => (
-        <span
-          key={i}
-          className="h-1.5 w-1.5 rounded-full bg-overlay/40"
-          style={{
-            animation: `ark-pulse-dot 1.4s infinite`,
-            animationDelay: `${i * 0.2}s`,
-          }}
-        />
-      ))}
-    </span>
-  );
-}

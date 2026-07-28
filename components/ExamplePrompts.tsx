@@ -33,11 +33,11 @@ export function ExamplePrompts({
 
   return (
     <>
-      {label && (
+      {label ? (
         <div className="text-[0.75rem] uppercase tracking-[0.15em] text-fg/40 mt-8 mb-2">
           {label}
         </div>
-      )}
+      ) : null}
       <div className={cn('mt-8', containerClassName)}>
         {prompts.map((prompt, i) => (
           <button

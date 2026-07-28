@@ -10,10 +10,17 @@ from pathlib import Path
 from parse import parse_transcript
 
 
-def _write(tmp: Path, name: str, body: str) -> Path:
-    path = tmp / name
-    path.write_text(body, encoding="utf-8")
-    return path
+def _parse(body: str, name: str):
+    """Parse `body` as a transcript file called `name`.
+
+    The name is not incidental: parse_transcript derives episode_id from it
+    (`simplecast_<uuid>.txt` -> `simplecast:<uuid>`), so it must keep the
+    `<prefix>_<rest>.txt` shape.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / name
+        path.write_text(body, encoding="utf-8")
+        return parse_transcript(path)
 
 
 class FormatATimestampedSpeakersTests(unittest.TestCase):
@@ -41,9 +48,7 @@ class FormatATimestampedSpeakersTests(unittest.TestCase):
             "\n"
             "Sure.\n"
         )
-        with tempfile.TemporaryDirectory() as d:
-            path = _write(Path(d), "simplecast_abc.txt", body)
-            episode = parse_transcript(path)
+        episode = _parse(body, "simplecast_abc.txt")
 
         speakers = [t.speaker for t in episode.turns]
         self.assertEqual(speakers, ["Alice", "Bob", "Alice"])
@@ -64,9 +69,7 @@ class FormatATimestampedSpeakersTests(unittest.TestCase):
             "\n"
             "Final thoughts.\n"
         )
-        with tempfile.TemporaryDirectory() as d:
-            path = _write(Path(d), "simplecast_xyz.txt", body)
-            episode = parse_transcript(path)
+        episode = _parse(body, "simplecast_xyz.txt")
 
         self.assertEqual([t.speaker for t in episode.turns], ["Dan", "Guest Person"])
 
@@ -89,9 +92,7 @@ class FormatATimestampedSpeakersTests(unittest.TestCase):
             "\n"
             "Welcome to the show.\n"
         )
-        with tempfile.TemporaryDirectory() as d:
-            path = _write(Path(d), "simplecast_sec.txt", body)
-            episode = parse_transcript(path)
+        episode = _parse(body, "simplecast_sec.txt")
 
         self.assertEqual([t.speaker for t in episode.turns], ["Dan", "Dan"])
         self.assertEqual([t.section for t in episode.turns], ["COLD OPEN", "INTERVIEW"])
@@ -108,9 +109,7 @@ class FormatATimestampedSpeakersTests(unittest.TestCase):
             "\n"
             "Body.\n"
         )
-        with tempfile.TemporaryDirectory() as d:
-            path = _write(Path(d), "simplecast_legacy.txt", body)
-            episode = parse_transcript(path)
+        episode = _parse(body, "simplecast_legacy.txt")
 
         self.assertEqual([t.speaker for t in episode.turns], ["Alice"])
 
@@ -128,9 +127,7 @@ class FormatATimestampedSpeakersTests(unittest.TestCase):
             "\n"
             "Body.\n"
         )
-        with tempfile.TemporaryDirectory() as d:
-            path = _write(Path(d), "simplecast_brackets.txt", body)
-            episode = parse_transcript(path)
+        episode = _parse(body, "simplecast_brackets.txt")
 
         self.assertEqual([t.speaker for t in episode.turns], ["Alice [editor]"])
 
@@ -154,9 +151,7 @@ class FormatANoDiarizationTests(unittest.TestCase):
             "[05:05]\n"
             "After five minutes.\n"
         )
-        with tempfile.TemporaryDirectory() as d:
-            path = _write(Path(d), "simplecast_nodiar.txt", body)
-            episode = parse_transcript(path)
+        episode = _parse(body, "simplecast_nodiar.txt")
 
         # Markers stripped; both bodies attributed to the host.
         self.assertEqual([t.speaker for t in episode.turns], ["Alice", "Alice"])
@@ -179,9 +174,7 @@ class FormatANoDiarizationTests(unittest.TestCase):
             "[05:05]\n"
             "Second sentence.\n"
         )
-        with tempfile.TemporaryDirectory() as d:
-            path = _write(Path(d), "simplecast_nohosts.txt", body)
-            episode = parse_transcript(path)
+        episode = _parse(body, "simplecast_nohosts.txt")
 
         self.assertEqual(episode.hosts, [])
         self.assertEqual([t.speaker for t in episode.turns], ["Unknown", "Unknown"])

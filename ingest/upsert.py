@@ -8,24 +8,13 @@ human pass can later merge them into existing canonicals.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import psycopg
 
 from chunker import ChunkSpec, ResolvedTurn
-
-
-def _conn_str() -> str:
-    url = os.environ.get("DATABASE_URL")
-    if not url:
-        raise RuntimeError("DATABASE_URL is not set")
-    return url
-
-
-def connect() -> psycopg.Connection:
-    return psycopg.connect(_conn_str(), autocommit=False)
+from db import connect  # re-exported: callers import `connect` from upsert
 
 
 def _format_vector(vec: list[float]) -> str:

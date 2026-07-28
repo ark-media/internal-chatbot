@@ -77,7 +77,7 @@ import {
   type CorpusFilters,
 } from '../lib/retrieval';
 import { routeQuery } from '../lib/router';
-import { sql } from '../lib/db';
+import { lookupShowGroupId, lookupShowId } from '../lib/show-lookup';
 import {
   buildCachedSystemContent,
   craftScript,
@@ -279,27 +279,6 @@ async function gradeRefusal(path: string): Promise<boolean> {
   return refusalRate >= 0.9;
 }
 
-async function resolveShowId(name: string): Promise<number | null> {
-  const rows = (await sql`
-    SELECT show_id FROM shows
-     WHERE LOWER(name) = LOWER(${name})
-        OR LOWER(name) LIKE '%' || LOWER(${name}) || '%'
-  ORDER BY (LOWER(name) = LOWER(${name})) DESC, name
-     LIMIT 1
-  `) as unknown as Array<{ show_id: number }>;
-  return rows[0]?.show_id ?? null;
-}
-
-async function resolveShowGroupId(name: string): Promise<number | null> {
-  const rows = (await sql`
-    SELECT group_id FROM show_groups
-     WHERE LOWER(name) = LOWER(${name})
-        OR LOWER(name) LIKE '%' || LOWER(${name}) || '%'
-  ORDER BY (LOWER(name) = LOWER(${name})) DESC, name
-     LIMIT 1
-  `) as unknown as Array<{ group_id: number }>;
-  return rows[0]?.group_id ?? null;
-}
 
 async function gradeAggregate(path: string): Promise<boolean> {
   const questions = loadJsonl<AggregateQ>(path);
@@ -322,7 +301,7 @@ async function gradeAggregate(path: string): Promise<boolean> {
         console.log(`[MISS] ${q.id} — speaker not found: ${q.speaker}`);
         continue;
       }
-      const showId = await resolveShowId(q.show);
+      const showId = await lookupShowId(q.show);
       if (!showId) {
         console.log(`[MISS] ${q.id} — show not found: ${q.show}`);
         continue;
@@ -349,7 +328,7 @@ async function gradeAggregate(path: string): Promise<boolean> {
     let showIds: number[] | undefined;
     let showGroupIds: number[] | undefined;
     if (q.show) {
-      const sid = await resolveShowId(q.show);
+      const sid = await lookupShowId(q.show);
       if (!sid) {
         console.log(`[MISS] ${q.id} — show not found: ${q.show}`);
         continue;
@@ -357,7 +336,7 @@ async function gradeAggregate(path: string): Promise<boolean> {
       showIds = [sid];
     }
     if (q.showGroup) {
-      const gid = await resolveShowGroupId(q.showGroup);
+      const gid = await lookupShowGroupId(q.showGroup);
       if (!gid) {
         console.log(`[MISS] ${q.id} — showGroup not found: ${q.showGroup}`);
         continue;
@@ -859,7 +838,7 @@ async function gradeTranslateAdapt(path: string): Promise<boolean> {
   // The web-search tool caches through lib/tool-cache (Postgres); make sure the
   // table exists before the first tool call.
   await ensureTable();
-  const arkNewsDailyShowId = await resolveShowId('Ark News Daily');
+  const arkNewsDailyShowId = await lookupShowId('Ark News Daily');
   const tools = buildFactCheckTools(arkNewsDailyShowId);
 
   let scored = 0;
@@ -992,7 +971,7 @@ async function gradeNewsChat(path: string): Promise<boolean> {
   );
 
   await ensureTable();
-  const arkNewsDailyShowId = await resolveShowId('Ark News Daily');
+  const arkNewsDailyShowId = await lookupShowId('Ark News Daily');
   const tools = buildFactCheckTools(arkNewsDailyShowId);
 
   let scored = 0;
@@ -1055,48 +1034,36 @@ async function gradeNewsChat(path: string): Promise<boolean> {
   return pass;
 }
 
+// One row per bucket: its default question file and its grader. `BUCKET` keys
+// straight into this, so a new bucket is one line — and the usage string is
+// generated from the keys rather than hand-maintained alongside them (it used
+// to be a third place listing every bucket name, kept in sync by hand).
+// Insertion order is the order shown in that usage string.
+const BUCKETS: Record<
+  string,
+  { path: string; grade: (path: string) => Promise<boolean> }
+> = {
+  lookup: { path: 'eval/questions.jsonl', grade: gradeLookup },
+  dossier: { path: 'eval/dossier.jsonl', grade: gradeDossier },
+  refusal: { path: 'eval/refusal.jsonl', grade: gradeRefusal },
+  aggregate: { path: 'eval/aggregate.jsonl', grade: gradeAggregate },
+  clipdist: { path: 'eval/clip-distribution.jsonl', grade: gradeClipDistribution },
+  translate: { path: 'eval/translate-adapt.jsonl', grade: gradeTranslateAdapt },
+  newschat: { path: 'eval/news-chat.jsonl', grade: gradeNewsChat },
+};
+
 async function main() {
   const bucket = process.env.BUCKET ?? 'lookup';
-  const defaultPaths: Record<string, string> = {
-    lookup: 'eval/questions.jsonl',
-    dossier: 'eval/dossier.jsonl',
-    refusal: 'eval/refusal.jsonl',
-    aggregate: 'eval/aggregate.jsonl',
-    clipdist: 'eval/clip-distribution.jsonl',
-    translate: 'eval/translate-adapt.jsonl',
-    newschat: 'eval/news-chat.jsonl',
-  };
-  const path = resolve(process.argv[2] ?? defaultPaths[bucket] ?? 'eval/questions.jsonl');
-
-  let pass = false;
-  switch (bucket) {
-    case 'lookup':
-      pass = await gradeLookup(path);
-      break;
-    case 'dossier':
-      pass = await gradeDossier(path);
-      break;
-    case 'refusal':
-      pass = await gradeRefusal(path);
-      break;
-    case 'aggregate':
-      pass = await gradeAggregate(path);
-      break;
-    case 'clipdist':
-      pass = await gradeClipDistribution(path);
-      break;
-    case 'translate':
-      pass = await gradeTranslateAdapt(path);
-      break;
-    case 'newschat':
-      pass = await gradeNewsChat(path);
-      break;
-    default:
-      console.error(
-        `unknown BUCKET=${bucket} (use lookup|dossier|refusal|aggregate|clipdist|translate|newschat)`,
-      );
-      process.exit(2);
+  const entry = BUCKETS[bucket];
+  if (!entry) {
+    console.error(
+      `unknown BUCKET=${bucket} (use ${Object.keys(BUCKETS).join('|')})`,
+    );
+    process.exit(2);
   }
+
+  // An explicit argv path overrides the bucket's default question file.
+  const pass = await entry.grade(resolve(process.argv[2] ?? entry.path));
   process.exit(pass ? 0 : 1);
 }
 

@@ -3,7 +3,6 @@ import {
   convertToModelMessages,
   createUIMessageStream,
   createUIMessageStreamResponse,
-  safeValidateUIMessages,
   stepCountIs,
   streamText,
   tool,
@@ -23,9 +22,7 @@ import {
   type RetrievedChunk,
 } from '@/lib/retrieval';
 import { trimDossierToBudget } from '@/lib/dossier-budget';
-import { sql } from '@/lib/db';
 import { shows } from '@/lib/knowledge-base';
-import { checkRateLimit } from '@/lib/rate-limit';
 import { routeQuery, type RoutedQuery } from '@/lib/router';
 import { stripStaleToolOutputs } from '@/lib/strip-tool-outputs';
 import type { ChatUIMessage, PreloadedSources, UsageData } from '@/components/chat-types';
@@ -33,9 +30,10 @@ import { ensureTable, getCached, setCached, cacheKey } from '@/lib/tool-cache';
 import {
   ensureChatTables,
   persistAssistantMessage,
-  persistIncomingMessages,
-  deleteMessageAndSubsequent,
 } from '@/lib/chats';
+import { errText, logEvent, warnEvent } from '@/lib/log-event';
+import { prepareChatRoute, persistTurn } from '@/lib/chat-route';
+import { resolveShow, resolveShowGroup } from '@/lib/show-lookup';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -82,81 +80,6 @@ Rules — follow strictly:
    - countGuestAppearances — for "how many times has <person> been on <show>" style questions. Returns the count plus the episode list. Aggregate results from this tool are database-level facts and do NOT need [id:N]/[turn:N] citations. State the count in prose (e.g. "Nadav Eyal has appeared on Call me Back 14 times"); the UI renders the episodes as a clickable list below your message, so do NOT re-list each episode title/date inline — a one-line summary (first date, last date, or notable range) is fine.
    - topGuests — call this tool whenever the user asks for a ranking of guests on a show, group of shows, or the corpus as a whole. Trigger phrases include: "top N guests", "most frequent guests", "who appears most often", "recurring guests", "regulars (excluding hosts)", and variants with a date range ("top guests in 2024"). Accepts an optional show name OR show group name (mutually exclusive) and an optional date range; hosts of the selected shows are excluded automatically. Default limit is 10 if the user didn't specify. Returns a ranked list with episode counts and, for each guest, the list of episodes (on the filtered show/group) they appeared in. Presentation is handled entirely by the UI: it renders the ranking as a table with a "View" action that opens the guest's episode list in a side panel. Your text reply MUST be EXACTLY one short lead-in sentence and then STOP — for example: "Here are the most frequent guests on Call me Back." FORBIDDEN in your text (do NOT include any of these): (a) any markdown table or list of guests; (b) any list of episodes; (c) any mention of ties, tiebreaking, or "Note on ties"; (d) any explanation of what the UI shows, how to click, or how the list is rendered; (e) any methodology notes such as "hosts are excluded" or "ranked by episode count"; (f) turn counts. Aggregates do NOT need [id:N]/[turn:N] citations.
 7. Keep answers concise. When comparing or summarizing, use short bullets with citations.`;
-}
-
-// -- Name resolvers ----------------------------------------------------------
-
-type ResolveError = {
-  ok: false;
-  error: string;
-  note: string;
-  candidates?: string[];
-};
-
-async function resolveShowByName(
-  name: string,
-): Promise<{ ok: true; showId: number; name: string } | ResolveError> {
-  const rows = (await sql`
-    SELECT show_id, name FROM shows
-     WHERE LOWER(name) = LOWER(${name})
-        OR LOWER(name) LIKE '%' || LOWER(${name}) || '%'
-  ORDER BY (LOWER(name) = LOWER(${name})) DESC, name
-  `) as unknown as Array<{ show_id: number; name: string }>;
-
-  if (rows.length === 0) {
-    const all = (await sql`SELECT name FROM shows ORDER BY name`) as unknown as Array<{
-      name: string;
-    }>;
-    return {
-      ok: false,
-      error: 'unknown_show',
-      note: `No show matching "${name}". Known shows: ${all.map((s) => s.name).join(', ')}.`,
-    };
-  }
-  const exact = rows[0].name.toLowerCase() === name.toLowerCase() ? rows[0] : null;
-  if (!exact && rows.length > 1) {
-    return {
-      ok: false,
-      error: 'ambiguous_show',
-      note: `"${name}" matches multiple shows. Ask the user which they meant.`,
-      candidates: rows.map((r) => r.name),
-    };
-  }
-  const pick = exact ?? rows[0];
-  return { ok: true, showId: pick.show_id, name: pick.name };
-}
-
-async function resolveShowGroupByName(
-  name: string,
-): Promise<{ ok: true; groupId: number; name: string } | ResolveError> {
-  const rows = (await sql`
-    SELECT group_id, name FROM show_groups
-     WHERE LOWER(name) = LOWER(${name})
-        OR LOWER(name) LIKE '%' || LOWER(${name}) || '%'
-  ORDER BY (LOWER(name) = LOWER(${name})) DESC, name
-  `) as unknown as Array<{ group_id: number; name: string }>;
-
-  if (rows.length === 0) {
-    const all = (await sql`SELECT name FROM show_groups ORDER BY name`) as unknown as Array<{
-      name: string;
-    }>;
-    return {
-      ok: false,
-      error: 'unknown_group',
-      note: `No show group matching "${name}". Known groups: ${all.map((g) => g.name).join(', ') || '(none)'}.`,
-    };
-  }
-  const exact = rows[0].name.toLowerCase() === name.toLowerCase() ? rows[0] : null;
-  if (!exact && rows.length > 1) {
-    return {
-      ok: false,
-      error: 'ambiguous_group',
-      note: `"${name}" matches multiple show groups. Ask the user which they meant.`,
-      candidates: rows.map((r) => r.name),
-    };
-  }
-  const pick = exact ?? rows[0];
-  return { ok: true, groupId: pick.group_id, name: pick.name };
 }
 
 // -- Tools -------------------------------------------------------------------
@@ -275,7 +198,7 @@ const countAppearancesTool = tool({
     guestName: z.string().describe('Full name of the guest, e.g. "Nadav Eyal".'),
   }),
   execute: async (input) => {
-    const resolvedShow = await resolveShowByName(input.podcastName);
+    const resolvedShow = await resolveShow(input.podcastName);
     if (!resolvedShow.ok) {
       return {
         error: resolvedShow.error,
@@ -283,7 +206,7 @@ const countAppearancesTool = tool({
         ...(resolvedShow.candidates ? { candidates: resolvedShow.candidates } : {}),
       };
     }
-    const showId = resolvedShow.showId;
+    const showId = resolvedShow.id;
 
     const matches = await listSpeakers({
       nameLike: input.guestName,
@@ -378,7 +301,7 @@ const topGuestsTool = tool({
     let resolvedGroupName: string | null = null;
 
     if (input.podcastName) {
-      const resolved = await resolveShowByName(input.podcastName);
+      const resolved = await resolveShow(input.podcastName);
       if (!resolved.ok) {
         return {
           error: resolved.error,
@@ -386,12 +309,12 @@ const topGuestsTool = tool({
           ...(resolved.candidates ? { candidates: resolved.candidates } : {}),
         };
       }
-      showIds = [resolved.showId];
+      showIds = [resolved.id];
       resolvedShowName = resolved.name;
     }
 
     if (input.podcastGroupName) {
-      const resolved = await resolveShowGroupByName(input.podcastGroupName);
+      const resolved = await resolveShowGroup(input.podcastGroupName);
       if (!resolved.ok) {
         return {
           error: resolved.error,
@@ -399,7 +322,7 @@ const topGuestsTool = tool({
           ...(resolved.candidates ? { candidates: resolved.candidates } : {}),
         };
       }
-      showGroupIds = [resolved.groupId];
+      showGroupIds = [resolved.id];
       resolvedGroupName = resolved.name;
     }
 
@@ -542,62 +465,24 @@ function buildDisambiguationBlock(
 // -- Route handler -----------------------------------------------------------
 
 export async function POST(req: Request) {
-  await ensureTable();
-  await ensureChatTables();
+  const prep = await prepareChatRoute(req, {
+    rateLimitKey: 'chat',
+    ensureTables: async () => {
+      await ensureTable();
+      await ensureChatTables();
+    },
+  });
+  if (!prep.ok) return prep.response;
+  const { messages, chatId, editingMessageId } = prep.prepared;
 
-  const ip =
-    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-    req.headers.get('x-real-ip') ||
-    'unknown';
-  const { ok } = await checkRateLimit(`chat:${ip}`);
-  if (!ok) {
-    return new Response('Rate limit exceeded', { status: 429 });
-  }
+  await persistTurn({
+    chatId,
+    editingMessageId,
+    surface: 'archive',
+    messages,
+    logKey: 'chat',
+  });
 
-  const origin = req.headers.get('origin');
-  const host = req.headers.get('host');
-  if (origin && host) {
-    try {
-      if (new URL(origin).host !== host) {
-        return new Response('Forbidden', { status: 403 });
-      }
-    } catch {
-      return new Response('Forbidden', { status: 403 });
-    }
-  }
-
-  const body = (await req.json()) as { messages?: unknown; chatId?: string; editingMessageId?: string };
-  const chatId = typeof body.chatId === 'string' ? body.chatId : undefined;
-  const editingMessageId = typeof body.editingMessageId === 'string' ? body.editingMessageId : undefined;
-
-  const validated = await safeValidateUIMessages<UIMessage>({ messages: body.messages });
-  if (!validated.success) {
-    return new Response(
-      JSON.stringify({ error: 'invalid_messages', detail: validated.error.message }),
-      { status: 400, headers: { 'content-type': 'application/json' } },
-    );
-  }
-  const messages = validated.data;
-
-  if (chatId && editingMessageId) {
-    try {
-      await deleteMessageAndSubsequent(chatId, editingMessageId);
-    } catch (err) {
-      console.warn(JSON.stringify({ event: 'chat.delete_for_edit_error', err: String(err) }));
-    }
-  }
-
-  if (chatId) {
-    try {
-      await persistIncomingMessages({
-        chatId,
-        surface: 'archive',
-        messages: messages.map((m) => ({ id: m.id, role: m.role, parts: m.parts ?? [] })),
-      });
-    } catch (err) {
-      console.warn(JSON.stringify({ event: 'chat.persist_user_error', err: String(err) }));
-    }
-  }
   const model = req.headers.get('x-model') || DEFAULT_MODEL_ID;
   const userText = lastUserText(messages);
   const queryHash = hashQuery(userText);
@@ -622,9 +507,7 @@ export async function POST(req: Request) {
     try {
       routed = await routeQuery(userText, today);
     } catch (err) {
-      console.warn(
-        JSON.stringify({ event: 'chat.route_error', q: queryHash, err: String(err) }),
-      );
+      warnEvent('chat.route_error', { q: queryHash, err: errText(err) });
     }
     routingMs = Date.now() - routeStart;
 
@@ -665,13 +548,7 @@ export async function POST(req: Request) {
           dossierSpeakerName = page.turns[0]?.speakerName ?? '';
           dossierBookend = page.bookend;
         } catch (err) {
-          console.warn(
-            JSON.stringify({
-              event: 'chat.dossier_error',
-              q: queryHash,
-              err: String(err),
-            }),
-          );
+          warnEvent('chat.dossier_error', { q: queryHash, err: errText(err) });
         }
       } else {
         // intent === 'lookup' (or dossier that fell back)
@@ -686,14 +563,11 @@ export async function POST(req: Request) {
           const results = await Promise.all(
             routed.subqueries.map((q) =>
               lookupCorpus({ query: q, filters, finalK: 6 }).catch((err) => {
-                console.warn(
-                  JSON.stringify({
-                    event: 'chat.preretrieval_error',
-                    q: queryHash,
-                    subquery: q,
-                    err: String(err),
-                  }),
-                );
+                warnEvent('chat.preretrieval_error', {
+                  q: queryHash,
+                  subquery: q,
+                  err: errText(err),
+                });
                 return [] as RetrievedChunk[];
               }),
             ),
@@ -706,9 +580,7 @@ export async function POST(req: Request) {
           // faithful paraphrase keeps a small bias for its highest-rank chunk.
           preRetrievedChunks = roundRobinMergeChunks(results, PRE_CHUNK_LIMIT);
         } catch (err) {
-          console.warn(
-            JSON.stringify({ event: 'chat.lookup_error', q: queryHash, err: String(err) }),
-          );
+          warnEvent('chat.lookup_error', { q: queryHash, err: errText(err) });
         }
       }
       retrievalMs = Date.now() - retrStart;
@@ -737,15 +609,12 @@ export async function POST(req: Request) {
       minTurns: 3,
     });
     if (trim.truncated) {
-      console.warn(
-        JSON.stringify({
-          event: 'chat.dossier_truncated',
-          q: queryHash,
-          originalCount: dossierTurns.length,
-          cappedCount: trim.turns.length,
-          bookend: dossierBookend !== null,
-        }),
-      );
+      warnEvent('chat.dossier_truncated', {
+        q: queryHash,
+        originalCount: dossierTurns.length,
+        cappedCount: trim.turns.length,
+        bookend: dossierBookend !== null,
+      });
     }
     dossierTurns = trim.turns;
     dossierBookend = trim.bookend;
@@ -803,15 +672,12 @@ export async function POST(req: Request) {
   const systemText = shortCircuitInstruction ?? (baseSystemPrompt + dynamicContent);
   const estimatedSystemTokens = Math.ceil(systemText.length / 4);
   if (estimatedSystemTokens > SYSTEM_OVERSIZE_WARN_TOKENS) {
-    console.warn(
-      JSON.stringify({
-        event: 'chat.context_oversize',
-        q: queryHash,
-        estimatedSystemTokens,
-        dossierTurnCount: dossierTurns.length,
-        preRetrievedCount: preRetrievedChunks.length,
-      }),
-    );
+    warnEvent('chat.context_oversize', {
+      q: queryHash,
+      estimatedSystemTokens,
+      dossierTurnCount: dossierTurns.length,
+      preRetrievedCount: preRetrievedChunks.length,
+    });
   }
 
   const preloaded: PreloadedSources = {
@@ -901,36 +767,27 @@ export async function POST(req: Request) {
       const isRefusal = text.trim() === NO_INFO;
       const violatesCitationRule =
         !hasCitation && !isRefusal && evidenceCount > 0 && !shortCircuitInstruction;
-      console.log(
-        JSON.stringify({
-          event: 'chat.finish',
-          q: queryHash,
-          ms: Date.now() - started,
-          finishReason,
-          intent: routed?.intent ?? null,
-          toolCalls: allToolCalls.length,
-          toolChunkCount,
-          preRetrievedCount: preRetrievedChunks.length,
-          dossierTurnCount: dossierTurns.length,
-          dossierTotal,
-          routingMs,
-          retrievalMs,
-          hasCitation,
-          isRefusal,
-          violatesCitationRule,
-          inputTokens: usage?.inputTokens,
-          outputTokens: usage?.outputTokens,
-          cachedInputTokens: usage?.cachedInputTokens,
-        }),
-      );
+      logEvent('chat.finish', {
+        q: queryHash,
+        ms: Date.now() - started,
+        finishReason,
+        intent: routed?.intent ?? null,
+        toolCalls: allToolCalls.length,
+        toolChunkCount,
+        preRetrievedCount: preRetrievedChunks.length,
+        dossierTurnCount: dossierTurns.length,
+        dossierTotal,
+        routingMs,
+        retrievalMs,
+        hasCitation,
+        isRefusal,
+        violatesCitationRule,
+        inputTokens: usage?.inputTokens,
+        outputTokens: usage?.outputTokens,
+        cachedInputTokens: usage?.cachedInputTokens,
+      });
       if (violatesCitationRule) {
-        console.warn(
-          JSON.stringify({
-            event: 'chat.citation_violation',
-            q: queryHash,
-            evidenceCount,
-          }),
-        );
+        warnEvent('chat.citation_violation', { q: queryHash, evidenceCount });
       }
     },
   });
@@ -974,7 +831,7 @@ export async function POST(req: Request) {
           },
         });
       } catch (err) {
-        console.warn(JSON.stringify({ event: 'chat.persist_assistant_error', err: String(err) }));
+        warnEvent('chat.persist_assistant_error', { err: errText(err) });
       }
     },
   });
