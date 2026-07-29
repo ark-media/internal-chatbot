@@ -39,7 +39,15 @@ The MOU gives the two sides 60 days to continue negotiating. But given all we've
 
 ---
 
-### "On Monday, candidates Haley Stevens and Abdul El-Sayed met for their final debate."
+### "Michigan's Democratic Senate primary has turned into the most expensive proxy fight over Israel the party has ever seen."
+
+Michigan's Democratic Senate primary has turned into the most expensive proxy fight over Israel the party has ever seen.
+
+SPEAKER_07 [02:38]
+
+And good evening and welcome to Studio C for the Democratic Senate debate. This is a race the whole country is watching.
+
+Deborah Pardes [02:44]
 
 On Monday, candidates Haley Stevens and Abdul El-Sayed met for their final debate. El-Sayed criticized Stevens for her recent vote against an amendment that would have cut military aid to Israel, which he called the worst use of our tax dollars.
 
@@ -64,8 +72,10 @@ On El-Sayed's side, his campaign and outside backers have spent around $15 milli
 - **The right level of context — for people as well as events.** Each candidate is explained, not just named, and after the hook rather than before it: office, wing of the party, résumé, backers, platform, plus one nuance the reporting supports ("El-Sayed rejects the socialist label"; a stance on Israel "as much about affordability as morality"). The shorthand is attributed, not asserted: "has been called the Mamdani of Michigan."
 - **Connections make it bigger than one race.** "Unlike New York, where three Mamdani-aligned candidates won their races" places Michigan in the pattern the coverage has been following — the moderate–progressive divide and the Israel fault line — and the battleground-state point explains why this race is the more predictive test.
 - **Both sides get a voice and a number.** One clip per candidate; spending on both sides ($30 million from AIPAC, attributed in the narration — "CBS News reported last week" — against roughly $15 million including pro-Palestinian super PACs); both constituencies (the Jewish donor base, and the Arab and Muslim voters behind 2024's uncommitted votes). Balance is built into the structure instead of hedged in the language.
-- **Opens on the trigger, closes on the thesis.** One plain sentence on the day's event, first clip immediately after. The big question — can AIPAC money still elect candidates, or has it become toxic for Democratic voters? — lands at the close, tied to the concrete date (August 4th). The closing either/or question is genuine forward-looking stakes, which the primary itself will answer, not a rhetorical tic.
-- **Clips are set up to land.** The narration explains the vote El-Sayed's clip attacks before playing it, and frames Stevens's clip as the answer to a question the listener just heard posed ("she was asked whether that kind of money meant she was bought and paid for").
+- **A one-line frame the block spends itself earning.** The opening sentence is a big claim — "the most expensive proxy fight over Israel the party has ever seen" — and every superlative in it is cashed by the reporting that follows: the largest-ever AIPAC investment ($30 million), the other side's $15 million, the Israel fault line running through both candidacies. This is "lead with significance" done right: the frame is bold but factual, never a teaser.
+- **The frame and the closing question bookend the block.** The open names what the fight is; the close, tied to the concrete date (August 4th), names what the result will tell us — can AIPAC money still elect candidates, or has it become toxic for Democratic voters? The closing either/or question is genuine forward-looking stakes, which the primary itself will answer, not a rhetorical tic. Between the bookends, the trigger event is stated plainly ("On Monday, candidates... met for their final debate").
+- **Audio arrives after one sentence — and the first clip is scene-setting, not argument.** The moderator's welcome is ambient sound that drops the listener into the debate hall and does stakes work in an outside voice ("a race the whole country is watching"), so Deborah doesn't have to assert the national significance herself. Ambient audio from the event is a clip type in its own right, not just a fallback when no quote exists.
+- **Clips are set up to land.** The frame sentence is all the setup the ambient clip needs; the narration explains the vote El-Sayed's clip attacks before playing it, and frames Stevens's clip as the answer to a question the listener just heard posed ("she was asked whether that kind of money meant she was bought and paid for").
 - **The standards are block-agnostic.** This aired as a standalone single-block story. Everything above — depth, context for people, connections, balance — applies whether the story runs as an A, a B, or an unlabeled single block; the letter sets length and placement, not the level of analysis.
 
 ---

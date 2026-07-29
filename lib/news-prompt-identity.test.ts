@@ -34,11 +34,13 @@ import { getNewsExamplesForBlock, newsSystemPrompt } from './news-prompt';
 //   The Script Draft Workflow now carries "explain, don't just present" for
 //   people as well as events, "draw connections within our coverage", a
 //   block-agnostic standards note (an unlabeled block gets every best
-//   practice), and the contest-story shape (trigger lede, per-side voice and
-//   numbers, close on the date and the question the result answers).
+//   practice), and the contest-story shape (a one-line frame earned by the
+//   block's reporting, an early clip — ambient scene audio counts — the
+//   trigger stated plainly, per-side voice and numbers, and a close on the
+//   date and the question the result answers, bookending the opening frame).
 // - orchestrator: unchanged through the whole redesign.
 const EXPECTED_SHA256 = {
-  chat: 'f0fe66abd1d43438cb7c990075fa396ffbc5da1d5db588c11d1bfe65ebb4e3a5',
+  chat: '34ff4e3b11081f8b6c476ac7040ff5b3940721d6a426362dc9dac2227e7a15e5',
   orchestrator: 'f29ab50f8218f3952225e058ac3f7ff09dccab3b0d978db1dba89dea5e7ae48c',
 } as const;
 
