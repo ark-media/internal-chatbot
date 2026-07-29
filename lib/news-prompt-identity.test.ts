@@ -22,9 +22,16 @@ import { getNewsExamplesForBlock, newsSystemPrompt } from './news-prompt';
 //   narrating its own sourcing decisions — the evidence-contract bullet now
 //   pins FLAG content (evidence gap only) and placement (inline where spoken
 //   or beside the SOURCES entry, never a trailing note).
+//   Re-baselined 2026-07-29 after a Michigan-primary chat shipped a pronoun
+//   misattribution and a false "combined" figure past the readback, then
+//   confabulated a derivation when challenged: readback dimensions 1 and 6
+//   now verify the sentence around each claim/figure (subject, action,
+//   direction; no self-computed sums presented as sourced totals), and a new
+//   non-negotiable requires re-opening the source and quoting it before
+//   answering a writer's challenge or proposing a fix.
 // - orchestrator: unchanged through the whole redesign.
 const EXPECTED_SHA256 = {
-  chat: 'e9e39b7592ff004a5f25e94e7a0c427a19a2b85984e2f95b612753f00fdce311',
+  chat: 'e8e4adae00ebda4babdb56643be73f542eee7f9d120777121f0c51680dab6e9d',
   orchestrator: 'f29ab50f8218f3952225e058ac3f7ff09dccab3b0d978db1dba89dea5e7ae48c',
 } as const;
 
