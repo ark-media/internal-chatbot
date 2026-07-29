@@ -80,6 +80,29 @@ On El-Sayed's side, his campaign and outside backers have spent around $15 milli
 
 ---
 
+### "After a brief period of calm in the fighting with the U.S., last night Iran launched a new attack on a U.S. base in Jordan."
+
+After a brief period of calm in the fighting with the U.S., last night Iran launched a new attack on a U.S. base in Jordan. U.S. Central Command reported that Iran fired four ballistic missiles, but they were intercepted by air defenses. Earlier reports from mediators in the region said the two sides were close to reviving the failed Memorandum of Understanding signed last month. Trump also said there were good talks underway with Iran, while still threatening that the U.S. could resume its attacks at any moment. Iran denied the talks but acknowledged they had been negotiating with Oman. According to Reuters, Oman presented Iran with a plan to manage the Strait of Hormuz, which included a proposal to charge voluntary fees for anyone using it. Iran rejected the plan, insisting it retain full control of the strait. In the midst of all of that, President Trump and Prime Minister Benjamin Netanyahu met at the White House yesterday for about 90 minutes. It was their first official sit-down in months. In a video from the White House lawn, Netanyahu said it was one of the best meetings he's ever had with the president, and the White House also described it as productive. No press was in the room. Earlier in the morning, Trump didn't seem to be thrilled about the intelligence Netanyahu was supposedly bringing. It was related to Iran's nuclear program and the nuclear site Pickaxe Mountain. This is Trump speaking to Fox News.
+
+SPEAKER_05 [02:05]
+
+But now I heard BB announce that. I said, "Why didn't you just tell it to me? Why do you have to announce it to the world?" I know exactly what's going on at Pickaxe. It's not a big problem.
+
+Deborah Pardes [02:14]
+
+According to Netanyahu's communication director, the president and prime minister came away from the meeting in agreement that there's no daylight between them on their core goal: preventing Iran from getting a nuclear weapon.
+
+#### Why it works:
+- **The trigger is not the lede — and that's the design.** The writer's trigger was the Trump–Netanyahu meeting, flagged up front as thin ("we don't have many details on what was discussed"). Instead of inflating it, the block opens on the strongest sourced development of the day — the overnight missile attack — and builds the whole Iran–U.S. state of play (attack intercepted, MOU-revival reports, Trump's good-talks-plus-threat, Iran's denial and the Oman channel, the Hormuz plan and its rejection), so the meeting lands mid-block with real weight: "In the midst of all of that…"
+- **The thin event is covered with discipline, not padding.** For the meeting itself, only what is knowable from outside the room: about 90 minutes, first official sit-down in months, Netanyahu's lawn-video verdict, the White House's "productive" — and the explicit negative detail, "No press was in the room." Nothing speculates about the agenda; the absence of information is itself reported as fact.
+- **A writer's question is answered, not forced in.** The request asked whether Trump's meeting with Zelensky connected to Iran via the Caspian supply-line strike. That angle was chased and did not survive into the aired block; the other consideration — the overnight Iran attack — earned the opening instead. The workflow is investigate, recommend, and let the writer settle it: an angle from the notes that doesn't earn its place stays out.
+- **One discordant note against the glowing readouts.** Both sides called the meeting a success, and the block doesn't leave it there. The Fox News clip — Trump irritated that Netanyahu announced the Pickaxe Mountain intelligence instead of telling him privately — is the single sourced note of friction, set up plainly ("This is Trump speaking to Fox News.") and placed in the timeline ("Earlier in the morning…"). Tension is carried by a clip, never by editorializing.
+- **Chronology is the spine.** "Last night… Earlier reports… In the midst of all of that… yesterday… Earlier in the morning…" The block is organized as the day around the meeting, so every transition is a literal time move a listener can follow without rewinding.
+- **The attribution ladder never breaks.** U.S. Central Command, mediators in the region, Trump's own words, Iran's denial-but-acknowledgment, "According to Reuters," the lawn video, the White House, "According to Netanyahu's communication director." Each claim carries its source in the flow — which is what lets a details-scarce story stay confident rather than hedged.
+- **Closes on the agreed core, forward-looking.** The comms-director line — no daylight on preventing Iran from getting a nuclear weapon — resolves the friction beat and leaves the listener with the stake that outlasts the meeting itself.
+
+---
+
 ## B BLOCKS
 
 The second story — often related to A or providing broader context, but from a different angle. Tone: "Now here's the next piece of this story" or "Separately, here's another development."

@@ -38,9 +38,20 @@ import { getNewsExamplesForBlock, newsSystemPrompt } from './news-prompt';
 //   block's reporting, an early clip — ambient scene audio counts — the
 //   trigger stated plainly, per-side voice and numbers, and a close on the
 //   date and the question the result answers, bookending the opening frame).
+//   Re-baselined again 2026-07-29: comparing a chat draft against the aired
+//   Trump–Netanyahu block showed two gaps. The Script Draft Workflow now
+//   distinguishes writer questions ("is this worth including?") from contract
+//   beats — investigate, answer in the readback with a recommendation, and
+//   only include what earns its place — and adds the thin-trigger story
+//   shape: when the writer flags the trigger as short on details, open on
+//   the strongest sourced surrounding development, land the trigger
+//   mid-block with only what is knowable (logistics, each side's
+//   characterization, the telling absence), set one sourced note of
+//   friction against a glowing readout, and close on the agreed point or
+//   the next concrete thing to watch.
 // - orchestrator: unchanged through the whole redesign.
 const EXPECTED_SHA256 = {
-  chat: '34ff4e3b11081f8b6c476ac7040ff5b3940721d6a426362dc9dac2227e7a15e5',
+  chat: '5b88e75c11429083f8d4214830dccf710807fa334f53a2e7d82f54056f9e8c8f',
   orchestrator: 'f29ab50f8218f3952225e058ac3f7ff09dccab3b0d978db1dba89dea5e7ae48c',
 } as const;
 
