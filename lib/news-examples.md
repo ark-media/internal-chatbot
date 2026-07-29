@@ -39,6 +39,37 @@ The MOU gives the two sides 60 days to continue negotiating. But given all we've
 
 ---
 
+### "On Monday, candidates Haley Stevens and Abdul El-Sayed met for their final debate."
+
+On Monday, candidates Haley Stevens and Abdul El-Sayed met for their final debate. El-Sayed criticized Stevens for her recent vote against an amendment that would have cut military aid to Israel, which he called the worst use of our tax dollars.
+
+Abdul El-Sayed [03:00]
+
+Just last week, our friend here voted to send $3.3 billion of your tax dollars to a foreign government. That is the pro quo that comes with the quid of $30 million spent by AIPAC.
+
+Deborah Pardes [03:12]
+
+Stevens currently represents Michigan in the House and is running as part of the party's more moderate wing. El-Sayed has been called the Mamdani of Michigan. He's a doctor by training who's held public health positions on the local level and ran unsuccessfully for governor in 2018. He has the backing of Bernie Sanders and is campaigning on progressive policies like Medicare for all. El-Sayed rejects the socialist label, but like others, he's made his stance on Israel as much about affordability as morality. He says Israel has committed genocide in Gaza and wants independence from what he calls corporate and foreign influence in politics, especially AIPAC. CBS News reported last week that AIPAC and its affiliated groups have spent close to $30 million backing Stevens, which is their largest investment ever in a single race. During Monday's debate, she was asked whether that kind of money meant she was bought and paid for.
+
+Haley Stevens [04:12]
+
+I have been very clear, consistent, and transparent. I want to see long-term peace. I want to see a two-state solution. I am deeply proud to represent one of the largest Jewish populations in a congressional district in the country.
+
+Deborah Pardes [04:28]
+
+On El-Sayed's side, his campaign and outside backers have spent around $15 million, including from some super PACs with an explicitly pro-Palestinian agenda. Unlike New York, where three Mamdani-aligned candidates won their races, Michigan is more of a battleground state and arguably more predictive of where the broader Democratic Party is headed. Michigan is home to a major Jewish donor base. It also has a large Arab and Muslim population, the same voters who, in 2024, cast many of the uncommitted primary votes to protest President Biden's handling of the war in Gaza. The primary is on August 4th. What voters decide will provide more insight into a big question: Can AIPAC funding still reliably help elect candidates, or has the group now become too toxic in the eyes of Democratic voters?
+
+#### Why it works:
+- **Depth is what makes it work.** The debate is the entry point, but the block is a smart analysis of the whole race: who the candidates are, whose money is behind them, which voters will decide it, and what the result will say about the party. Every piece of context earns its place in the telling of the story — nothing reads as a detour or a data dump.
+- **The right level of context — for people as well as events.** Each candidate is explained, not just named, and after the hook rather than before it: office, wing of the party, résumé, backers, platform, plus one nuance the reporting supports ("El-Sayed rejects the socialist label"; a stance on Israel "as much about affordability as morality"). The shorthand is attributed, not asserted: "has been called the Mamdani of Michigan."
+- **Connections make it bigger than one race.** "Unlike New York, where three Mamdani-aligned candidates won their races" places Michigan in the pattern the coverage has been following — the moderate–progressive divide and the Israel fault line — and the battleground-state point explains why this race is the more predictive test.
+- **Both sides get a voice and a number.** One clip per candidate; spending on both sides ($30 million from AIPAC, attributed in the narration — "CBS News reported last week" — against roughly $15 million including pro-Palestinian super PACs); both constituencies (the Jewish donor base, and the Arab and Muslim voters behind 2024's uncommitted votes). Balance is built into the structure instead of hedged in the language.
+- **Opens on the trigger, closes on the thesis.** One plain sentence on the day's event, first clip immediately after. The big question — can AIPAC money still elect candidates, or has it become toxic for Democratic voters? — lands at the close, tied to the concrete date (August 4th). The closing either/or question is genuine forward-looking stakes, which the primary itself will answer, not a rhetorical tic.
+- **Clips are set up to land.** The narration explains the vote El-Sayed's clip attacks before playing it, and frames Stevens's clip as the answer to a question the listener just heard posed ("she was asked whether that kind of money meant she was bought and paid for").
+- **The standards are block-agnostic.** This aired as a standalone single-block story. Everything above — depth, context for people, connections, balance — applies whether the story runs as an A, a B, or an unlabeled single block; the letter sets length and placement, not the level of analysis.
+
+---
+
 ## B BLOCKS
 
 The second story — often related to A or providing broader context, but from a different angle. Tone: "Now here's the next piece of this story" or "Separately, here's another development."

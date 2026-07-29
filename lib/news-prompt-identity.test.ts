@@ -29,9 +29,16 @@ import { getNewsExamplesForBlock, newsSystemPrompt } from './news-prompt';
 //   direction; no self-computed sums presented as sourced totals), and a new
 //   non-negotiable requires re-opening the source and quoting it before
 //   answering a writer's challenge or proposing a fix.
+//   Re-baselined again 2026-07-29: comparing chat drafts against the aired
+//   Michigan-primary block showed the depth guidance never reached chat mode.
+//   The Script Draft Workflow now carries "explain, don't just present" for
+//   people as well as events, "draw connections within our coverage", a
+//   block-agnostic standards note (an unlabeled block gets every best
+//   practice), and the contest-story shape (trigger lede, per-side voice and
+//   numbers, close on the date and the question the result answers).
 // - orchestrator: unchanged through the whole redesign.
 const EXPECTED_SHA256 = {
-  chat: 'e8e4adae00ebda4babdb56643be73f542eee7f9d120777121f0c51680dab6e9d',
+  chat: 'f0fe66abd1d43438cb7c990075fa396ffbc5da1d5db588c11d1bfe65ebb4e3a5',
   orchestrator: 'f29ab50f8218f3952225e058ac3f7ff09dccab3b0d978db1dba89dea5e7ae48c',
 } as const;
 
