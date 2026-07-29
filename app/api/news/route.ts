@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { DEFAULT_MODEL_ID, supportsTemperature } from '@/lib/models';
 import { lookupCorpus } from '@/lib/retrieval';
 import { webSearch } from '@/lib/web-search';
+import { ARTICLE_TEXT_CAP, trimArticleText } from '@/lib/article-trim';
 import { newsSystemPrompt, newsContextForDate, getNewsExamples } from '@/lib/news-prompt';
 import { recentEpisodesDigest } from '@/lib/recent-episodes';
 import { lookupShowId } from '@/lib/show-lookup';
@@ -59,13 +60,30 @@ type TavilyExtractResponse =
       text: string;
       date: string | null;
       source: string;
+      truncated?: boolean;
+      totalChars?: number;
+      trimNote?: string;
     }
   | { ok: false; reason: string; note: string };
 
 async function fetchArticle(articleUrl: string): Promise<TavilyExtractResponse> {
   const key = cacheKey('article', { url: articleUrl });
   const cached = await getCached<TavilyExtractResponse>(key, 72);
-  if (cached) return cached;
+  if (cached) {
+    // Entries cached before trimming landed hold the full extracted text —
+    // re-trim on read so a warm cache can't reintroduce a 500 KB liveblog.
+    if (cached.ok && cached.text.length > ARTICLE_TEXT_CAP) {
+      const trimmed = trimArticleText(cached.url, cached.text);
+      return {
+        ...cached,
+        text: trimmed.text,
+        truncated: trimmed.truncated,
+        totalChars: trimmed.totalChars,
+        trimNote: trimmed.trimNote,
+      };
+    }
+    return cached;
+  }
 
   const apiKey = process.env.TAVILY_API_KEY;
   if (!apiKey) {
@@ -114,8 +132,12 @@ async function fetchArticle(articleUrl: string): Promise<TavilyExtractResponse> 
       };
     }
 
-    const text = result.raw_content ?? '';
-    const translatedText = await ensureEnglish(text);
+    // Trim BEFORE translating: a 500 KB Hebrew liveblog would otherwise be
+    // translated in full just to be cut on the next line. The cache stores the
+    // trimmed text — the trim is deterministic per URL (the anchor comes from
+    // the URL), so cache hits and fresh fetches agree.
+    const trimmed = trimArticleText(articleUrl, result.raw_content ?? '');
+    const translatedText = await ensureEnglish(trimmed.text);
 
     const response: TavilyExtractResponse = {
       ok: true,
@@ -124,6 +146,13 @@ async function fetchArticle(articleUrl: string): Promise<TavilyExtractResponse> 
       text: translatedText,
       date: result.publish_date ?? null,
       source: result.source_name ?? 'Unknown',
+      ...(trimmed.truncated
+        ? {
+            truncated: true,
+            totalChars: trimmed.totalChars,
+            trimNote: trimmed.trimNote,
+          }
+        : {}),
     };
     await setCached(key, response);
     return response;
@@ -141,7 +170,7 @@ async function fetchArticle(articleUrl: string): Promise<TavilyExtractResponse> 
 
 const fetchArticleTool = tool({
   description:
-    'Fetch and extract the full text of an article from a URL. Supports all web content including paywalled articles and X/Twitter. Returns title, text, publication date, and source name.',
+    'Fetch and extract the text of an article from a URL. Supports all web content including paywalled articles and X/Twitter. Returns title, text, publication date, and source name. Very long pages (live-blogs) are trimmed to the newest entries plus the entry the URL anchor references; a trimNote says when that happened.',
   inputSchema: z.object({
     url: z.string().url().describe('The full URL of the article to fetch.'),
   }),
@@ -160,6 +189,9 @@ const fetchArticleTool = tool({
       text: result.text,
       date: result.date,
       source: result.source,
+      ...(result.truncated
+        ? { truncated: true, totalChars: result.totalChars, trimNote: result.trimNote }
+        : {}),
     };
   },
 });
