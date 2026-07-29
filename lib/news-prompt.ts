@@ -494,24 +494,41 @@ export function newsContextForDate(today: string): string {
   // sync if the date semantics ever change.
   const [y, m, d] = today.split('-').map(Number);
   const todayDate = new Date(Date.UTC(y, m - 1, d));
-  const offset = (delta: number): string => {
+  const offset = (delta: number): Date => {
     const x = new Date(todayDate);
     x.setUTCDate(x.getUTCDate() + delta);
-    return x.toISOString().slice(0, 10);
+    return x;
   };
-  const yesterdayStr = offset(-1);
-  const dayBeforeStr = offset(-2);
-  const isMonday = todayDate.getUTCDay() === 1;
+  const iso = (x: Date): string => x.toISOString().slice(0, 10);
+  const weekday = (x: Date): string =>
+    x.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' });
+  const monthDay = (x: Date): string =>
+    x.toLocaleDateString('en-US', { month: 'long', day: 'numeric', timeZone: 'UTC' });
 
-  // Ark News Daily reports on the morning after. The system prompt says
-  // Monday episodes cover the full weekend (Saturday + Sunday) plus Monday
-  // morning, so accept all three. Other weekdays accept yesterday only.
-  let acceptableDateRange = `published on ${yesterdayStr}`;
-  if (isMonday) {
-    acceptableDateRange = `published on ${dayBeforeStr} (Saturday), ${yesterdayStr} (Sunday), or ${today} (Monday)`;
-  }
+  // `today` is the writing/recording day: sessions run the evening before air
+  // (episodes say "recorded at 7 p.m. New York time" on the previous day), and
+  // the episode publishes the next morning. There are no weekend episodes, so
+  // Friday and Saturday sessions roll forward to Monday's episode.
+  const dow = todayDate.getUTCDay();
+  const daysToAir = dow === 5 ? 3 : dow === 6 ? 2 : 1;
+  const airDate = offset(daysToAir);
 
-  return `Today is ${today}.\n\nAcceptable publication dates: ${acceptableDateRange}`;
+  // Acceptable window: the show reports "the morning after", so the recording
+  // day's news IS the episode's "yesterday" — accept today (preferred) and
+  // yesterday. A Sunday session preps Monday's episode, which covers the whole
+  // weekend, so it reaches back to Friday. Mirrors
+  // `lib/orchestrator/source-gathering.ts#freshnessWindow` and
+  // `lib/scriptwriter/sourcing.ts#discoveryDays` — keep the three in sync.
+  const acceptable =
+    dow === 0
+      ? `${iso(offset(-2))} (Friday), ${iso(offset(-1))} (Saturday), or ${today} (today, Sunday) — Monday's episode covers the whole weekend`
+      : `${iso(offset(-1))} (yesterday) or ${today} (today). Prefer the freshest reporting: the episode leads with what happened today`;
+
+  return `Today is ${weekday(todayDate)}, ${today} — the writing and recording day. The episode airs the next morning: ${weekday(airDate)}, ${iso(airDate)}.
+
+Dateline scripts for the AIR date, never the recording day. A full episode opens: "It's ${weekday(airDate)}, ${monthDay(airDate)}." and, unless the writer gives a different time, "This episode was recorded at 7 p.m. New York time on ${weekday(todayDate)}." In narration, "yesterday" refers to ${today}, the recording day, as heard from the listener's morning.
+
+Acceptable publication dates: ${acceptable}.`;
 }
 
 export async function getNewsExamples(): Promise<string> {

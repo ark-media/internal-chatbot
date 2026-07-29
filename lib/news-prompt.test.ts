@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { newsSystemPrompt } from './news-prompt';
+import { newsContextForDate, newsSystemPrompt } from './news-prompt';
 
 // The chat prompt is a single stable string — all workflow modules present on
 // every request, with a trailing per-turn Active Request Mode note (built in
@@ -64,5 +64,37 @@ describe('newsSystemPrompt — batch orchestrator', () => {
     expect(prompt).toContain('Sources are pre-curated');
     expect(prompt).toContain('You have no tools available');
     expect(prompt).not.toContain('scanBreakingNews');
+  });
+});
+
+// The date context models the real production cadence: writers draft and
+// record in the evening (America/New_York) and the episode airs the next
+// morning. The week of Jul 22–29 2026 showed the old yesterday-only window
+// misfiring three times — same-day sources flagged as "outside the acceptable
+// window" that then led the next morning's episode, and a draft datelined on
+// the recording day that the editors had to re-dateline by hand.
+describe('newsContextForDate — air-date model', () => {
+  it('datelines a weekday session for the next morning and accepts today + yesterday', () => {
+    const ctx = newsContextForDate('2026-07-22'); // Wednesday session
+    expect(ctx).toContain('Today is Wednesday, 2026-07-22');
+    expect(ctx).toContain('airs the next morning: Thursday, 2026-07-23');
+    expect(ctx).toContain('"It\'s Thursday, July 23."');
+    expect(ctx).toContain('recorded at 7 p.m. New York time on Wednesday');
+    expect(ctx).toContain('2026-07-21 (yesterday) or 2026-07-22 (today)');
+    // "yesterday" in narration means the recording day, from the listener's morning.
+    expect(ctx).toContain('"yesterday" refers to 2026-07-22');
+  });
+
+  it('gives a Sunday session Monday air and the full weekend window', () => {
+    const ctx = newsContextForDate('2026-07-26'); // Sunday session
+    expect(ctx).toContain('airs the next morning: Monday, 2026-07-27');
+    expect(ctx).toContain(
+      '2026-07-24 (Friday), 2026-07-25 (Saturday), or 2026-07-26 (today, Sunday)',
+    );
+  });
+
+  it('rolls Friday and Saturday sessions forward to Monday — there are no weekend episodes', () => {
+    expect(newsContextForDate('2026-07-24')).toContain('airs the next morning: Monday, 2026-07-27'); // Friday
+    expect(newsContextForDate('2026-07-25')).toContain('airs the next morning: Monday, 2026-07-27'); // Saturday
   });
 });

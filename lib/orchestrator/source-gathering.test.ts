@@ -328,15 +328,17 @@ describe('discoverCandidates', () => {
     expect(idxBToday).toBeLessThan(idxAYesterday);
   });
 
-  it('widens the Tavily `days` window to 3 on Mondays so the weekend is covered', async () => {
+  it('widens the Tavily `days` window to 3 on Sundays so the weekend is covered', async () => {
     let observed: number | undefined;
     installFetchMock((_url, init) => {
       const body = JSON.parse(init?.body as string);
       observed = body.days;
       return jsonResponse({ results: [] });
     });
-    // 2026-05-18 is a Monday.
-    await discoverCandidates('2026-05-18', '');
+    // 2026-05-17 is a Sunday — the session that preps Monday's episode, which
+    // covers the whole weekend back to Friday. A Monday session preps
+    // Tuesday's episode and gets the regular 2-day window.
+    await discoverCandidates('2026-05-17', '');
     expect(observed).toBe(3);
   });
 

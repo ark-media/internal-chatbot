@@ -27,11 +27,12 @@ const RESULTS_PER_QUERY = 10;
 const MAX_CANDIDATES = 100;
 const MAX_SOURCES_PER_STORY = 5;
 
-// How many days back discovery reaches: today + yesterday (+ Saturday on
-// Mondays), mirroring newsContextForDate's acceptable window.
+// How many days back discovery reaches: today + yesterday (+ Friday on
+// Sundays, when the session preps Monday's whole-weekend episode), mirroring
+// newsContextForDate's acceptable window.
 export function discoveryDays(today: string): number {
   const [y, m, d] = today.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d)).getUTCDay() === 1 ? 3 : 2;
+  return new Date(Date.UTC(y, m - 1, d)).getUTCDay() === 0 ? 3 : 2;
 }
 
 // Collapse whitespace and cap length before interpolating an untrusted field

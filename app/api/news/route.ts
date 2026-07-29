@@ -9,11 +9,13 @@ import {
 } from 'ai';
 import { z } from 'zod';
 
-import { sql } from '@/lib/db';
 import { DEFAULT_MODEL_ID, supportsTemperature } from '@/lib/models';
 import { lookupCorpus } from '@/lib/retrieval';
 import { webSearch } from '@/lib/web-search';
 import { newsSystemPrompt, newsContextForDate, getNewsExamples } from '@/lib/news-prompt';
+import { recentEpisodesDigest } from '@/lib/recent-episodes';
+import { lookupShowId } from '@/lib/show-lookup';
+import { todayISONewYork } from '@/lib/today-iso';
 import { classifyNewsRequest, newsRequestInstruction } from '@/lib/news-request';
 import { extractSources, parseScriptCoverage } from '@/lib/news-script';
 import { runBreakingScan } from '@/lib/orchestrator/breaking-scan';
@@ -285,7 +287,11 @@ export async function POST(req: Request) {
   });
 
   const normalized = normalizeMessages(messages);
-  const today = new Date().toISOString().slice(0, 10);
+  // The show's calendar day, not the server's: UTC rolls to tomorrow at 8 p.m.
+  // New York time, mid-way through the evening writing sessions, which would
+  // shift the acceptable-dates window and the computed air date under the
+  // writer. See todayISONewYork's doc comment.
+  const today = todayISONewYork();
   const started = Date.now();
   // Classify the latest writer instruction with a small model (Haiku), falling
   // back to a regex heuristic inside classifyNewsRequest on error/timeout. The
@@ -302,21 +308,24 @@ export async function POST(req: Request) {
   const dateContext = newsContextForDate(today);
   const examples = await getNewsExamples();
 
-  // Resolve Ark News Daily show ID once per request
+  // Resolve Ark News Daily show ID once per request. The previous inline query
+  // selected a column (`id`) that doesn't exist on `shows`, so the catch ate it
+  // on every request and searchCorpus silently searched all shows unfiltered.
+  // lookupShowId shares the tested name-matching rule with the chat route.
   let arkNewsDailyShowId: number | null = null;
   try {
-    const showResult = await sql`SELECT id FROM shows WHERE LOWER(name) LIKE ${'%ark news%'} LIMIT 1`;
-    if (showResult && showResult.length > 0) {
-      arkNewsDailyShowId = showResult[0].id as number;
-    }
+    arkNewsDailyShowId = await lookupShowId('ark news');
   } catch {
     // Fall through, tools will proceed without filtering
   }
 
+  const recentEpisodes = await recentEpisodesDigest(arkNewsDailyShowId);
+
   // Build internal context before the writer's actual messages. This block is
-  // byte-identical on every request (same date within a day, same examples),
-  // which is what keeps the cached prefix — and therefore the conversation
-  // history behind breakpoint 3 — valid across turns.
+  // byte-identical on every request (same date within a day, same examples,
+  // same aired-episode list — which grows once per morning ingest), which is
+  // what keeps the cached prefix — and therefore the conversation history
+  // behind breakpoint 3 — valid across turns.
   const contextMessages: UIMessage[] = [
     {
       id: 'news-context',
@@ -324,7 +333,7 @@ export async function POST(req: Request) {
       parts: [
         {
           type: 'text',
-          text: `${dateContext}\n\n== Reference Examples ==\n\n${examples}`,
+          text: `${dateContext}${recentEpisodes ? `\n\n${recentEpisodes}` : ''}\n\n== Reference Examples ==\n\n${examples}`,
         },
       ],
     },

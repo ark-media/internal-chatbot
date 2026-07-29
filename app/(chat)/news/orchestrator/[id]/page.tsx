@@ -36,7 +36,7 @@ import type {
 import { chatFetch } from '@/lib/chat-fetch';
 import { notifyChatUpdated } from '@/lib/chat-refresh';
 import { cn } from '@/lib/cn';
-import { todayISO } from '@/lib/today-iso';
+import { todayISONewYork } from '@/lib/today-iso';
 
 // Quick-start presets, sent verbatim as the brief. The empty full-episode
 // default is offered separately as "Find today's stories".
@@ -145,7 +145,7 @@ function StartCard({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chatId,
-          today: todayISO(),
+          today: todayISONewYork(),
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           prompt: opts?.brief ?? prompt,
           ...(opts?.topics?.length ? { topics: opts.topics } : {}),

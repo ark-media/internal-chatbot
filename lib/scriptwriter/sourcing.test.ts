@@ -44,9 +44,10 @@ describe('mergeRoundRobin', () => {
 });
 
 describe('discoveryDays', () => {
-  it('is 2 on regular days and 3 on Mondays (weekend catch-up)', () => {
+  it('is 2 on regular days and 3 on Sundays (weekend catch-up for Monday air)', () => {
     expect(discoveryDays('2026-07-15')).toBe(2); // Wednesday
-    expect(discoveryDays('2026-07-13')).toBe(3); // Monday
+    expect(discoveryDays('2026-07-13')).toBe(2); // Monday — preps Tuesday's episode
+    expect(discoveryDays('2026-07-12')).toBe(3); // Sunday — preps Monday's episode
   });
 });
 
