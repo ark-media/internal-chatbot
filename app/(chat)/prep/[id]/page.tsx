@@ -53,7 +53,7 @@ import {
   PREP_DEFAULT_TEMPERATURE_PRESET,
   type TemperaturePresetId,
 } from '@/lib/temperature';
-import { MAX_FILES, MAX_FILE_BYTES, formatBytes } from '@/lib/prep-limits';
+import { MAX_FILES, MAX_FILE_BYTES, UPLOAD_ACCEPT, formatBytes } from '@/lib/prep-limits';
 import {
   DEFAULT_PREP_SHOW_ID,
   getPrepShow,
@@ -94,6 +94,7 @@ function PrepBody({
     removeFile,
     clearFiles,
     uploadFiles,
+    cancelUpload,
   } = useFileAttachments();
   const { driveLoading, driveLink, driveError, save, resetDrive } =
     useDriveSave('/api/prep/upload');
@@ -309,7 +310,7 @@ function PrepBody({
             {busy ? (
               <BusyRow
                 label={status === 'submitted' ? 'Researching…' : 'Writing questions…'}
-                onStop={stop}
+                onStop={uploading ? cancelUpload : stop}
               />
             ) : null}
 
@@ -419,8 +420,7 @@ function PrepBody({
           canSubmit={input.trim().length > 0 || files.length > 0}
           footerHint={`Enter to send · Shift + Enter for newline · Up to ${MAX_FILES} files, ${formatBytes(MAX_FILE_BYTES)} each`}
           fileAttach={{
-            accept:
-              '.pdf,.md,.txt,.csv,.tsv,.json,.yml,.yaml,.png,.jpg,.jpeg,.gif,.webp,application/pdf,text/markdown,text/plain,text/csv,application/json,image/*',
+            accept: UPLOAD_ACCEPT,
             multiple: true,
             onPick: onPickFiles,
             ariaLabel: 'Attach files',

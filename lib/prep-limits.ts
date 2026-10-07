@@ -16,6 +16,12 @@ export const MULTIPART_UPLOAD_BYTES = 8 * 1024 * 1024;
 export const NATIVE_PDF_MAX_PAGES = 100;
 export const NATIVE_PDF_MAX_BYTES = 10 * 1024 * 1024;
 
+// Per-request caps on what goes to the model inline, across every turn that is
+// re-sent: Anthropic allows 100 native PDF pages per request and ~32 MB per
+// request body (base64 adds a third, so 20 MB raw leaves headroom).
+export const MAX_REQUEST_PDF_PAGES = 100;
+export const MAX_REQUEST_INLINE_BYTES = 20 * 1024 * 1024;
+
 // Share of the selected model's context window that extracted document text may
 // take in one request, leaving room for the system prompt, dossiers, history
 // and output.
@@ -46,13 +52,28 @@ export function isTextMediaType(mediaType: string): boolean {
   return mediaType.startsWith('text/') || TEXT_MEDIA_TYPES.has(mediaType);
 }
 
+// The only image formats Anthropic accepts.
+export const SUPPORTED_IMAGE_TYPES: ReadonlySet<string> = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+]);
+
 // Enforced by the Blob client token.
 export const ALLOWED_UPLOAD_MEDIA_TYPES: readonly string[] = [
   'application/pdf',
-  'image/*',
+  ...SUPPORTED_IMAGE_TYPES,
   'text/*',
   ...[...TEXT_MEDIA_TYPES].filter((t) => !t.startsWith('text/')),
 ];
+
+// The composer's file-picker filter.
+export const UPLOAD_ACCEPT = [
+  '.pdf,.md,.txt,.csv,.tsv,.json,.yml,.yaml,.png,.jpg,.jpeg,.gif,.webp',
+  'application/pdf,text/markdown,text/plain,text/csv,application/json',
+  ...SUPPORTED_IMAGE_TYPES,
+].join(',');
 
 export function formatBytes(n: number): string {
   if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;

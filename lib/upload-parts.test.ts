@@ -1,19 +1,24 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { UIMessage } from 'ai';
 
-const blobs = new Map<string, { bytes: Buffer; contentType: string }>();
-const getMock = vi.fn(async (url: string) => {
-  const b = blobs.get(url);
+// Keyed by pathname: resolveUploads fetches by pathname so the SDK targets this
+// app's own store. `size` overrides the reported size to test metadata checks
+// without allocating; `fail` simulates a Blob outage.
+type FakeBlob = { bytes: Buffer; contentType: string; size?: number; fail?: boolean };
+const blobs = new Map<string, FakeBlob>();
+const getMock = vi.fn(async (pathname: string) => {
+  const b = blobs.get(pathname);
   if (!b) return null;
+  if (b.fail) throw new Error('Failed to fetch blob: 503 Service Unavailable');
   return {
     statusCode: 200,
     stream: new Response(new Uint8Array(b.bytes)).body,
-    blob: { contentType: b.contentType, size: b.bytes.length },
+    blob: { contentType: b.contentType, size: b.size ?? b.bytes.length },
   };
 });
 
 vi.mock('@vercel/blob', () => ({
-  get: (url: string) => getMock(url),
+  get: (pathname: string) => getMock(pathname),
   list: vi.fn(),
   del: vi.fn(),
 }));
@@ -43,9 +48,9 @@ function blobUrl(name: string): string {
   return `https://store123.private.blob.vercel-storage.com/uploads/${n}-${name}`;
 }
 
-function putBlob(name: string, bytes: Buffer, contentType: string): string {
+function putBlob(name: string, bytes: Buffer, contentType: string, extra: Partial<FakeBlob> = {}): string {
   const url = blobUrl(name);
-  blobs.set(url, { bytes, contentType });
+  blobs.set(new URL(url).pathname.slice(1), { bytes, contentType, ...extra });
   return url;
 }
 
@@ -193,6 +198,124 @@ describe('resolveUploads', () => {
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect((res.messages[0].parts[1] as { text: string }).text).toContain('hello');
+  });
+});
+
+function assistant(text: string): UIMessage {
+  return { id: `a${n}`, role: 'assistant', parts: [{ type: 'text', text }] };
+}
+
+function noteText(res: Awaited<ReturnType<typeof resolveUploads>>, msg: number, part = 1): string {
+  if (!res.ok) throw new Error(res.error);
+  return (res.messages[msg].parts[part] as { text: string }).text;
+}
+
+describe('resolveUploads limits and history', () => {
+  it('fetches by pathname, never by the client-supplied store host', async () => {
+    const url = putBlob('notes.txt', Buffer.from('hi'), 'text/plain');
+    const otherStore = url.replace('store123', 'otherstore');
+    await resolveUploads(
+      [userMessage({ url: otherStore, mediaType: 'text/plain', filename: 'notes.txt' })],
+      { modelId: MODEL },
+    );
+    expect(getMock).toHaveBeenCalledWith(new URL(url).pathname.slice(1));
+  });
+
+  it('turns a Blob outage into a 413-style error, not a throw', async () => {
+    const url = putBlob('a.txt', Buffer.from('x'), 'text/plain', { fail: true });
+    const res = await resolveUploads(
+      [userMessage({ url, mediaType: 'text/plain', filename: 'a.txt' })],
+      { modelId: MODEL },
+    );
+    expect(res).toMatchObject({ ok: false });
+    if (res.ok) return;
+    expect(res.error).toMatch(/couldn't be loaded/);
+  });
+
+  it('downgrades a failing attachment in an earlier turn to a note', async () => {
+    const scan = putPdf('scan.pdf', Array.from({ length: 250 }, () => ''));
+    const res = await resolveUploads(
+      [
+        userMessage({ url: scan, mediaType: 'application/pdf', filename: 'scan.pdf' }),
+        assistant('Sorry, that one failed.'),
+        userMessage(),
+      ],
+      { modelId: MODEL },
+    );
+    expect(noteText(res, 0)).toMatch(/from earlier in this conversation couldn't be used: .*no selectable text/);
+  });
+
+  it('leaves out older attachments that no longer fit, keeping the newest', async () => {
+    const page = 'word '.repeat(640); // ~800 tokens
+    const older = putPdf('older.pdf', Array.from({ length: 120 }, () => page)); // ~96k tokens
+    const newer = putPdf('newer.pdf', Array.from({ length: 120 }, () => page));
+    const res = await resolveUploads(
+      [
+        userMessage({ url: older, mediaType: 'application/pdf', filename: 'older.pdf' }),
+        assistant('Read it.'),
+        userMessage({ url: newer, mediaType: 'application/pdf', filename: 'newer.pdf' }),
+      ],
+      { modelId: MODEL },
+    );
+    expect(noteText(res, 0)).toMatch(/left out of this turn/);
+    expect(noteText(res, 2)).toContain('<uploaded_file name="newer.pdf"');
+  });
+
+  it('caps native PDF pages per request', async () => {
+    const pages = Array.from({ length: 60 }, () => 'Some prose on this page.');
+    const a = putPdf('a.pdf', pages);
+    const b = putPdf('b.pdf', pages);
+    const res = await resolveUploads(
+      [
+        userMessage(
+          { url: a, mediaType: 'application/pdf', filename: 'a.pdf' },
+          { url: b, mediaType: 'application/pdf', filename: 'b.pdf' },
+        ),
+      ],
+      { modelId: MODEL },
+    );
+    expect(res).toMatchObject({ ok: false });
+    if (res.ok) return;
+    expect(res.error).toMatch(/120 pages, more than the 100/);
+  });
+
+  it('rejects an image format the model cannot read', async () => {
+    const url = putBlob('photo.heic', Buffer.from('x'), 'image/heic');
+    const res = await resolveUploads(
+      [userMessage({ url, mediaType: 'image/heic', filename: 'photo.heic' })],
+      { modelId: MODEL },
+    );
+    expect(res).toMatchObject({ ok: false });
+    if (res.ok) return;
+    expect(res.error).toMatch(/Convert it to JPEG or PNG/);
+  });
+
+  it('rejects oversize text from its metadata', async () => {
+    const url = putBlob('dump.txt', Buffer.from('x'), 'text/plain', { size: 5 * 1024 * 1024 });
+    const res = await resolveUploads(
+      [userMessage({ url, mediaType: 'text/plain', filename: 'dump.txt' })],
+      { modelId: MODEL },
+    );
+    expect(res).toMatchObject({ ok: false });
+    if (res.ok) return;
+    expect(res.error).toMatch(/more than can be sent/);
+  });
+
+  it('enforces the per-message total on the server', async () => {
+    const big = { size: 45 * 1024 * 1024 };
+    const files = ['a', 'b', 'c'].map((x) => ({
+      url: putPdf(`${x}.pdf`, ['p']),
+      mediaType: 'application/pdf',
+      filename: `${x}.pdf`,
+    }));
+    for (const f of files) {
+      const key = new URL(f.url).pathname.slice(1);
+      blobs.set(key, { ...blobs.get(key)!, ...big });
+    }
+    const res = await resolveUploads([userMessage(...files)], { modelId: MODEL });
+    expect(res).toMatchObject({ ok: false });
+    if (res.ok) return;
+    expect(res.error).toMatch(/Attachments total more than/);
   });
 });
 

@@ -329,8 +329,10 @@ export async function POST(req: Request) {
   // Classify the latest writer instruction with a small model (Haiku), falling
   // back to a regex heuristic inside classifyNewsRequest on error/timeout. The
   // resulting mode note is appended AFTER the history (see below) so it never
-  // sits inside the cached prefix.
-  const requestRoute = await classifyNewsRequest(uploads.messages);
+  // sits inside the cached prefix. It reads the original messages: resolved
+  // ones carry extracted attachment text ahead of the writer's instruction,
+  // which would crowd the instruction out of the classifier's clip.
+  const requestRoute = await classifyNewsRequest(messages);
 
   // The system prompt and examples are deliberately identical on every request
   // from every editor: they sit at the front of the cached prefix, and varying

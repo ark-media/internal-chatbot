@@ -54,7 +54,7 @@ import {
   NEWS_DEFAULT_TEMPERATURE_PRESET,
   type TemperaturePresetId,
 } from '@/lib/temperature';
-import { MAX_FILES, MAX_FILE_BYTES, formatBytes } from '@/lib/prep-limits';
+import { MAX_FILES, MAX_FILE_BYTES, UPLOAD_ACCEPT, formatBytes } from '@/lib/prep-limits';
 
 const EXAMPLE_PROMPTS = [
   'Outline: Lead — Trump signals end to Iran War. B Block — New Middle East realignment. C Block — Passover under bombardment. Sources: WSJ, CBS, Times of Israel',
@@ -131,6 +131,7 @@ function NewsBody({
     removeFile,
     clearFiles,
     uploadFiles,
+    cancelUpload,
   } = useFileAttachments();
   const { driveLoading, driveLink, driveError, save, resetDrive } =
     useDriveSave('/api/news/upload');
@@ -330,7 +331,7 @@ function NewsBody({
               />
             ))}
 
-            {busy ? <BusyRow label={busyLabel(messages, status)} onStop={stop} /> : null}
+            {busy ? <BusyRow label={busyLabel(messages, status)} onStop={uploading ? cancelUpload : stop} /> : null}
 
             <ChatErrorBanner
               error={error}
@@ -468,8 +469,7 @@ function NewsBody({
           canSubmit={input.trim().length > 0 || files.length > 0}
           footerHint={`Enter to send · Shift + Enter for newline · Up to ${MAX_FILES} files, ${formatBytes(MAX_FILE_BYTES)} each`}
           fileAttach={{
-            accept:
-              '.pdf,.md,.txt,.csv,.tsv,.json,.yml,.yaml,.png,.jpg,.jpeg,.gif,.webp,application/pdf,text/markdown,text/plain,text/csv,application/json,image/*',
+            accept: UPLOAD_ACCEPT,
             multiple: true,
             onPick: onPickFiles,
             ariaLabel: 'Attach files',
