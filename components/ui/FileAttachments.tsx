@@ -1,6 +1,6 @@
 'use client';
 
-import { CheckCircle2, FileText, X } from 'lucide-react';
+import { CheckCircle2, FileText, Loader2, X } from 'lucide-react';
 import { formatBytes } from '@/lib/prep-limits';
 import type { AttachedFile } from '@/lib/use-file-attachments';
 
@@ -12,12 +12,14 @@ import type { AttachedFile } from '@/lib/use-file-attachments';
 export function FileAttachments({
   files,
   uploadError,
+  uploadProgress = null,
   onRemove,
   showSuccess = false,
   attachSuccess = false,
 }: {
   files: AttachedFile[];
   uploadError: string | null;
+  uploadProgress?: number | null;
   onRemove: (id: string) => void;
   showSuccess?: boolean;
   attachSuccess?: boolean;
@@ -28,6 +30,15 @@ export function FileAttachments({
         <div className="mb-2 flex items-center gap-2 rounded-lg bg-green-500/10 px-3 py-2 text-sm text-green-200 animate-in fade-in duration-200">
           <CheckCircle2 className="h-4 w-4" />
           <span>{files.length} file{files.length !== 1 ? 's' : ''} attached</span>
+        </div>
+      ) : null}
+      {uploadProgress !== null ? (
+        <div
+          role="status"
+          className="mb-2 flex items-center gap-2 text-[0.75rem] text-fg/60"
+        >
+          <Loader2 className="h-3 w-3 animate-spin" />
+          <span>Uploading attachments… {uploadProgress}%</span>
         </div>
       ) : null}
       {files.length > 0 ? (
@@ -43,6 +54,7 @@ export function FileAttachments({
               <button
                 type="button"
                 onClick={() => onRemove(f.id)}
+                disabled={uploadProgress !== null}
                 className="ml-0.5 rounded p-0.5 text-fg/45 transition hover:bg-overlay/10 hover:text-fg"
                 aria-label={`Remove ${f.file.name}`}
               >

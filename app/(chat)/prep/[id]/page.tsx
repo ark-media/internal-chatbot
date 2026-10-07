@@ -53,7 +53,7 @@ import {
   PREP_DEFAULT_TEMPERATURE_PRESET,
   type TemperaturePresetId,
 } from '@/lib/temperature';
-import { MAX_FILES, MAX_FILE_BYTES, formatBytes } from '@/lib/prep-limits';
+import { MAX_FILES, MAX_FILE_BYTES, UPLOAD_ACCEPT, formatBytes } from '@/lib/prep-limits';
 import {
   DEFAULT_PREP_SHOW_ID,
   getPrepShow,
@@ -85,8 +85,17 @@ function PrepBody({
     useState<PrepShowId>(DEFAULT_PREP_SHOW_ID);
   const currentShow = getPrepShow(selectedShow);
   const [input, setInput] = useState('');
-  const { files, uploadError, onPickFiles, removeFile, clearFiles, asFileList } =
-    useFileAttachments();
+  const {
+    files,
+    uploadError,
+    uploadProgress,
+    uploading,
+    onPickFiles,
+    removeFile,
+    clearFiles,
+    uploadFiles,
+    cancelUpload,
+  } = useFileAttachments();
   const { driveLoading, driveLink, driveError, save, resetDrive } =
     useDriveSave('/api/prep/upload');
   const [driveMatchedShow, setDriveMatchedShow] = useState<string | null>(null);
@@ -132,7 +141,7 @@ function PrepBody({
       },
     });
 
-  const busy = status === 'submitted' || status === 'streaming';
+  const busy = status === 'submitted' || status === 'streaming' || uploading;
 
   useEffect(() => {
     scrollRef.current?.scrollTo({
@@ -141,16 +150,18 @@ function PrepBody({
     });
   }, [messages, busy]);
 
-  const submit = (text: string) => {
+  const submit = async (text: string) => {
     const q = text.trim();
     if ((!q && files.length === 0) || busy) return;
     const wasEditing = editingMessageId !== null;
+    const fileParts = await uploadFiles();
+    if (fileParts === null) return;
     // Send the live selections per-message. useChat captures the transport at
     // creation, so a header set only on the memoized transport can be stale on
     // the first turn (e.g. switching show before the first send). Per-request
     // headers always reflect the current selection and override the transport.
     sendMessage(
-      { text: q, files: asFileList() },
+      { text: q, files: fileParts },
       {
         headers: {
           'x-model': selectedModel,
@@ -299,7 +310,7 @@ function PrepBody({
             {busy ? (
               <BusyRow
                 label={status === 'submitted' ? 'Researching…' : 'Writing questions…'}
-                onStop={stop}
+                onStop={uploading ? cancelUpload : stop}
               />
             ) : null}
 
@@ -393,7 +404,7 @@ function PrepBody({
         <ChatComposer
           input={input}
           onInputChange={setInput}
-          onSubmit={() => submit(input)}
+          onSubmit={() => void submit(input)}
           placeholder={currentShow.placeholder}
           leadingControls={
             <ShowSelector
@@ -409,8 +420,7 @@ function PrepBody({
           canSubmit={input.trim().length > 0 || files.length > 0}
           footerHint={`Enter to send · Shift + Enter for newline · Up to ${MAX_FILES} files, ${formatBytes(MAX_FILE_BYTES)} each`}
           fileAttach={{
-            accept:
-              '.pdf,.md,.txt,.csv,.tsv,.json,.yml,.yaml,.png,.jpg,.jpeg,.gif,.webp,application/pdf,text/markdown,text/plain,text/csv,application/json,image/*',
+            accept: UPLOAD_ACCEPT,
             multiple: true,
             onPick: onPickFiles,
             ariaLabel: 'Attach files',
@@ -420,6 +430,7 @@ function PrepBody({
             <FileAttachments
               files={files}
               uploadError={uploadError}
+              uploadProgress={uploadProgress}
               onRemove={removeFile}
             />
           }
