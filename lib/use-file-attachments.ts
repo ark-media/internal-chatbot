@@ -8,6 +8,7 @@ import {
   MAX_FILE_BYTES,
   MAX_IMAGE_BYTES,
   MAX_TOTAL_BYTES,
+  MULTIPART_UPLOAD_BYTES,
   UPLOAD_PATH_PREFIX,
   formatBytes,
 } from '@/lib/prep-limits';
@@ -91,9 +92,9 @@ export function useFileAttachments() {
 
   // Uploads every pending file and returns the parts for `sendMessage`, or
   // null if any upload failed (the error is shown in the tray and the files
-  // stay attached so the user can retry). Returns undefined with no files.
-  const uploadFiles = useCallback(async (): Promise<FileUIPart[] | null | undefined> => {
-    if (files.length === 0) return undefined;
+  // stay attached so the user can retry).
+  const uploadFiles = useCallback(async (): Promise<FileUIPart[] | null> => {
+    if (files.length === 0) return [];
     const total = files.reduce((n, f) => n + f.file.size, 0) || 1;
     const loaded = new Map<string, number>();
     setUploadError(null);
@@ -105,7 +106,7 @@ export function useFileAttachments() {
             access: 'private',
             handleUploadUrl: '/api/uploads',
             contentType: file.type || undefined,
-            multipart: file.size > 8 * 1024 * 1024,
+            multipart: file.size > MULTIPART_UPLOAD_BYTES,
             onUploadProgress: (e) => {
               loaded.set(id, e.loaded);
               const sum = [...loaded.values()].reduce((n, v) => n + v, 0);
@@ -134,6 +135,7 @@ export function useFileAttachments() {
     uploadError,
     attachSuccess,
     uploadProgress,
+    uploading: uploadProgress !== null,
     onPickFiles,
     removeFile,
     clearFiles,

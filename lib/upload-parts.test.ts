@@ -27,7 +27,7 @@ vi.mock('unpdf', () => ({
     const key = Buffer.from(data).toString('utf8');
     const pdf = pdfs.get(key);
     if (!pdf) throw new Error('not a pdf');
-    return { numPages: pdf.pages.length, key };
+    return { numPages: pdf.pages.length, key, loadingTask: { destroy: async () => {} } };
   },
   extractText: async (proxy: { key: string }) => {
     const pdf = pdfs.get(proxy.key)!;
@@ -35,7 +35,7 @@ vi.mock('unpdf', () => ({
   },
 }));
 
-import { estimateTokens, isUploadBlobUrl, resolveUploads, validateUploads } from './upload-parts';
+import { estimateTokens, isUploadBlobUrl, resolveUploads } from './upload-parts';
 
 let n = 0;
 function blobUrl(name: string): string {
@@ -162,13 +162,26 @@ describe('resolveUploads', () => {
     expect((res.messages[0].parts[1] as { text: string }).text).toMatch(/no longer available/);
   });
 
-  it('never fetches a URL outside the upload store', async () => {
+  it('rejects, without fetching, a URL outside the upload store', async () => {
     const res = await resolveUploads(
       [userMessage({ url: 'https://example.com/uploads/x.pdf', mediaType: 'application/pdf', filename: 'x.pdf' })],
       { modelId: MODEL },
     );
-    expect(res.ok).toBe(true);
+    expect(res).toMatchObject({ ok: false });
+    if (res.ok) return;
+    expect(res.error).toMatch(/unsupported URL/);
     expect(getMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects an oversize image from its metadata', async () => {
+    const url = putBlob('big.png', Buffer.alloc(6 * 1024 * 1024), 'image/png');
+    const res = await resolveUploads(
+      [userMessage({ url, mediaType: 'image/png', filename: 'big.png' })],
+      { modelId: MODEL },
+    );
+    expect(res).toMatchObject({ ok: false });
+    if (res.ok) return;
+    expect(res.error).toMatch(/per image/);
   });
 
   it('still decodes legacy inline text data URLs', async () => {
@@ -183,15 +196,13 @@ describe('resolveUploads', () => {
   });
 });
 
-describe('validateUploads', () => {
-  it('accepts blob and data URLs, rejects anything else', () => {
+describe('resolveUploads validation', () => {
+  it('accepts blob and data URLs in the latest message', async () => {
     const ok = userMessage(
-      { url: blobUrl('a.pdf'), mediaType: 'application/pdf', filename: 'a.pdf' },
+      { url: putBlob('a.txt', Buffer.from('a'), 'text/plain'), mediaType: 'text/plain', filename: 'a.txt' },
       { url: 'data:text/plain,hi', mediaType: 'text/plain', filename: 'b.txt' },
     );
-    expect(validateUploads([ok])).toBeNull();
-    const bad = userMessage({ url: 'https://evil.test/a.pdf', mediaType: 'application/pdf', filename: 'a.pdf' });
-    expect(validateUploads([bad])).toMatch(/unsupported URL/);
+    expect((await resolveUploads([ok], { modelId: MODEL })).ok).toBe(true);
   });
 });
 
@@ -201,7 +212,6 @@ describe('isUploadBlobUrl', () => {
     expect(isUploadBlobUrl('http://s.private.blob.vercel-storage.com/uploads/a.pdf')).toBe(false);
     expect(isUploadBlobUrl('https://s.private.blob.vercel-storage.com/other/a.pdf')).toBe(false);
     expect(isUploadBlobUrl('https://blob.vercel-storage.com.evil.test/uploads/a.pdf')).toBe(false);
-    expect(isUploadBlobUrl(undefined)).toBe(false);
   });
 });
 

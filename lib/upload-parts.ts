@@ -27,10 +27,10 @@ import {
   MAX_IMAGE_BYTES,
   NATIVE_PDF_MAX_BYTES,
   NATIVE_PDF_MAX_PAGES,
-  TEXT_MEDIA_TYPES,
   UPLOAD_PATH_PREFIX,
   UPLOAD_RETENTION_DAYS,
   formatBytes,
+  isTextMediaType,
 } from './prep-limits';
 
 type Part = UIMessage['parts'][number];
@@ -62,8 +62,7 @@ function uploadedFileText(name: string, mediaType: string, body: string, extra =
 
 // Only blobs this app uploaded are fetched — never an arbitrary URL a client
 // put in a message.
-export function isUploadBlobUrl(url: string | undefined): boolean {
-  if (!url) return false;
+export function isUploadBlobUrl(url: string): boolean {
   try {
     const u = new URL(url);
     return (
@@ -90,16 +89,15 @@ export function estimateTokens(text: string): number {
 // validated on their own request. Sizes are enforced by the Blob upload token;
 // this guards the count and rejects file URLs we wouldn't fetch. Returns null
 // on success, an error message on violation.
-export function validateUploads(messages: UIMessage[]): string | null {
-  const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+function validateLatestUploads(messages: UIMessage[]): string | null {
+  const lastUser = messages.findLast((m) => m.role === 'user');
   if (!lastUser?.parts) return null;
   const fileParts = lastUser.parts.filter((p) => p.type === 'file');
-  if (fileParts.length === 0) return null;
   if (fileParts.length > MAX_FILES) {
     return `Too many files (${fileParts.length}). Maximum ${MAX_FILES} per message.`;
   }
   for (const p of fileParts) {
-    if (!(p.url ?? '').startsWith('data:') && !isUploadBlobUrl(p.url)) {
+    if (!p.url.startsWith('data:') && !isUploadBlobUrl(p.url)) {
       return `File "${p.filename ?? 'uploaded file'}" has an unsupported URL. Re-attach it and try again.`;
     }
   }
@@ -113,29 +111,48 @@ type Resolved =
   | { kind: 'error'; message: string };
 
 // Fluid Compute reuses instances, so a follow-up turn in the same conversation
-// usually skips re-downloading and re-parsing the same book. Small and
-// insertion-ordered; oldest entry evicted first.
-const RESOLVED_CACHE_MAX = 8;
-const resolvedCache = new Map<string, Resolved>();
+// usually skips re-downloading and re-parsing the same book. Bounded by total
+// characters held (data URLs and extracted text), least-recently-used evicted
+// first.
+const RESOLVED_CACHE_MAX_CHARS = 64 * 1024 * 1024;
+const resolvedCache = new Map<string, { value: Resolved; chars: number }>();
+let resolvedCacheChars = 0;
 
-function remember(key: string, value: Resolved): Resolved {
-  if (value.kind === 'part') {
-    resolvedCache.delete(key);
-    resolvedCache.set(key, value);
-    while (resolvedCache.size > RESOLVED_CACHE_MAX) {
-      const oldest = resolvedCache.keys().next().value;
-      if (oldest === undefined) break;
-      resolvedCache.delete(oldest);
-    }
-  }
-  return value;
+function cacheGet(key: string): Resolved | undefined {
+  const entry = resolvedCache.get(key);
+  if (!entry) return undefined;
+  resolvedCache.delete(key);
+  resolvedCache.set(key, entry);
+  return entry.value;
 }
 
-async function fetchBlob(url: string): Promise<{ bytes: Buffer; contentType: string } | null> {
-  const result = await get(url, { access: 'private' });
-  if (!result || result.statusCode !== 200) return null;
-  const bytes = Buffer.from(await new Response(result.stream).arrayBuffer());
-  return { bytes, contentType: result.blob.contentType };
+function cacheSet(key: string, value: Resolved & { kind: 'part' }): void {
+  const p = value.part;
+  const chars = p.type === 'text' ? p.text.length : p.type === 'file' ? p.url.length : 0;
+  if (chars > RESOLVED_CACHE_MAX_CHARS) return;
+  const prev = resolvedCache.get(key);
+  if (prev) resolvedCacheChars -= prev.chars;
+  resolvedCache.delete(key);
+  resolvedCache.set(key, { value, chars });
+  resolvedCacheChars += chars;
+  for (const [k, e] of resolvedCache) {
+    if (resolvedCacheChars <= RESOLVED_CACHE_MAX_CHARS) break;
+    resolvedCache.delete(k);
+    resolvedCacheChars -= e.chars;
+  }
+}
+
+function inlineFilePart(name: string, mediaType: string, bytes: Buffer): Resolved {
+  return {
+    kind: 'part',
+    part: {
+      type: 'file',
+      mediaType,
+      filename: name,
+      url: `data:${mediaType};base64,${bytes.toString('base64')}`,
+    },
+    extractedTokens: 0,
+  };
 }
 
 async function resolvePdf(name: string, bytes: Buffer): Promise<Resolved> {
@@ -146,53 +163,48 @@ async function resolvePdf(name: string, bytes: Buffer): Promise<Resolved> {
     return { kind: 'error', message: `"${name}" could not be read as a PDF.` };
   }
 
-  if (pdf.numPages <= NATIVE_PDF_MAX_PAGES && bytes.length <= NATIVE_PDF_MAX_BYTES) {
+  try {
+    if (pdf.numPages <= NATIVE_PDF_MAX_PAGES && bytes.length <= NATIVE_PDF_MAX_BYTES) {
+      return inlineFilePart(name, 'application/pdf', bytes);
+    }
+
+    const { totalPages, text: pages } = await extractText(pdf, { mergePages: false });
+    const charCount = pages.reduce((n, p) => n + p.trim().length, 0);
+    // A scanned book has page images and no text layer. ~50 chars/page is well
+    // below any real prose page, so this only trips on image-only PDFs.
+    if (charCount < totalPages * 50) {
+      return {
+        kind: 'error',
+        message: `"${name}" (${totalPages} pages) has no selectable text — it looks like a scan. Run it through OCR first, or attach a ${NATIVE_PDF_MAX_PAGES}-page-or-shorter excerpt.`,
+      };
+    }
+
+    const body = pages
+      .map((p, i) => (p.trim() ? `[page ${i + 1}]\n${p.trim()}` : ''))
+      .filter(Boolean)
+      .join('\n\n');
     return {
       kind: 'part',
-      part: {
-        type: 'file',
-        mediaType: 'application/pdf',
-        filename: name,
-        url: `data:application/pdf;base64,${bytes.toString('base64')}`,
-      },
-      extractedTokens: 0,
+      part: uploadedFileText(
+        name,
+        'application/pdf',
+        body,
+        ` pages="${totalPages}" note="Text extracted from a large PDF; images and layout are not included. Cite page numbers from the [page N] markers."`,
+      ),
+      extractedTokens: estimateTokens(body),
     };
+  } finally {
+    await pdf.loadingTask.destroy();
   }
-
-  const { totalPages, text: pages } = await extractText(pdf, { mergePages: false });
-  const charCount = pages.reduce((n, p) => n + p.trim().length, 0);
-  // A scanned book has page images and no text layer. ~50 chars/page is well
-  // below any real prose page, so this only trips on image-only PDFs.
-  if (charCount < totalPages * 50) {
-    return {
-      kind: 'error',
-      message: `"${name}" (${totalPages} pages) has no selectable text — it looks like a scan. Run it through OCR first, or attach a ${NATIVE_PDF_MAX_PAGES}-page-or-shorter excerpt.`,
-    };
-  }
-
-  const body = pages
-    .map((p, i) => (p.trim() ? `[page ${i + 1}]\n${p.trim()}` : ''))
-    .filter(Boolean)
-    .join('\n\n');
-  return {
-    kind: 'part',
-    part: uploadedFileText(
-      name,
-      'application/pdf',
-      body,
-      ` pages="${totalPages}" note="Text extracted from a large PDF; images and layout are not included. Cite page numbers from the [page N] markers."`,
-    ),
-    extractedTokens: estimateTokens(body),
-  };
 }
 
 async function resolveBlobPart(part: FilePart): Promise<Resolved> {
-  const cached = resolvedCache.get(part.url);
+  const cached = cacheGet(part.url);
   if (cached) return cached;
 
   const name = part.filename ?? 'uploaded file';
-  const blob = await fetchBlob(part.url);
-  if (!blob) {
+  const result = await get(part.url, { access: 'private' });
+  if (!result || result.statusCode !== 200) {
     // Expired (UPLOAD_RETENTION_DAYS) or deleted. Don't fail the whole turn —
     // an old message in a long-open tab shouldn't block a new question.
     return {
@@ -204,48 +216,50 @@ async function resolveBlobPart(part: FilePart): Promise<Resolved> {
       extractedTokens: 0,
     };
   }
-  const mediaType = part.mediaType || blob.contentType;
+  const mediaType = part.mediaType || result.blob.contentType;
 
-  if (TEXT_MEDIA_TYPES.has(mediaType) || mediaType.startsWith('text/')) {
-    const text = blob.bytes.toString('utf8');
-    return remember(part.url, {
+  // Checked from blob metadata so an oversize image is never downloaded.
+  if (mediaType.startsWith('image/') && result.blob.size > MAX_IMAGE_BYTES) {
+    await result.stream.cancel();
+    return {
+      kind: 'error',
+      message: `Image "${name}" is ${formatBytes(result.blob.size)}. Maximum ${formatBytes(MAX_IMAGE_BYTES)} per image.`,
+    };
+  }
+
+  const bytes = Buffer.from(await new Response(result.stream).arrayBuffer());
+  const resolved = await resolveBytes(name, mediaType, bytes);
+  if (resolved.kind === 'part') cacheSet(part.url, resolved);
+  return resolved;
+}
+
+async function resolveBytes(name: string, mediaType: string, bytes: Buffer): Promise<Resolved> {
+  if (isTextMediaType(mediaType)) {
+    const text = bytes.toString('utf8');
+    return {
       kind: 'part',
       part: uploadedFileText(name, mediaType, text),
       extractedTokens: estimateTokens(text),
-    });
+    };
   }
-
-  if (mediaType === 'application/pdf') {
-    return remember(part.url, await resolvePdf(name, blob.bytes));
-  }
-
-  if (mediaType.startsWith('image/')) {
-    if (blob.bytes.length > MAX_IMAGE_BYTES) {
-      return {
-        kind: 'error',
-        message: `Image "${name}" is ${formatBytes(blob.bytes.length)}. Maximum ${formatBytes(MAX_IMAGE_BYTES)} per image.`,
-      };
-    }
-    return remember(part.url, {
-      kind: 'part',
-      part: {
-        type: 'file',
-        mediaType,
-        filename: name,
-        url: `data:${mediaType};base64,${blob.bytes.toString('base64')}`,
-      },
-      extractedTokens: 0,
-    });
-  }
-
+  if (mediaType === 'application/pdf') return resolvePdf(name, bytes);
+  if (mediaType.startsWith('image/')) return inlineFilePart(name, mediaType, bytes);
   return { kind: 'error', message: `"${name}" has an unsupported file type (${mediaType}).` };
 }
 
 function resolveDataUrlPart(part: FilePart): Part {
-  if (!TEXT_MEDIA_TYPES.has(part.mediaType)) return part;
+  if (!isTextMediaType(part.mediaType)) return part;
   const text = decodeDataUrl(part.url);
   if (text === null) return part;
   return uploadedFileText(part.filename ?? 'uploaded file', part.mediaType, text);
+}
+
+async function resolvePart(part: Part): Promise<Resolved> {
+  if (part.type === 'file' && isUploadBlobUrl(part.url)) return resolveBlobPart(part);
+  if (part.type === 'file' && part.url.startsWith('data:')) {
+    return { kind: 'part', part: resolveDataUrlPart(part), extractedTokens: 0 };
+  }
+  return { kind: 'part', part, extractedTokens: 0 };
 }
 
 export type ResolveUploadsResult =
@@ -253,37 +267,40 @@ export type ResolveUploadsResult =
   | { ok: false; error: string };
 
 /**
- * Turn every file part in user messages into something the model can read.
- * Fails (for a 413) when a file can't be used or when extracted document text
- * across the conversation would crowd out the rest of the context window —
- * never silently truncates a document.
+ * Validate the latest message's attachments, then turn every file part in user
+ * messages into something the model can read. Fails (for a 413) when a file
+ * can't be used or when extracted document text across the conversation would
+ * crowd out the rest of the context window — never silently truncates a
+ * document.
  */
 export async function resolveUploads(
   messages: UIMessage[],
   opts: { modelId: string },
 ): Promise<ResolveUploadsResult> {
+  const invalid = validateLatestUploads(messages);
+  if (invalid) return { ok: false, error: invalid };
+
+  // Every attachment in the conversation resolves concurrently; downloads and
+  // PDF parses would otherwise add up in time-to-first-token.
+  const resolved = await Promise.all(
+    messages.map((m) =>
+      m.role === 'user' && Array.isArray(m.parts) ? Promise.all(m.parts.map(resolvePart)) : null,
+    ),
+  );
+
   let extractedTokens = 0;
   const out: UIMessage[] = [];
-
-  for (const m of messages) {
-    if (m.role !== 'user' || !Array.isArray(m.parts)) {
+  for (const [i, m] of messages.entries()) {
+    const parts = resolved[i];
+    if (!parts) {
       out.push(m);
       continue;
     }
     const newParts: Part[] = [];
-    for (const part of m.parts) {
-      if (part.type !== 'file') {
-        newParts.push(part);
-      } else if (isUploadBlobUrl(part.url)) {
-        const resolved = await resolveBlobPart(part);
-        if (resolved.kind === 'error') return { ok: false, error: resolved.message };
-        extractedTokens += resolved.extractedTokens;
-        newParts.push(resolved.part);
-      } else if ((part.url ?? '').startsWith('data:')) {
-        newParts.push(resolveDataUrlPart(part));
-      } else {
-        newParts.push(part);
-      }
+    for (const r of parts) {
+      if (r.kind === 'error') return { ok: false, error: r.message };
+      extractedTokens += r.extractedTokens;
+      newParts.push(r.part);
     }
     out.push({ ...m, parts: newParts });
   }

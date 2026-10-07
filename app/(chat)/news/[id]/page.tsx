@@ -126,6 +126,7 @@ function NewsBody({
     uploadError,
     attachSuccess,
     uploadProgress,
+    uploading,
     onPickFiles,
     removeFile,
     clearFiles,
@@ -174,8 +175,7 @@ function NewsBody({
       },
     });
 
-  const busy =
-    status === 'submitted' || status === 'streaming' || uploadProgress !== null;
+  const busy = status === 'submitted' || status === 'streaming' || uploading;
 
   useEffect(() => {
     scrollRef.current?.scrollTo({

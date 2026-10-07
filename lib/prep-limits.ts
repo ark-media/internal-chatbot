@@ -6,6 +6,8 @@ export const MAX_FILE_BYTES = 50 * 1024 * 1024;
 export const MAX_TOTAL_BYTES = 100 * 1024 * 1024; // aggregate guard across all files in one message
 // Anthropic rejects images over 5 MB, and images are always sent inline.
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+// Files above this upload in parallel chunks.
+export const MULTIPART_UPLOAD_BYTES = 8 * 1024 * 1024;
 
 // A PDF goes to the model natively (text + page images) only when it is small
 // enough to fit comfortably: 100 pages is the per-document cap for 200k-context
@@ -37,15 +39,19 @@ export const TEXT_MEDIA_TYPES: ReadonlySet<string> = new Set([
   'application/x-yaml',
 ]);
 
-// Enforced by the Blob client token. `text/*` rather than the exact text list
-// because the browser and Blob infer slightly different types for .md/.yml.
+// Text uploads are decoded and sent as text. `text/*` counts as well as the
+// exact list because the browser and Blob infer slightly different types for
+// .md/.yml.
+export function isTextMediaType(mediaType: string): boolean {
+  return mediaType.startsWith('text/') || TEXT_MEDIA_TYPES.has(mediaType);
+}
+
+// Enforced by the Blob client token.
 export const ALLOWED_UPLOAD_MEDIA_TYPES: readonly string[] = [
   'application/pdf',
   'image/*',
   'text/*',
-  'application/json',
-  'application/yaml',
-  'application/x-yaml',
+  ...[...TEXT_MEDIA_TYPES].filter((t) => !t.startsWith('text/')),
 ];
 
 export function formatBytes(n: number): string {

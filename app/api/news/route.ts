@@ -24,7 +24,7 @@ import { buildReviewerSystemContent, reflectLoop } from '@/lib/orchestrator/refl
 import { computeMetadata } from '@/lib/orchestrator/script-craft';
 import { ensureTable, getCached, setCached, cacheKey } from '@/lib/tool-cache';
 import { ensureEnglish } from '@/lib/translate';
-import { resolveUploads, validateUploads } from '@/lib/upload-parts';
+import { resolveUploads } from '@/lib/upload-parts';
 import { resolveTemperature } from '@/lib/temperature';
 import { stripStaleToolOutputs } from '@/lib/strip-tool-outputs';
 import {
@@ -301,13 +301,6 @@ export async function POST(req: Request) {
 
   const model = req.headers.get('x-model') || DEFAULT_MODEL_ID;
   const temperature = resolveTemperature(req.headers.get('x-temperature'));
-  const uploadError = validateUploads(messages);
-  if (uploadError) {
-    return new Response(uploadError, {
-      status: 413,
-      headers: { 'content-type': 'text/plain; charset=utf-8' },
-    });
-  }
   // Resolved before persisting so a rejected upload doesn't leave a dangling
   // user turn in the saved chat.
   const uploads = await resolveUploads(messages, { modelId: model });
@@ -327,7 +320,6 @@ export async function POST(req: Request) {
     logKey: 'news',
   });
 
-  const normalized = uploads.messages;
   // The show's calendar day, not the server's: UTC rolls to tomorrow at 8 p.m.
   // New York time, mid-way through the evening writing sessions, which would
   // shift the acceptable-dates window and the computed air date under the
@@ -338,7 +330,7 @@ export async function POST(req: Request) {
   // back to a regex heuristic inside classifyNewsRequest on error/timeout. The
   // resulting mode note is appended AFTER the history (see below) so it never
   // sits inside the cached prefix.
-  const requestRoute = await classifyNewsRequest(normalized);
+  const requestRoute = await classifyNewsRequest(uploads.messages);
 
   // The system prompt and examples are deliberately identical on every request
   // from every editor: they sit at the front of the cached prefix, and varying
@@ -410,7 +402,7 @@ export async function POST(req: Request) {
   // reference the evidence it just synthesized from; the tool can be
   // re-called if the model needs the raw article body again.
   const messagesForModel = stripStaleToolOutputs(
-    normalized.map((m) => ({
+    uploads.messages.map((m) => ({
       ...m,
       // Drop UI-only data parts (sources + breaking-suggestions) from the
       // history handed to the model.

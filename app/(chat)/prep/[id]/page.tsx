@@ -89,6 +89,7 @@ function PrepBody({
     files,
     uploadError,
     uploadProgress,
+    uploading,
     onPickFiles,
     removeFile,
     clearFiles,
@@ -139,8 +140,7 @@ function PrepBody({
       },
     });
 
-  const busy =
-    status === 'submitted' || status === 'streaming' || uploadProgress !== null;
+  const busy = status === 'submitted' || status === 'streaming' || uploading;
 
   useEffect(() => {
     scrollRef.current?.scrollTo({
