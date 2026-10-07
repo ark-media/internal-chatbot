@@ -24,7 +24,7 @@ import { buildReviewerSystemContent, reflectLoop } from '@/lib/orchestrator/refl
 import { computeMetadata } from '@/lib/orchestrator/script-craft';
 import { ensureTable, getCached, setCached, cacheKey } from '@/lib/tool-cache';
 import { ensureEnglish } from '@/lib/translate';
-import { normalizeMessages, validateUploads } from '@/lib/upload-parts';
+import { resolveUploads, validateUploads } from '@/lib/upload-parts';
 import { resolveTemperature } from '@/lib/temperature';
 import { stripStaleToolOutputs } from '@/lib/strip-tool-outputs';
 import {
@@ -308,6 +308,15 @@ export async function POST(req: Request) {
       headers: { 'content-type': 'text/plain; charset=utf-8' },
     });
   }
+  // Resolved before persisting so a rejected upload doesn't leave a dangling
+  // user turn in the saved chat.
+  const uploads = await resolveUploads(messages, { modelId: model });
+  if (!uploads.ok) {
+    return new Response(uploads.error, {
+      status: 413,
+      headers: { 'content-type': 'text/plain; charset=utf-8' },
+    });
+  }
 
   await persistTurn({
     chatId,
@@ -318,7 +327,7 @@ export async function POST(req: Request) {
     logKey: 'news',
   });
 
-  const normalized = normalizeMessages(messages);
+  const normalized = uploads.messages;
   // The show's calendar day, not the server's: UTC rolls to tomorrow at 8 p.m.
   // New York time, mid-way through the evening writing sessions, which would
   // shift the acceptable-dates window and the computed air date under the

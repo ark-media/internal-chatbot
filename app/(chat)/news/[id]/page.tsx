@@ -125,10 +125,11 @@ function NewsBody({
     files,
     uploadError,
     attachSuccess,
+    uploadProgress,
     onPickFiles,
     removeFile,
     clearFiles,
-    asFileList,
+    uploadFiles,
   } = useFileAttachments();
   const { driveLoading, driveLink, driveError, save, resetDrive } =
     useDriveSave('/api/news/upload');
@@ -173,7 +174,8 @@ function NewsBody({
       },
     });
 
-  const busy = status === 'submitted' || status === 'streaming';
+  const busy =
+    status === 'submitted' || status === 'streaming' || uploadProgress !== null;
 
   useEffect(() => {
     scrollRef.current?.scrollTo({
@@ -182,11 +184,13 @@ function NewsBody({
     });
   }, [messages, busy]);
 
-  const submit = (text: string) => {
+  const submit = async (text: string) => {
     const q = text.trim();
     if ((!q && files.length === 0) || busy) return;
     const wasEditing = editingMessageId !== null;
-    sendMessage({ text: q, files: asFileList() });
+    const fileParts = await uploadFiles();
+    if (fileParts === null) return;
+    sendMessage({ text: q, files: fileParts });
     setInput('');
     clearFiles();
     if (wasEditing) {
@@ -454,7 +458,7 @@ function NewsBody({
         <ChatComposer
           input={input}
           onInputChange={setInput}
-          onSubmit={() => submit(input)}
+          onSubmit={() => void submit(input)}
           placeholder="Story outline with article links"
           selectedModel={selectedModel}
           onModelChange={setSelectedModel}
@@ -475,6 +479,7 @@ function NewsBody({
             <FileAttachments
               files={files}
               uploadError={uploadError}
+              uploadProgress={uploadProgress}
               onRemove={removeFile}
               showSuccess
               attachSuccess={attachSuccess}

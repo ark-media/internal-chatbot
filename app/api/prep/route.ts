@@ -22,7 +22,7 @@ import { extractPrepContext } from '@/lib/prep-extract';
 import { prepSystemPrompt } from '@/lib/prep-prompt';
 import { getPrepShow } from '@/lib/prep-shows';
 import { ensureTable, getCached, setCached, cacheKey } from '@/lib/tool-cache';
-import { normalizeMessages, validateUploads } from '@/lib/upload-parts';
+import { resolveUploads, validateUploads } from '@/lib/upload-parts';
 import { resolveTemperature } from '@/lib/temperature';
 import { stripStaleToolOutputs } from '@/lib/strip-tool-outputs';
 import {
@@ -444,6 +444,15 @@ export async function POST(req: Request) {
       headers: { 'content-type': 'text/plain; charset=utf-8' },
     });
   }
+  // Resolved before persisting so a rejected upload doesn't leave a dangling
+  // user turn in the saved chat.
+  const uploads = await resolveUploads(messages, { modelId: model });
+  if (!uploads.ok) {
+    return new Response(uploads.error, {
+      status: 413,
+      headers: { 'content-type': 'text/plain; charset=utf-8' },
+    });
+  }
 
   await persistTurn({
     chatId,
@@ -458,7 +467,7 @@ export async function POST(req: Request) {
   // assistant messages with stubs. The most-recent assistant is left intact
   // so the next turn can still reference the evidence it just synthesized
   // from; the tool can be re-called if the model needs the raw data again.
-  const messagesForModel = stripStaleToolOutputs(normalizeMessages(messages));
+  const messagesForModel = stripStaleToolOutputs(uploads.messages);
   const today = new Date().toISOString().slice(0, 10);
   const started = Date.now();
 
