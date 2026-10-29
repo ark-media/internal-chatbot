@@ -54,6 +54,33 @@ class FormatATimestampedSpeakersTests(unittest.TestCase):
         self.assertEqual(speakers, ["Alice", "Bob", "Alice"])
         self.assertEqual([t.text for t in episode.turns], ["Welcome.", "Hello.", "Sure."])
 
+    def test_timestamped_labels_without_blank_line_before_body(self):
+        body = (
+            "Show: Chosen People Problems\n"
+            "Title: Episode 1\n"
+            "Date: 2026-10-06\n"
+            "Hosts: Alice, Bob\n"
+            "\n"
+            "Bob [0:00:13]\n"
+            "Welcome.\n"
+            "\n"
+            "Guest Person [0:00:23]\n"
+            "First line.\n"
+            "Second line.\n"
+            "\n"
+            "Alice [0:00:36]\n"
+            "Sure.\n"
+        )
+        episode = _parse(body, "beehiiv_pod_ep_abc.txt")
+
+        self.assertEqual(
+            [t.speaker for t in episode.turns], ["Bob", "Guest Person", "Alice"]
+        )
+        self.assertEqual(
+            [t.text for t in episode.turns],
+            ["Welcome.", "First line. Second line.", "Sure."],
+        )
+
     def test_strips_h_mm_ss_from_speaker_labels(self):
         body = (
             "Show: Call me Back\n"
