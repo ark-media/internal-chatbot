@@ -33,6 +33,8 @@ updates:
       #   every chat surface is built on.
       # eslint: 10 breaks the eslint-plugin-react bundled by eslint-config-next.
       # typescript: 7 is a compiler rewrite.
+      # @types/node: tracks the runtime Node major (22, per web-tests.yml), not
+      #   the latest release; bump it alongside CI/Vercel Node upgrades.
       - dependency-name: ai
         update-types: [version-update:semver-major]
       - dependency-name: '@ai-sdk/*'
@@ -40,6 +42,8 @@ updates:
       - dependency-name: eslint
         update-types: [version-update:semver-major]
       - dependency-name: typescript
+        update-types: [version-update:semver-major]
+      - dependency-name: '@types/node'
         update-types: [version-update:semver-major]
 
   # ingest/ declares its Python dependencies in pyproject.toml.
