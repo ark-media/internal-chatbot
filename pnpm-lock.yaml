@@ -8,7 +8,7 @@ overrides:
   gaxios: ^7.3.0
   js-yaml@4: ^4.3.0
   postcss@8: ^8.5.18
-  qs@6: ^6.15.2
+  qs@6: ^6.16.1
   sharp: ^0.35.0
   undici@6: ^6.29.1
   undici@7: ^7.28.0
@@ -2852,8 +2852,8 @@ packages:
     resolution: {integrity: sha512-vYt7UD1U9Wg6138shLtLOvdAu+8DsC/ilFtEVHcH+wydcSpNE20AfSOduf6MkRFahL5FY7X1oU7nKVZFtfq8Fg==}
     engines: {node: '>=6'}
 
-  qs@6.15.3:
-    resolution: {integrity: sha512-O9gl3zCl5h5blw1KGUzQKhA5oUXSl8rwUIM5o0S3nCXMliSvy5Dzx7/DJcI+SwgICv+IneSZwhBh1oSyEHA71A==}
+  qs@6.17.1:
+    resolution: {integrity: sha512-jd3COkaKVgGUW+ZHyEHCG9bH7RoaaiWuMgzsIBjUMVjLAaWGWpoUAVwljVvBHxRu/2qEHnadLGZrkutYUBPQJA==}
     engines: {node: '>=0.6'}
 
   queue-microtask@1.2.3:
@@ -5400,7 +5400,7 @@ snapshots:
       gaxios: 7.3.0
       google-auth-library: 10.5.0
       google-logging-utils: 1.1.3
-      qs: 6.15.3
+      qs: 6.17.1
       url-template: 2.0.8
     transitivePeerDependencies:
       - supports-color
@@ -6450,7 +6450,7 @@ snapshots:
 
   punycode@2.3.1: {}
 
-  qs@6.15.3:
+  qs@6.17.1:
     dependencies:
       es-define-property: 1.0.1
       side-channel: 1.1.1
