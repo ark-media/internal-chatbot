@@ -177,7 +177,15 @@ def _parse_format_a(lines: list[str], episode_id: str) -> Episode:
             i += 1
             continue
 
-        is_speaker_line = (
+        # A "Name [12:34]" line is a label even when the body follows on the
+        # very next line (some regenerated transcripts drop the blank line).
+        # Without this, the label is swallowed as body text and the whole
+        # episode is attributed to the fallback host.
+        is_timestamped_label = (
+            len(stripped) < 80
+            and SPEAKER_TIMESTAMP_SUFFIX_RE.search(stripped) is not None
+        )
+        is_speaker_line = is_timestamped_label or (
             pending_speaker is None
             and len(stripped) < 80
             and not stripped.endswith((".", "?", "!", '"', "'", ":", ","))
