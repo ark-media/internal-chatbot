@@ -54,7 +54,7 @@ import {
   NEWS_DEFAULT_TEMPERATURE_PRESET,
   type TemperaturePresetId,
 } from '@/lib/temperature';
-import { MAX_FILES, MAX_FILE_BYTES, formatBytes } from '@/lib/prep-limits';
+import { MAX_FILES, MAX_FILE_BYTES, UPLOAD_ACCEPT, formatBytes } from '@/lib/prep-limits';
 
 const EXAMPLE_PROMPTS = [
   'Outline: Lead — Trump signals end to Iran War. B Block — New Middle East realignment. C Block — Passover under bombardment. Sources: WSJ, CBS, Times of Israel',
@@ -125,10 +125,13 @@ function NewsBody({
     files,
     uploadError,
     attachSuccess,
+    uploadProgress,
+    uploading,
     onPickFiles,
     removeFile,
     clearFiles,
-    asFileList,
+    uploadFiles,
+    cancelUpload,
   } = useFileAttachments();
   const { driveLoading, driveLink, driveError, save, resetDrive } =
     useDriveSave('/api/news/upload');
@@ -173,7 +176,7 @@ function NewsBody({
       },
     });
 
-  const busy = status === 'submitted' || status === 'streaming';
+  const busy = status === 'submitted' || status === 'streaming' || uploading;
 
   useEffect(() => {
     scrollRef.current?.scrollTo({
@@ -182,11 +185,13 @@ function NewsBody({
     });
   }, [messages, busy]);
 
-  const submit = (text: string) => {
+  const submit = async (text: string) => {
     const q = text.trim();
     if ((!q && files.length === 0) || busy) return;
     const wasEditing = editingMessageId !== null;
-    sendMessage({ text: q, files: asFileList() });
+    const fileParts = await uploadFiles();
+    if (fileParts === null) return;
+    sendMessage({ text: q, files: fileParts });
     setInput('');
     clearFiles();
     if (wasEditing) {
@@ -326,7 +331,7 @@ function NewsBody({
               />
             ))}
 
-            {busy ? <BusyRow label={busyLabel(messages, status)} onStop={stop} /> : null}
+            {busy ? <BusyRow label={busyLabel(messages, status)} onStop={uploading ? cancelUpload : stop} /> : null}
 
             <ChatErrorBanner
               error={error}
@@ -454,7 +459,7 @@ function NewsBody({
         <ChatComposer
           input={input}
           onInputChange={setInput}
-          onSubmit={() => submit(input)}
+          onSubmit={() => void submit(input)}
           placeholder="Story outline with article links"
           selectedModel={selectedModel}
           onModelChange={setSelectedModel}
@@ -464,8 +469,7 @@ function NewsBody({
           canSubmit={input.trim().length > 0 || files.length > 0}
           footerHint={`Enter to send · Shift + Enter for newline · Up to ${MAX_FILES} files, ${formatBytes(MAX_FILE_BYTES)} each`}
           fileAttach={{
-            accept:
-              '.pdf,.md,.txt,.csv,.tsv,.json,.yml,.yaml,.png,.jpg,.jpeg,.gif,.webp,application/pdf,text/markdown,text/plain,text/csv,application/json,image/*',
+            accept: UPLOAD_ACCEPT,
             multiple: true,
             onPick: onPickFiles,
             ariaLabel: 'Attach files',
@@ -475,6 +479,7 @@ function NewsBody({
             <FileAttachments
               files={files}
               uploadError={uploadError}
+              uploadProgress={uploadProgress}
               onRemove={removeFile}
               showSuccess
               attachSuccess={attachSuccess}

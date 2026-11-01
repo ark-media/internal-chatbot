@@ -3,7 +3,8 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { ensureChatTables, purgeExpired } from '@/lib/chats';
 import { sql } from '@/lib/db';
 import { ensureScriptRunTables } from '@/lib/scriptwriter/state';
-import { errorEvent, logEvent } from '@/lib/log-event';
+import { errText, errorEvent, logEvent } from '@/lib/log-event';
+import { purgeExpiredUploads } from '@/lib/upload-parts';
 
 export const runtime = 'nodejs';
 
@@ -51,10 +52,18 @@ async function run(req: Request) {
   } catch {
     // Table already dropped — nothing to sweep.
   }
+  // Guarded so a Blob outage doesn't fail the chat purge.
+  let uploadsPurged = 0;
+  try {
+    uploadsPurged = await purgeExpiredUploads();
+  } catch (err) {
+    errorEvent('uploads.purge_failed', { error: errText(err) });
+  }
   logEvent('chats.purge', {
     deleted,
     scriptRunsPurged: runsPurged.length,
     legacyOrchestratorRunsPurged: legacyPurged,
+    uploadsPurged,
   });
   return Response.json({ deleted, scriptRunsPurged: runsPurged.length });
 }

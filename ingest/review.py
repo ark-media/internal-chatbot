@@ -250,15 +250,11 @@ def cmd_merge(args: argparse.Namespace) -> int:
 
 
 def _apply_merge(conn: psycopg.Connection, from_id: int, into_id: int) -> None:
-    # copy aliases (skip conflicts)
+    # repoint aliases so future ingests resolve the old label to the target.
+    # alias_lower is the PK, so an INSERT-copy would always conflict with the
+    # source row and the aliases would vanish in the DELETE cascade below.
     conn.execute(
-        """
-        INSERT INTO speaker_aliases (alias_lower, alias_display, speaker_id)
-          SELECT alias_lower, alias_display, %s
-            FROM speaker_aliases
-           WHERE speaker_id = %s
-        ON CONFLICT (alias_lower) DO NOTHING
-        """,
+        "UPDATE speaker_aliases SET speaker_id = %s WHERE speaker_id = %s",
         (into_id, from_id),
     )
     # copy show_hosts links (OR is_primary if both sides had the row)

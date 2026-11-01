@@ -13,9 +13,13 @@ overrides:
   gaxios: ^7.3.0
   js-yaml@4: ^4.3.0
   postcss@8: ^8.5.18
-  qs@6: ^6.15.2
+  qs@6: ^6.16.1
   sharp: ^0.35.0
+  undici@6: ^6.29.1
   undici@7: ^7.28.0
   # Plain key, not vite@8: the @8 selector does not match here, because vite is
   # resolved as a peer of @vitejs/plugin-react rather than a direct dependency.
   vite: ^8.0.16
+  # @vercel/blob > @vercel/oidc > @vercel/cli-config pins zod to exactly 4.1.11
+  # (still true in cli-config 0.3.5), so a direct zod bump never reaches it.
+  zod@4: ^4.6.6

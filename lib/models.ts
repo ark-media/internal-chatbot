@@ -26,7 +26,9 @@ export const MODELS: ChatModel[] = [
     id: 'anthropic/claude-sonnet-5',
     name: 'Claude Sonnet 5',
     description: 'Balanced speed and near-Opus intelligence. Recommended.',
-    contextWindow: 200_000,
+    // 1M per the AI Gateway model list (GET ai-gateway.vercel.sh/v1/models),
+    // with no tier gate — unlike Opus below.
+    contextWindow: 1_000_000,
     supportsTemperature: false,
   },
   {
